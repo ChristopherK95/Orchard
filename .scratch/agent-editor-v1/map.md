@@ -27,6 +27,7 @@ A **v1 spec** ready to split into build issues: stack locked (Tauri vs Odin+Rayl
 - [Window and layout prototype](issues/08-window-and-layout-prototype.md): two-row tab strip (Worktrees, then the active Worktree's Agent sessions) plus a Worktree › session context bar; a Board view of all sessions by state, toggled with `Ctrl+B`; Files/Git in a right drawer; the manual editor opens as a pane beside the chat and can pop out into its own window.
 - [Worktree and Agent session lifecycle](issues/07-worktree-and-session-lifecycle-grilling.md): worktrees go next to the repo (`<repo>.worktrees/<slug>`), created from fetched `origin/<default>` or an existing branch, then per-repo setup commands run before the first session. Settings are an app-level TOML file keyed by `origin` URL. All worktrees are auto-discovered; removal is guarded. Closing a Tab keeps the conversation resumable; auto-suspend (idle, memory pressure) never touches Working/Needs you; lazy resume on send; a restart restores Tabs as Suspended.
 - [Core architecture: processes, IPC, and where state lives](issues/10-core-architecture-grilling.md): the Rust core owns all state and processes ([ADR 0003](../../docs/adr/0003-rust-core-owns-everything-frontend-is-a-view.md)): one shared ACP adapter (needs a system Node ≥ 20), Worktree actors for watcher/git/index, and a `claude` memory monitor. Only the visible Tab gets streamed updates; background Tabs get state events. Conversations live only in Claude Code's transcripts. The pop-out editor moves the buffer to the new window. One app process.
+- [How manual edits reach the Agent session](issues/06-manual-edit-notification-grilling.md): on save, only sessions on that Worktree that read or edited the file get an Edit note. The note is a capped per-file diff, shown as a removable chip and sent with the next prompt. Claude Code's own change detection is a bonus. Clean buffers auto-reload when the Agent writes; dirty ones get Show diff / Reload / Keep mine; saves check for newer disk versions.
 
 ## Not yet specified
 
@@ -42,4 +43,5 @@ A **v1 spec** ready to split into build issues: stack locked (Tauri vs Odin+Rayl
 - **Repo-wide content search and a plain shell terminal**: later, not v1.
 - **Non-Claude Agents**: the boundary is kept, but no implementations in v1.
 - **Terminal escape hatch** (open an Agent session in the real `claude` TUI): skipped for v1 by the Agent session Tab decision.
+- **Mid-turn Edit notes** (delivering manual edits to a Working session via hooks) and **manual "send to agent"** (selection/file → chat): ruled out for v1 by the manual-edit decision.
 - **Distribution polish** (AUR/MSI packaging, auto-update, settings UI).

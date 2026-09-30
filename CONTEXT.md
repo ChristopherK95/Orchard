@@ -28,6 +28,10 @@ _Avoid_: Bootstrap, init script
 **Recent sessions**:
 The closed Agent sessions of a Worktree whose conversations can still be reopened. Closing a Tab moves its session here; it doesn't delete it.
 
+**Edit note**:
+The record of the user's saved manual changes to a file, attached to the next prompt of each Agent session on that Worktree that has read or edited the file.
+_Avoid_: File-change notification, sync
+
 **Board**:
 The overview of every Agent session in the Workspace, grouped by Agent session state. It's the alternative to the Tabs view; toggle between them.
 _Avoid_: Dashboard, overview
