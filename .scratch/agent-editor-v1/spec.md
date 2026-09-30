@@ -140,7 +140,7 @@ Under the hood:
 81. As a developer, I want all settings in one hand-edited TOML file in the editor's config folder, with an "Open repo settings" command that opens it in the Manual editor, so that configuration is plain and versionable by me.
 82. As a developer, I want per-repo sections keyed by the repo's `origin` URL (falling back to its path), so that settings follow the repo across clones.
 83. As a developer, I want settings changes to apply when I save the file, without restarting, so that tweaking is quick.
-84. As a developer, I want clear startup messages when git ≥ 2.55 or Node ≥ 20 is missing, so that I know exactly what to install.
+84. As a developer, I want clear startup messages when git ≥ 2.55 or Node ≥ 22.12 is missing, so that I know exactly what to install.
 85. As a developer, I want the editor to run on Arch Linux (Wayland) and Windows 11 from the same codebase with one dev command, so that I can use it on both machines.
 
 ## Implementation Decisions
@@ -224,7 +224,7 @@ Exited    --user resumes-----------------> Idle
 
 - Claude Code first, through the ACP adapter, authenticated with the user's **own Claude subscription**. We accept the terms grey zone knowingly; if it breaks, it's fixed then (e.g. by switching to an API key).
 - ACP is also the boundary for other Agents later; no other Agents in v1.
-- Requires a **system Node ≥ 20**. The adapter version is pinned as a dependency the editor installs.
+- Requires a **system Node ≥ 22.12**. The adapter version is pinned as a dependency the editor installs.
 - The adapter must not run in a mode that disables subscription auth (e.g. Claude Code's `--bare`).
 - There's no terminal fallback (escape hatch) in v1.
 
@@ -289,7 +289,7 @@ This settings list and live reload were the map's last open item. They're decide
 ### Platforms and dev setup
 
 - **Targets**: Arch Linux (Wayland; WebKitGTK via GTK3, AMD GPU, so the NVIDIA workarounds aren't needed) and Windows 11 (WebView2).
-- **Dev prerequisites on both**: Rust stable, Node ≥ 20 with pnpm, git ≥ 2.55, the Tauri 2 system prerequisites (`webkit2gtk-4.1` and friends on Arch; WebView2 and the MSVC build tools on Windows).
+- **Dev prerequisites on both**: Rust stable, Node ≥ 22.12 with pnpm, git ≥ 2.55, the Tauri 2 system prerequisites (`webkit2gtk-4.1` and friends on Arch; WebView2 and the MSVC build tools on Windows).
 - **One command runs the app in dev.** No packaging, installers or auto-update in v1.
 
 ## Testing Decisions

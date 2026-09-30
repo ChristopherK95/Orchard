@@ -13,5 +13,5 @@ The SolidJS frontend only renders. It gets a streaming channel for the visible T
 ## Consequences
 
 - If the ACP adapter crashes, every session drops at once. The core must restart the adapter and resume sessions.
-- A system Node ≥ 20 is required, because the adapter runs on Node.
+- A system Node ≥ 22.12 is required, because the adapter runs on Node.
 - If Claude Code changes or prunes its transcript storage, resume and restore break with it.

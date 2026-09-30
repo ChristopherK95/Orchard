@@ -1,0 +1,4 @@
+# Same line endings on Arch and Windows.
+* text=auto eol=lf
+*.ico binary
+*.png binary

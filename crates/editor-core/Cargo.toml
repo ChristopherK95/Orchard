@@ -1,0 +1,20 @@
+[package]
+name = "editor-core"
+description = "The Rust core of the agent-first editor: owns Agent sessions, the ACP adapter and all state (ADR 0003)."
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+# Scripted ACP agent used by the core's tests in place of `claude-agent-acp`.
+[[bin]]
+name = "fake-acp-agent"
+path = "src/bin/fake_acp_agent.rs"

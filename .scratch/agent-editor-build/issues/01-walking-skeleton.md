@@ -1,6 +1,6 @@
 # 01: Walking skeleton: one Agent session end to end
 
-**What to build:** Launching the app opens a repo as a Workspace and shows one Tab for an Agent session running in the main checkout. Typing a prompt sends it through the shared ACP adapter and streams the Agent's reply into the Tab as it arrives. This slice creates the Tauri 2 + SolidJS app, the Rust core with its public API, the ACP host (one shared adapter process, JSON-RPC routed per Agent session), the visible-Tab streaming channel, startup checks for git ≥ 2.55 and Node ≥ 20, and the test harness: a **fake ACP agent** driven through the core's public API, per the spec's Testing Decisions.
+**What to build:** Launching the app opens a repo as a Workspace and shows one Tab for an Agent session running in the main checkout. Typing a prompt sends it through the shared ACP adapter and streams the Agent's reply into the Tab as it arrives. This slice creates the Tauri 2 + SolidJS app, the Rust core with its public API, the ACP host (one shared adapter process, JSON-RPC routed per Agent session), the visible-Tab streaming channel, startup checks for git ≥ 2.55 and Node ≥ 22.12, and the test harness: a **fake ACP agent** driven through the core's public API, per the spec's Testing Decisions.
 
 **Blocked by:** None (can start immediately).
 
