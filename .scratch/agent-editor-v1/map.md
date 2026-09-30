@@ -19,6 +19,8 @@ A **v1 spec** ready to split into build issues: stack locked (Tauri vs Odin+Rayl
 
 <!-- one line per resolved ticket: [title](issues/NN-slug.md): gist -->
 
+- [Tauri vs Odin+Raylib: facts for the stack decision](issues/01-tauri-vs-odin-raylib-research.md): Tauri 2.12 has everything v1 needs off the shelf (CM6+vim, xterm.js, multi-window, IME), but WebKitGTK risks NVIDIA/Wayland breakage and isn't lighter than Chromium. Odin+raylib is leaner but has no IME or shaping, runs via XWayland, is single-window and means building most of v1 by hand (months vs weeks).
+
 ## Not yet specified
 
 - **Architecture outline**: process model (one core process owning N agent processes plus per-Worktree file watchers?), frontend↔core IPC shape, where state lives. Hangs on the stack decision and the agent-hosting research.
