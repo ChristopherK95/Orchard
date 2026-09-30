@@ -14,3 +14,4 @@ What are the rules for creating, discovering, and removing Worktrees and their A
 - Removing a worktree that is dirty or has running sessions.
 - What closing a Tab does to its session and its worktree.
 - How Tabs are grouped and filtered by Worktree.
+- Suspend rules (from the Agent session Tab decision): when manual suspend is offered, what auto-suspend after N idle minutes means, whether to **auto-suspend the longest-idle sessions under memory pressure** (from the stack decision), and what resuming looks like.
