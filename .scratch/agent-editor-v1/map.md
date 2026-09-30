@@ -20,6 +20,8 @@ A **v1 spec** ready to split into build issues: stack locked (Tauri vs Odin+Rayl
 <!-- one line per resolved ticket: [title](issues/NN-slug.md): gist -->
 
 - [Tauri vs Odin+Raylib: facts for the stack decision](issues/01-tauri-vs-odin-raylib-research.md): Tauri 2.12 has everything v1 needs off the shelf (CM6+vim, xterm.js, multi-window, IME), but WebKitGTK risks NVIDIA/Wayland breakage and isn't lighter than Chromium. Odin+raylib is leaner but has no IME or shaping, runs via XWayland, is single-window and means building most of v1 by hand (months vs weeks).
+- [Git layer and file-watching options](issues/03-git-layer-options-research.md): only the git CLI covers every worktree op, push/auth, and fast status (fsmonitor); libgit2 lacks worktree move/repair and fast status and is thin for Odin; gitoxide lacks push and worktree remove. inotify's per-directory limits make watching many Worktrees the real cost; Rust has the listing/fuzzy crates, Odin has only raw syscalls.
+- [Hosting Claude Code sessions on a subscription](issues/02-hosting-claude-code-on-subscription-research.md): only the unmodified interactive `claude` in a PTY on your own `/login` is explicitly permitted; `-p` stream-json, the Agent SDK, and ACP work on a subscription but sit in a terms grey zone for third-party apps. Every option costs one `claude` process per session (~215–340 MB idle, measured). Edit notification can use Claude Code's built-in changed-file diffs, hook `additionalContext`, or the IDE-integration WebSocket.
 
 ## Not yet specified
 
