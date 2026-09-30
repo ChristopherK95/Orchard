@@ -21,6 +21,13 @@ _Avoid_: Instance, chat, agent (the Agent is the program; the session is one con
 **Tab**:
 The UI surface of one Agent session. Hopping between Worktrees means switching or filtering Tabs, not opening another window.
 
+**Worktree setup**:
+The per-repo list of commands run in a newly created Worktree before its first Agent session starts.
+_Avoid_: Bootstrap, init script
+
+**Recent sessions**:
+The closed Agent sessions of a Worktree whose conversations can still be reopened. Closing a Tab moves its session here; it doesn't delete it.
+
 **Board**:
 The overview of every Agent session in the Workspace, grouped by Agent session state. It's the alternative to the Tabs view; toggle between them.
 _Avoid_: Dashboard, overview

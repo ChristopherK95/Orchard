@@ -25,14 +25,14 @@ A **v1 spec** ready to split into build issues: stack locked (Tauri vs Odin+Rayl
 - [What an Agent session Tab shows: terminal or native UI](issues/05-agent-session-surface-grilling.md): native chat UI through the ACP adapter on the subscription, accepting the terms risk ([ADR 0001](../../docs/adr/0001-native-chat-via-acp-on-subscription.md)); no terminal escape hatch; inline permission cards that show diffs before approval; Tab states Working / Needs you / Idle / Suspended / Exited; manual suspend plus optional auto-suspend.
 - [Choose the stack: Tauri or Odin+Raylib](issues/04-choose-the-stack-grilling.md): Tauri 2.x with a Rust core and a SolidJS frontend ([ADR 0002](../../docs/adr/0002-tauri-2-with-solidjs.md)); `claude` processes dominate memory anyway and Odin would take months of UI groundwork; AMD GPU avoids the WebKitGTK breakage. A development-time memory budget (≤ 250 MB with 5 Tabs + 1 editor window, ≤ 15 MB per extra Tab, near 0% idle CPU) gates the stack.
 - [Window and layout prototype](issues/08-window-and-layout-prototype.md): two-row tab strip (Worktrees, then the active Worktree's Agent sessions) plus a Worktree › session context bar; a Board view of all sessions by state, toggled with `Ctrl+B`; Files/Git in a right drawer; the manual editor opens as a pane beside the chat and can pop out into its own window.
+- [Worktree and Agent session lifecycle](issues/07-worktree-and-session-lifecycle-grilling.md): worktrees go next to the repo (`<repo>.worktrees/<slug>`), created from fetched `origin/<default>` or an existing branch, then per-repo setup commands run before the first session. Settings are an app-level TOML file keyed by `origin` URL. All worktrees are auto-discovered; removal is guarded. Closing a Tab keeps the conversation resumable; auto-suspend (idle, memory pressure) never touches Working/Needs you; lazy resume on send; a restart restores Tabs as Suspended.
 
 ## Not yet specified
 
-- **Session persistence**: do Agent sessions survive an editor restart (resume conversations, reopen Tabs)? ACP exposes session list/resume, so this likely rides on the same mechanism as Suspended.
 - **Git UI depth**: hunk-level staging? Agent-written commit messages? Conflict handling? Sharpens once the git layer is chosen.
 - **Local branch-diff view**: "check out a branch and see the files it changed vs its base". May be cheap enough to fold into v1 once the git layer exists; otherwise it joins review mode out of scope.
 - **Build & run on both OSes**: minimal dev/build setup for Arch+Wayland and Win11 (no distribution polish).
-- **Config**: keybindings/settings format (file-based, presumably).
+- **Config**: the settings file itself is settled (TOML in the app config folder, per-repo sections keyed by `origin` URL; see the lifecycle ticket). What else lives in it (keybindings, memory limit, auto-suspend, permission-mode defaults) and whether it reloads live is still open.
 
 ## Out of scope
 
