@@ -412,7 +412,8 @@ impl Session {
             .and_then(|id| self.tool_calls.lock().expect("tool calls lock").get(id).cloned())
             .unwrap_or_else(|| json!({}));
         permissions::merge_tool_call(&mut tool_call, &params["toolCall"]);
-        let request = permissions::request_from(&tool_call, &params["options"]);
+        let worktree = self.info.lock().expect("info lock").worktree.clone();
+        let request = permissions::request_from(&tool_call, &params["options"], &worktree);
         let option_ids = request.options.iter().map(|o| o.id.clone()).collect();
         // Only one question at a time: a newer one supersedes an unanswered older one.
         self.cancel_pending_permission();

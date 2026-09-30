@@ -36,7 +36,7 @@ export function PermissionCard(props: {
     const outcome = props.outcome;
     if (!outcome) return null;
     if (outcome.kind === "cancelled") return "Cancelled: the turn ended before an answer";
-    return props.request.options.find((o) => o.id === outcome.optionId)?.name ?? outcome.optionId;
+    return `You chose: ${props.request.options.find((o) => o.id === outcome.optionId)?.name ?? outcome.optionId}`;
   };
 
   return (
@@ -53,7 +53,7 @@ export function PermissionCard(props: {
       <div class="permission-head">
         <span class={`dot ${pending() ? "needsYou" : "idle"}`} />
         <b>{props.request.title}</b>
-        <Show when={props.request.target && props.request.target !== props.request.title}>
+        <Show when={props.request.target && !props.request.title.includes(props.request.target)}>
           <span class="mono muted">{props.request.target}</span>
         </Show>
         <span class="grow" />

@@ -42,6 +42,11 @@ impl FakeAgent {
         Self { dir }
     }
 
+    /// Replaces the script; takes effect when the fake agent process starts (on the first session).
+    pub fn set_script(&self, script: &str) {
+        std::fs::write(self.dir.path().join("script.json"), script).expect("write script");
+    }
+
     pub fn command(&self) -> AdapterCommand {
         AdapterCommand {
             program: fake_agent_path(),

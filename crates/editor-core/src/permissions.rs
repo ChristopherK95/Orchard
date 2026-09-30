@@ -1,6 +1,8 @@
 //! Turns an ACP permission request (plus what the tool call announced earlier) into the card the
 //! user answers.
 
+use std::path::Path;
+
 use serde_json::Value;
 use similar::{ChangeTag, TextDiff};
 
@@ -9,8 +11,9 @@ use crate::session::{DiffLine, DiffLineKind, PermissionOption, PermissionOptionK
 /// Diffs longer than this are cut short on the card; the full change is still what gets applied.
 const MAX_DIFF_LINES: usize = 400;
 
-/// `tool_call` is the tool call as announced so far, merged with the request's `toolCall`.
-pub(crate) fn request_from(tool_call: &Value, options: &Value) -> PermissionRequest {
+/// `tool_call` is the tool call as announced so far, merged with the request's `toolCall`. Paths
+/// inside `worktree` are shown relative to it.
+pub(crate) fn request_from(tool_call: &Value, options: &Value, worktree: &Path) -> PermissionRequest {
     let diffs: Vec<&Value> = tool_call["content"]
         .as_array()
         .map(|content| content.iter().filter(|c| c["type"] == "diff").collect())
@@ -21,7 +24,10 @@ pub(crate) fn request_from(tool_call: &Value, options: &Value) -> PermissionRequ
         .or_else(|| tool_call["locations"][0]["path"].as_str())
         .or_else(|| tool_call["rawInput"]["command"].as_str())
         .or_else(|| tool_call["rawInput"]["file_path"].as_str())
-        .map(str::to_owned);
+        .map(|target| match Path::new(target).strip_prefix(worktree) {
+            Ok(relative) => relative.display().to_string(),
+            Err(_) => target.to_owned(),
+        });
     let diff = (!diffs.is_empty()).then(|| {
         diffs
             .iter()

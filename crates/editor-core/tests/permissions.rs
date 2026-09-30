@@ -84,6 +84,27 @@ async fn a_permission_request_shows_a_card_with_the_tool_target_diff_and_options
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_target_inside_the_worktree_is_shown_relative_to_it() {
+    let repo = git_repo();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let core = core_with(&fake);
+    // The adapter reports absolute paths under the cwd the core gave it: the Workspace root.
+    let root = core.open_workspace(repo.path()).await.unwrap().root;
+    let turn = json!({ "permission": { "title": "Edit", "kind": "edit",
+        "diff": { "path": root.join("src").join("lib.rs"), "oldText": "a\n", "newText": "b\n" } } });
+    fake.set_script(&json!({ "turns": [turn] }).to_string());
+    let mut events = core.subscribe();
+    let session = core.new_session().await.unwrap();
+
+    core.send_prompt(session, "edit").await.unwrap();
+    states_until(&mut events, session, SessionState::NeedsYou).await;
+
+    let items = core.transcript(session).unwrap();
+    let expected = std::path::Path::new("src").join("lib.rs").display().to_string();
+    assert_eq!(permission_item(&items).target.as_deref(), Some(expected.as_str()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn allowing_sends_the_chosen_option_and_the_turn_carries_on() {
     let fake = FakeAgent::new(&json!({ "turns": [edit_turn()] }).to_string());
     let (_repo, core, session, mut events) = session_waiting_for_permission(&fake).await;
