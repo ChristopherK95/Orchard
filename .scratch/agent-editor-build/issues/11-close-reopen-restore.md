@@ -1,0 +1,13 @@
+# 11: Close/reopen sessions and restore after restart
+
+**What to build:** App state is persisted as JSON in the app data folder. Closing a Tab moves its session to the Worktree's **Recent sessions** list without deleting the conversation, and `Ctrl+Shift+T` reopens the last closed session. After an editor restart, every previously open Tab is restored as Suspended, in the same Worktree and order.
+
+**Blocked by:** 10 (Suspend, resume and crash recovery), 06 (Worktree row).
+
+**Status:** ready-for-agent
+
+- [ ] Closing a Tab stops its process and lists the session under Recent sessions for that Worktree.
+- [ ] Reopening from Recent sessions or `Ctrl+Shift+T` resumes the conversation.
+- [ ] Restarting the app restores all open Tabs as Suspended, with names, order, Worktree and permission mode.
+- [ ] Closing a Worktree's last Tab only dims the Worktree.
+- [ ] Core tests: the persisted state round-trips; restore yields Suspended sessions.
