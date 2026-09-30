@@ -14,3 +14,5 @@ When the user edits a file by hand, how and when does the relevant Agent session
 - The payload: a diff or a short note.
 - What happens while the agent is mid-turn.
 - Conflicts when the agent writes a file the user has open with unsaved changes.
+
+Context: sessions are hosted through ACP (ADR 0001), so IDE integration is out. The mechanisms available are Claude Code's built-in changed-file diffs (undocumented; covers files the Agent fully read), hook `additionalContext` (mid-turn via PostToolUse, at prompt time via UserPromptSubmit), and sending a message through ACP (it lands after the current tool calls).
