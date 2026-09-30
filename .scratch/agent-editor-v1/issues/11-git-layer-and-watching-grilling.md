@@ -7,7 +7,7 @@ Part of: [map](../map.md)
 
 ## Question
 
-Given the git-layer research and a Rust core (ADR 0002), how does v1 do git, watching, and file search? Settle:
+Given the git-layer research and a Rust core (ADR 0002), where each Worktree's watcher, git status cache and file index live in a per-Worktree actor that starts when the Worktree is shown and stops when it's dimmed and idle (ADR 0003), how does v1 do git, watching, and file search? Settle:
 
 - `git` CLI vs git2 vs gix, or a mix: e.g. the CLI for worktree operations, push and status (fsmonitor, auth parity), and a library for hot read paths?
 - The minimum git version to require.
