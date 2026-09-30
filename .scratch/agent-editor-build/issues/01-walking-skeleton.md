@@ -6,11 +6,11 @@
 
 **Status:** ready-for-agent
 
-- [ ] One dev command starts the app on Windows 11 and Arch Linux (Wayland).
-- [ ] Opening a repo path creates a Workspace with one Agent session bound to the main checkout, shown as a Tab.
-- [ ] Sending a prompt streams the Agent's reply into the Tab incrementally, batched to about one flush per frame.
-- [ ] The core spawns exactly one ACP adapter process and routes messages per Agent session. The adapter executable is configurable (the test seam).
-- [ ] The Tab shows Working while a turn runs and Idle when it ends.
-- [ ] If git < 2.55 or Node < 22.12 (or either is missing), startup shows a clear message naming what to install.
-- [ ] Core tests drive the public API against the fake ACP agent: create session → send prompt → receive streamed chunks → state returns to Idle.
-- [ ] The fake ACP agent can script replies and streamed chunks. It's the template for later tests.
+- [ ] One dev command starts the app on Windows 11 and Arch Linux (Wayland). _Windows 11 verified 2026-09-30 (`pnpm dev`); Arch still to run._
+- [x] Opening a repo path creates a Workspace with one Agent session bound to the main checkout, shown as a Tab.
+- [x] Sending a prompt streams the Agent's reply into the Tab incrementally, batched to about one flush per frame.
+- [x] The core spawns exactly one ACP adapter process and routes messages per Agent session. The adapter executable is configurable (the test seam).
+- [x] The Tab shows Working while a turn runs and Idle when it ends.
+- [x] If git < 2.55 or Node < 22.12 (or either is missing), startup shows a clear message naming what to install.
+- [x] Core tests drive the public API against the fake ACP agent: create session → send prompt → receive streamed chunks → state returns to Idle.
+- [x] The fake ACP agent can script replies and streamed chunks. It's the template for later tests.
