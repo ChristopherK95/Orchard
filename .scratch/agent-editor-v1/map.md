@@ -29,6 +29,7 @@ A **v1 spec** ready to split into build issues: stack locked (Tauri vs Odin+Rayl
 - [Core architecture: processes, IPC, and where state lives](issues/10-core-architecture-grilling.md): the Rust core owns all state and processes ([ADR 0003](../../docs/adr/0003-rust-core-owns-everything-frontend-is-a-view.md)): one shared ACP adapter (needs a system Node ≥ 20), Worktree actors for watcher/git/index, and a `claude` memory monitor. Only the visible Tab gets streamed updates; background Tabs get state events. Conversations live only in Claude Code's transcripts. The pop-out editor moves the buffer to the new window. One app process.
 - [How manual edits reach the Agent session](issues/06-manual-edit-notification-grilling.md): on save, only sessions on that Worktree that read or edited the file get an Edit note. The note is a capped per-file diff, shown as a removable chip and sent with the next prompt. Claude Code's own change detection is a bonus. Clean buffers auto-reload when the Agent writes; dirty ones get Show diff / Reload / Keep mine; saves check for newer disk versions.
 - [Git layer and file watching under Tauri](issues/11-git-layer-and-watching-grilling.md): the `git` command only, ≥ 2.55 ([ADR 0004](../../docs/adr/0004-git-cli-only.md)), with background calls that don't take git's lock and repo config left alone. Watches cover non-ignored directories per shown Worktree, falling back to polling if the watch limit is hit. Auth relies on existing credential helpers. File search is an in-memory index matched with frizbee. The "Changes vs base" branch-diff view is **in v1**.
+- [Git UI scope for v1](issues/12-git-ui-scope-grilling.md): whole-file staging; user-typed commit messages (Agents commit via chat); guarded branch switching that suggests a new Worktree instead; fetch plus fast-forward-only pull; no merge or rebase buttons, but an in-progress banner with conflicted files and Abort; per-file discard and amend are in, stash is out; a warning when committing while a session is Working.
 
 ## Not yet specified
 
@@ -43,4 +44,5 @@ A **v1 spec** ready to split into build issues: stack locked (Tauri vs Odin+Rayl
 - **Non-Claude Agents**: the boundary is kept, but no implementations in v1.
 - **Terminal escape hatch** (open an Agent session in the real `claude` TUI): skipped for v1 by the Agent session Tab decision.
 - **Mid-turn Edit notes** (delivering manual edits to a Working session via hooks) and **manual "send to agent"** (selection/file → chat): ruled out for v1 by the manual-edit decision.
+- **Richer git UI** (hunk/line staging, Agent-drafted commit messages, merge/rebase buttons, stash): ruled out for v1 by the Git UI scope decision.
 - **Distribution polish** (AUR/MSI packaging, auto-update, settings UI).
