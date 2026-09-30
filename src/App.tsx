@@ -160,6 +160,8 @@ function Composer(props: { session: SessionInfo }) {
   const [text, setText] = createSignal("");
   const [error, setError] = createSignal("");
   const disabled = () => props.session.state !== "idle";
+  let input!: HTMLTextAreaElement;
+  onMount(() => input.focus());
 
   const send = async () => {
     const prompt = text().trim();
@@ -168,6 +170,7 @@ function Composer(props: { session: SessionInfo }) {
     try {
       await core.sendPrompt(props.session.id, prompt);
       setText("");
+      input.focus();
     } catch (err) {
       setError(String(err));
     }
@@ -179,6 +182,7 @@ function Composer(props: { session: SessionInfo }) {
         <p class="error">{error()}</p>
       </Show>
       <textarea
+        ref={input}
         value={text()}
         onInput={(e) => setText(e.currentTarget.value)}
         onKeyDown={(e) => {

@@ -52,8 +52,13 @@ async fn send_prompt(core: State<'_, Core>, session_id: SessionId, text: String)
 }
 
 /// Streams a session's transcript to the visible Tab over a dedicated channel.
+/// Async so it runs on Tauri's runtime: the core spawns the streaming task there.
 #[tauri::command]
-fn watch_session(core: State<'_, Core>, session_id: SessionId, on_batch: Channel<Vec<TranscriptDelta>>) -> CommandResult<()> {
+async fn watch_session(
+    core: State<'_, Core>,
+    session_id: SessionId,
+    on_batch: Channel<Vec<TranscriptDelta>>,
+) -> CommandResult<()> {
     let mut stream = core.watch_session(session_id).map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn(async move {
         while let Some(batch) = stream.next().await {
