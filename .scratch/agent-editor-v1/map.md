@@ -6,6 +6,8 @@ Labels: wayfinder:map
 
 A **v1 spec** ready to split into build issues: stack locked (Tauri vs Odin+Raylib, with an ADR), architecture outlined (how Agent sessions are hosted, the git layer, the manual editor), and the v1 feature list scoped. Must run on **Arch Linux (Wayland)** and **Windows 11**.
 
+**Reached 2026-09-30:** [spec.md](spec.md) (Status: ready-for-agent).
+
 ## Notes
 
 - Domain vocabulary lives in `CONTEXT.md` (Workspace, Worktree, Agent session, Tab, Agent). Use it; call the `domain-modeling` skill whenever a term shifts.
@@ -34,8 +36,7 @@ A **v1 spec** ready to split into build issues: stack locked (Tauri vs Odin+Rayl
 
 ## Not yet specified
 
-- **Build & run on both OSes**: minimal dev/build setup for Arch+Wayland and Win11 (no distribution polish). Known prerequisites so far: git ≥ 2.55; a system Node ≥ 20 for the ACP adapter; WebKitGTK and WebView2 runtimes.
-- **Config**: the settings file itself is settled (TOML in the app config folder, per-repo sections keyed by `origin` URL; see the lifecycle ticket). What else lives in it (keybindings, memory limit, auto-suspend, permission-mode defaults) and whether it reloads live is still open.
+_Nothing left: the last two items (dev setup on both OSes, and the settings file's contents and live reload) were settled as defaults in the spec._
 
 ## Out of scope
 
