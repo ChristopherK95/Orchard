@@ -70,7 +70,7 @@ pub async fn check_prerequisites(tools: &Tools) -> Vec<MissingPrerequisite> {
 async fn check(command: &ToolCommand, requirement: &Requirement) -> Option<MissingPrerequisite> {
     let (major, minor) = requirement.minimum;
     let needed = format!("{} {major}.{minor} or newer is required", requirement.display);
-    let output = tokio::process::Command::new(&command.program).args(&command.args).output().await;
+    let output = crate::process::command(&command.program).args(&command.args).output().await;
     let found = output
         .ok()
         .filter(|o| o.status.success())

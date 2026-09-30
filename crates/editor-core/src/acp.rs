@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::{mpsc, oneshot};
 
 /// ACP protocol version this client speaks.
@@ -79,15 +79,13 @@ impl Connection {
         command: &AdapterCommand,
         on_incoming: impl Fn(Incoming) + Send + 'static,
     ) -> Result<Self, AcpError> {
-        let mut cmd = Command::new(&command.program);
+        let mut cmd = crate::process::command(&command.program);
         cmd.args(&command.args)
             .envs(command.env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        #[cfg(windows)]
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: no console flashing up from a GUI app
         let mut child = cmd.spawn().map_err(|e| AcpError::Spawn {
             program: command.program.display().to_string(),
             message: e.to_string(),

@@ -13,6 +13,7 @@ use tauri::{Emitter, Manager, State};
 
 /// The pinned ACP adapter installed by `pnpm install` (see the root `package.json`).
 /// `AGENT_EDITOR_ACP_ADAPTER` swaps in another executable, e.g. the fake agent for demos.
+/// The path is fixed at build time, which only suits dev builds; distribution is out of scope for v1.
 fn adapter_command() -> AdapterCommand {
     if let Some(program) = std::env::var_os("AGENT_EDITOR_ACP_ADAPTER") {
         return AdapterCommand { program: program.into(), args: vec![], env: vec![] };

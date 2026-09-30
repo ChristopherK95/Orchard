@@ -3,7 +3,9 @@
 
 mod acp;
 mod core;
+mod git;
 mod prerequisites;
+mod process;
 mod session;
 
 pub use crate::acp::{AcpError, AdapterCommand, PROTOCOL_VERSION};

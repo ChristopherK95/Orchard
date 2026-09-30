@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::acp::{AcpError, AdapterCommand, Connection, Incoming, PROTOCOL_VERSION};
+use crate::git;
 use crate::session::{SessionId, SessionInfo, SessionState, Transcript, TranscriptDelta, TranscriptItem};
 
 /// How long streamed transcript changes are gathered before being flushed to the visible Tab.
@@ -111,17 +112,7 @@ impl Core {
 
     /// Opens the git repository containing `path` as the Workspace.
     pub async fn open_workspace(&self, path: &Path) -> Result<WorkspaceInfo, CoreError> {
-        let out = tokio::process::Command::new("git")
-            .args(["rev-parse", "--show-toplevel"])
-            .current_dir(path)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .output()
-            .await
-            .map_err(|_| CoreError::NotARepository(path.to_owned()))?;
-        if !out.status.success() {
-            return Err(CoreError::NotARepository(path.to_owned()));
-        }
-        let root = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+        let root = git::toplevel(path).await.ok_or_else(|| CoreError::NotARepository(path.to_owned()))?;
         let root = std::fs::canonicalize(&root).map(strip_verbatim).unwrap_or(root);
         let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let workspace = WorkspaceInfo { root, name };
@@ -198,21 +189,15 @@ impl Core {
         tokio::spawn(async move {
             let mut batch = vec![TranscriptDelta::Reset { items: initial }];
             loop {
-                if !batch.is_empty() && tx.send(std::mem::take(&mut batch)).await.is_err() {
+                if tx.send(std::mem::take(&mut batch)).await.is_err() {
                     return; // the watcher went away
                 }
-                match deltas.recv().await {
-                    Ok(delta) => batch.push(delta),
-                    Err(broadcast::error::RecvError::Lagged(_)) => batch.push(session.reset()),
-                    Err(broadcast::error::RecvError::Closed) => return,
-                }
+                // Wait for the next change, then gather whatever else arrives within the flush window.
+                let Some(first) = session.next_delta(&mut deltas).await else { return };
+                batch.push(first);
                 let deadline = tokio::time::Instant::now() + FLUSH_INTERVAL;
-                while let Ok(received) = tokio::time::timeout_at(deadline, deltas.recv()).await {
-                    match received {
-                        Ok(delta) => batch.push(delta),
-                        Err(broadcast::error::RecvError::Lagged(_)) => batch = vec![session.reset()],
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
+                while let Ok(Some(delta)) = tokio::time::timeout_at(deadline, session.next_delta(&mut deltas)).await {
+                    batch.push(delta);
                 }
             }
         });
@@ -286,7 +271,7 @@ impl Inner {
                     let title = params["toolCall"]["title"].as_str().unwrap_or("a tool call");
                     session.record(|t| {
                         t.push(TranscriptItem::Notice {
-                            text: format!("The Agent asked permission for Ã¢â‚¬Å“{title}Ã¢â‚¬Â. Declined: permission cards aren't built yet."),
+                            text: format!("The Agent asked permission for \"{title}\". Declined: permission cards aren't built yet."),
                         })
                     });
                 }
@@ -321,8 +306,16 @@ impl Session {
         let _ = self.deltas.send(delta);
     }
 
-    fn reset(&self) -> TranscriptDelta {
-        TranscriptDelta::Reset { items: self.transcript.lock().expect("transcript lock").items().to_vec() }
+    /// The next change for a watcher; if the watcher fell behind, a `Reset` to the current transcript.
+    /// `None` once the session is gone.
+    async fn next_delta(&self, deltas: &mut broadcast::Receiver<TranscriptDelta>) -> Option<TranscriptDelta> {
+        match deltas.recv().await {
+            Ok(delta) => Some(delta),
+            Err(broadcast::error::RecvError::Lagged(_)) => Some(TranscriptDelta::Reset {
+                items: self.transcript.lock().expect("transcript lock").items().to_vec(),
+            }),
+            Err(broadcast::error::RecvError::Closed) => None,
+        }
     }
 }
 

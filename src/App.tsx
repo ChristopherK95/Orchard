@@ -5,6 +5,7 @@ import { createStore, reconcile } from "solid-js/store";
 import {
   core,
   type MissingPrerequisite,
+  type SessionId,
   type SessionInfo,
   type SessionState,
   type TranscriptDelta,
@@ -82,7 +83,13 @@ function OpenWorkspace(props: { onOpened: (w: WorkspaceInfo) => void }) {
 }
 
 function WorkspaceView(props: { workspace: WorkspaceInfo }) {
-  const [session, setSession] = createSignal<SessionInfo | null>(null);
+  // Sessions as the core reports them; the Tab shows the one this view created.
+  const [sessions, setSessions] = createStore<Record<SessionId, SessionInfo>>({});
+  const [activeId, setActiveId] = createSignal<SessionId | null>(null);
+  const session = () => {
+    const id = activeId();
+    return id === null ? undefined : sessions[id];
+  };
   const [items, setItems] = createStore<TranscriptItem[]>([]);
   const [error, setError] = createSignal("");
 
@@ -96,13 +103,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
 
   onMount(async () => {
     const unlisten = await core.onEvent((event) => {
-      if (event.kind === "sessionCreated") setSession(event.session);
-      else if (event.kind === "sessionStateChanged" && event.sessionId === session()?.id)
-        setSession({ ...session()!, state: event.state });
+      if (event.kind === "sessionCreated") setSessions(event.session.id, event.session);
+      else if (sessions[event.sessionId]) setSessions(event.sessionId, "state", event.state);
     });
     onCleanup(unlisten);
     try {
       const id = await core.newSession();
+      setActiveId(id);
       await core.watchSession(id, apply);
     } catch (err) {
       setError(String(err));

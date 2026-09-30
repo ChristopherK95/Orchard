@@ -11,6 +11,6 @@
 - [ ] Sending a prompt streams the Agent's reply into the Tab incrementally, batched to about one flush per frame.
 - [ ] The core spawns exactly one ACP adapter process and routes messages per Agent session. The adapter executable is configurable (the test seam).
 - [ ] The Tab shows Working while a turn runs and Idle when it ends.
-- [ ] If git < 2.55 or Node < 20 (or either is missing), startup shows a clear message naming what to install.
+- [ ] If git < 2.55 or Node < 22.12 (or either is missing), startup shows a clear message naming what to install.
 - [ ] Core tests drive the public API against the fake ACP agent: create session → send prompt → receive streamed chunks → state returns to Idle.
 - [ ] The fake ACP agent can script replies and streamed chunks. It's the template for later tests.

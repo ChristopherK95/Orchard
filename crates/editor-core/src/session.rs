@@ -16,7 +16,7 @@ pub enum SessionState {
     Working,
     /// The turn has finished and the Agent is waiting for the next prompt.
     Idle,
-    /// The Agent's process ended unexpectedly.
+    /// The Agent's process ended without being Suspended (crash, or it quit).
     Exited,
 }
 
@@ -53,8 +53,22 @@ pub enum TranscriptDelta {
 #[derive(Default)]
 pub(crate) struct Transcript {
     items: Vec<TranscriptItem>,
-    /// The ACP message id of the Agent message still receiving chunks, if one is open.
-    open_agent_message: Option<Option<String>>,
+    /// The Agent message (the last item) still receiving chunks, if there is one.
+    open_agent_message: Option<OpenAgentMessage>,
+}
+
+struct OpenAgentMessage {
+    /// ACP's message id, when the adapter sends one; chunks without an id continue the open message.
+    message_id: Option<String>,
+}
+
+impl OpenAgentMessage {
+    fn continued_by(&self, message_id: &Option<String>) -> bool {
+        match (&self.message_id, message_id) {
+            (Some(open), Some(id)) => open == id,
+            _ => true,
+        }
+    }
 }
 
 impl Transcript {
@@ -69,12 +83,7 @@ impl Transcript {
     }
 
     pub(crate) fn append_agent_text(&mut self, text: &str, message_id: Option<String>) -> TranscriptDelta {
-        let continues = match (&self.open_agent_message, &message_id) {
-            (Some(Some(open)), Some(id)) => open == id,
-            (Some(_), _) => true,
-            (None, _) => false,
-        };
-        if continues {
+        if self.open_agent_message.as_ref().is_some_and(|open| open.continued_by(&message_id)) {
             let index = self.items.len() - 1;
             if let TranscriptItem::Agent { text: t } = &mut self.items[index] {
                 t.push_str(text);
@@ -82,7 +91,7 @@ impl Transcript {
             return TranscriptDelta::TextAppended { index, text: text.to_owned() };
         }
         let delta = self.push(TranscriptItem::Agent { text: text.to_owned() });
-        self.open_agent_message = Some(message_id);
+        self.open_agent_message = Some(OpenAgentMessage { message_id });
         delta
     }
 }
