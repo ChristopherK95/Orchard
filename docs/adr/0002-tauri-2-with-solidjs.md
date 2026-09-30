@@ -13,5 +13,5 @@ v1 is built on **Tauri 2.x (stable)** with a Rust core and a **SolidJS** TypeScr
 ## Consequences
 
 - **Two rendering engines**: WebKitGTK on Linux and WebView2 on Windows, so both must be tested.
-- **Memory budget, as a development-time benchmark check** (not a runtime limit): the editor's own processes, excluding `claude` and ACP and measured as PSS on both OSes, must stay **≤ 250 MB with 5 Tabs and 1 manual editor window**, **≤ 15 MB per extra Tab**, and **near 0% CPU at idle**. If the first prototype misses it, this decision is reopened; after that, a miss is a regression.
+- **Memory budget, as a development-time benchmark check** (not a runtime limit): the editor's own processes, excluding `claude` and ACP and measured as PSS on both OSes, must stay **≤ 250 MB with 5 Tabs and 1 open Manual editor**, **≤ 15 MB per extra Tab**, and **near 0% CPU at idle**. If the first prototype misses it, this decision is reopened; after that, a miss is a regression.
 - **Extra windows cost a web process on Linux**: each extra OS window (e.g. a manual editor window) likely costs another WebKit process, which weighs on the window-vs-pane layout question.

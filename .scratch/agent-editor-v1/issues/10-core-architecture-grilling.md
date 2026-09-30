@@ -13,4 +13,4 @@ Under Tauri 2 + SolidJS with sessions hosted through ACP (ADR 0001, ADR 0002), w
 - Which process owns the git layer, file watchers, and fuzzy file index?
 - The frontend↔core IPC shape: Tauri commands vs events/channels, and how streaming chat for many Tabs is pushed without flooding the webview.
 - Where Workspace, Worktree and Agent session state lives, and what's persisted to disk.
-- One main window vs extra OS windows for manual editors, given the Linux cost of a WebKit process per window (to be reconciled with the layout prototype).
+- How a popped-out manual editor window shares state with the main window. The layout prototype settled on one main window by default, with the manual editor as a pane and pop-out-to-window on demand; each popped-out window is another WebKit process on Linux.

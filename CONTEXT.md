@@ -21,6 +21,14 @@ _Avoid_: Instance, chat, agent (the Agent is the program; the session is one con
 **Tab**:
 The UI surface of one Agent session. Hopping between Worktrees means switching or filtering Tabs, not opening another window.
 
+**Board**:
+The overview of every Agent session in the Workspace, grouped by Agent session state. It's the alternative to the Tabs view; toggle between them.
+_Avoid_: Dashboard, overview
+
+**Manual editor**:
+Where the user views and hand-edits a file in a Worktree. It opens as a pane beside the chat and can be popped out into its own window.
+_Avoid_: Text editor window, code view
+
 **Agent**:
 The coding-agent program driving an Agent session. Claude Code first; others may be supported later behind the same boundary.
 
