@@ -57,6 +57,14 @@ struct Turn {
     delay_ms: u64,
     /// Ask for permission before sending `chunks`.
     permission: Option<Permission>,
+    /// A second question asked alongside `permission`, before either is answered (parallel tool calls).
+    also_ask: Option<Permission>,
+    /// Ask, but end the turn without waiting for the answer.
+    #[serde(default)]
+    abandon: bool,
+    /// Ask, then exit the process before the answer arrives.
+    #[serde(default)]
+    exit_while_asking: bool,
     /// Exit the process (after sending `chunks`) instead of finishing the turn.
     #[serde(default)]
     exit: bool,
@@ -144,9 +152,16 @@ impl Agent {
             ..Turn::default()
         });
         let mut chunks = turn.chunks;
-        if let Some(permission) = turn.permission {
-            let answer = self.ask_permission(&session_id, permission);
-            chunks.insert(0, format!("[permission {answer}]"));
+        let questions: Vec<Permission> = turn.permission.into_iter().chain(turn.also_ask).collect();
+        if !questions.is_empty() {
+            let request_ids: Vec<String> = questions.into_iter().map(|q| self.ask_permission(&session_id, q)).collect();
+            if turn.exit_while_asking {
+                std::process::exit(1);
+            }
+            if !turn.abandon {
+                let answers = self.await_answers(&request_ids);
+                chunks.insert(0, answers.iter().map(|a| format!("[permission {a}]")).collect());
+            }
         }
         for chunk in &chunks {
             std::thread::sleep(Duration::from_millis(turn.delay_ms));
@@ -158,8 +173,7 @@ impl Agent {
         json!({ "stopReason": "end_turn" })
     }
 
-    /// Announces the tool call, asks permission for it, and returns the chosen option id
-    /// (or `"cancelled"`).
+    /// Announces the tool call and asks permission for it; returns the request id to await.
     fn ask_permission(&mut self, session_id: &Value, permission: Permission) -> String {
         self.requests += 1;
         let tool_call_id = format!("call-{}", self.requests);
@@ -186,13 +200,24 @@ impl Agent {
                 ]
             }
         }));
-        while let Some(msg) = self.read() {
-            if msg["id"] == json!(request_id) && msg.get("method").is_none() {
+        request_id
+    }
+
+    /// Waits for every request's answer (in any order); returns the chosen option ids (or
+    /// `"cancelled"`) in request order.
+    fn await_answers(&mut self, request_ids: &[String]) -> Vec<String> {
+        let mut answers: Vec<Option<String>> = vec![None; request_ids.len()];
+        while answers.iter().any(Option::is_none) {
+            let Some(msg) = self.read() else { std::process::exit(0) }; // the client went away
+            if msg.get("method").is_some() {
+                continue;
+            }
+            if let Some(i) = request_ids.iter().position(|id| msg["id"] == json!(id)) {
                 let outcome = &msg["result"]["outcome"];
-                return outcome["optionId"].as_str().unwrap_or("cancelled").to_owned();
+                answers[i] = Some(outcome["optionId"].as_str().unwrap_or("cancelled").to_owned());
             }
         }
-        std::process::exit(0); // the client went away mid-question
+        answers.into_iter().flatten().collect()
     }
 
     fn read(&mut self) -> Option<Value> {

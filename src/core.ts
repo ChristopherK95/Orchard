@@ -72,8 +72,8 @@ export const core = {
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
   newSession: () => invoke<SessionId>("new_session"),
   sendPrompt: (sessionId: SessionId, text: string) => invoke<void>("send_prompt", { sessionId, text }),
-  answerPermission: (sessionId: SessionId, optionId: string) =>
-    invoke<void>("answer_permission", { sessionId, optionId }),
+  answerPermission: (sessionId: SessionId, toolCallId: string, optionId: string) =>
+    invoke<void>("answer_permission", { sessionId, toolCallId, optionId }),
   setPermissionMode: (sessionId: SessionId, mode: PermissionMode) =>
     invoke<void>("set_permission_mode", { sessionId, mode }),
   watchSession: (sessionId: SessionId, onBatch: (batch: TranscriptDelta[]) => void) => {

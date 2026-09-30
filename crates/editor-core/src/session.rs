@@ -22,7 +22,7 @@ pub enum SessionState {
     Exited,
 }
 
-/// How much the Agent may do without asking, chosen per Tab.
+/// How much the Agent may do without asking, chosen per Agent session (in its Tab).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PermissionMode {

@@ -9,7 +9,7 @@
   --accent: #7aa2f7;
   --working: #7aa2f7;
   --idle: #7fd18b;
-  --needs: #f0a35e;
+  --needs-you: #f0a35e;
   --added: #b8e8c0;
   --removed: #f2b3b7;
   --hunk: #c49cf0;
@@ -41,7 +41,7 @@ input, textarea { background: var(--bg3); border: 1px solid var(--line); border-
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot.working { background: var(--working); animation: pulse 1.2s infinite; }
 .dot.idle { background: var(--idle); }
-.dot.needsYou { background: var(--needs); box-shadow: 0 0 0 3px rgba(240, 163, 94, 0.25); }
+.dot.needsYou { background: var(--needs-you); box-shadow: 0 0 0 3px rgba(240, 163, 94, 0.25); }
 .dot.exited { background: var(--exited); }
 @keyframes pulse { 50% { opacity: 0.35; } }
 .banner { margin: 0; padding: 8px 14px; border-bottom: 1px solid var(--line); }
@@ -56,7 +56,7 @@ kbd { font: 11px var(--mono); background: var(--bg4); border: 1px solid var(--li
 select { font: inherit; color: inherit; background: var(--bg3); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
 
 .permission { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; max-width: 820px; outline: none; }
-.permission.pending { border-color: var(--needs); background: rgba(240, 163, 94, 0.05); }
+.permission.pending { border-color: var(--needs-you); background: rgba(240, 163, 94, 0.05); }
 .permission.pending:focus { box-shadow: 0 0 0 2px rgba(240, 163, 94, 0.35); }
 .permission-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .permission.answered .permission-head { border-bottom-color: transparent; }

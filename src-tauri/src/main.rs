@@ -52,8 +52,13 @@ async fn send_prompt(core: State<'_, Core>, session_id: SessionId, text: String)
 }
 
 #[tauri::command]
-async fn answer_permission(core: State<'_, Core>, session_id: SessionId, option_id: String) -> CommandResult<()> {
-    core.answer_permission(session_id, &option_id).await.map_err(|e| e.to_string())
+async fn answer_permission(
+    core: State<'_, Core>,
+    session_id: SessionId,
+    tool_call_id: String,
+    option_id: String,
+) -> CommandResult<()> {
+    core.answer_permission(session_id, &tool_call_id, &option_id).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

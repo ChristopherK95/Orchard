@@ -96,18 +96,44 @@ struct State {
 }
 
 struct Session {
+    /// What the frontend sees. `state` here is only ever written by `update`, derived from `control`.
     info: Mutex<SessionInfo>,
     acp_id: String,
     connection: Arc<Connection>,
     transcript: Mutex<Transcript>,
     deltas: broadcast::Sender<TranscriptDelta>,
+    events: broadcast::Sender<CoreEvent>,
     /// Every tool call the Agent announced, merged with its updates, keyed by ACP tool call id.
     tool_calls: Mutex<HashMap<String, Value>>,
-    /// The permission question the Agent is waiting on, if any.
-    pending_permission: Mutex<Option<PendingPermission>>,
+    control: Mutex<Control>,
 }
 
-struct PendingPermission {
+/// The facts a session's state is derived from, changed only under one lock (see `Session::update`),
+/// so turn ends, answers and crashes can't interleave into a wrong state.
+#[derive(Default)]
+struct Control {
+    in_turn: bool,
+    exited: bool,
+    /// Permission questions the Agent is waiting on, oldest first.
+    questions: Vec<OpenQuestion>,
+}
+
+impl Control {
+    fn state(&self) -> SessionState {
+        if self.exited {
+            SessionState::Exited
+        } else if !self.questions.is_empty() {
+            SessionState::NeedsYou
+        } else if self.in_turn {
+            SessionState::Working
+        } else {
+            SessionState::Idle
+        }
+    }
+}
+
+struct OpenQuestion {
+    tool_call_id: String,
     /// The permission card's index in the transcript.
     index: usize,
     option_ids: Vec<String>,
@@ -177,8 +203,9 @@ impl Core {
             connection,
             transcript: Mutex::default(),
             deltas,
+            events: self.inner.events.clone(),
             tool_calls: Mutex::default(),
-            pending_permission: Mutex::default(),
+            control: Mutex::default(),
         });
         state.sessions.insert(id, session);
         state.by_acp_id.insert(acp_id, id);
@@ -190,50 +217,53 @@ impl Core {
     /// Sends a prompt; returns once it's on its way. The reply streams to watchers.
     pub async fn send_prompt(&self, id: SessionId, text: &str) -> Result<(), CoreError> {
         let session = self.session(id)?;
-        match session.state() {
-            SessionState::Working | SessionState::NeedsYou => return Err(CoreError::SessionBusy),
-            SessionState::Exited => return Err(CoreError::SessionExited),
-            SessionState::Idle => {}
-        }
-        session.record(|t| t.push(TranscriptItem::User { text: text.to_owned() }));
-        self.inner.set_state(&session, SessionState::Working);
+        session.update(|control| match control.state() {
+            SessionState::Working | SessionState::NeedsYou => Err(CoreError::SessionBusy),
+            SessionState::Exited => Err(CoreError::SessionExited),
+            SessionState::Idle => {
+                session.record(|t| t.push(TranscriptItem::User { text: text.to_owned() }));
+                control.in_turn = true;
+                Ok(())
+            }
+        })?;
 
-        let inner = self.inner.clone();
         let params = json!({ "sessionId": session.acp_id, "prompt": [{ "type": "text", "text": text }] });
         tokio::spawn(async move {
             let result = session.connection.request("session/prompt", params).await;
-            // A question still open when the turn ends will never be answered.
-            session.cancel_pending_permission();
-            match result {
-                Ok(_) => inner.set_state(&session, SessionState::Idle),
-                Err(AcpError::Closed) => inner.set_state(&session, SessionState::Exited),
-                Err(err) => {
-                    session.record(|t| t.push(TranscriptItem::Notice { text: format!("The turn failed: {err}") }));
-                    inner.set_state(&session, SessionState::Idle);
+            session.update(|control| {
+                // A question still open when the turn ends will never be answered.
+                session.cancel_questions(control);
+                control.in_turn = false;
+                match result {
+                    Ok(_) => {}
+                    Err(AcpError::Closed) => control.exited = true,
+                    Err(err) => {
+                        session.record(|t| t.push(TranscriptItem::Notice { text: format!("The turn failed: {err}") }))
+                    }
                 }
-            }
+            });
         });
         Ok(())
     }
 
-    /// Answers the permission card the session is waiting on with one of the Agent's options.
-    pub async fn answer_permission(&self, id: SessionId, option_id: &str) -> Result<(), CoreError> {
+    /// Answers the permission card for `tool_call_id` with one of the options the Agent offered.
+    pub async fn answer_permission(&self, id: SessionId, tool_call_id: &str, option_id: &str) -> Result<(), CoreError> {
         let session = self.session(id)?;
-        let pending = {
-            let mut slot = session.pending_permission.lock().expect("permission lock");
-            let pending = slot.as_ref().ok_or(CoreError::NoPendingPermission)?;
-            if !pending.option_ids.iter().any(|o| o == option_id) {
+        session.update(|control| {
+            let at = control
+                .questions
+                .iter()
+                .position(|q| q.tool_call_id == tool_call_id)
+                .ok_or(CoreError::NoPendingPermission)?;
+            if !control.questions[at].option_ids.iter().any(|o| o == option_id) {
                 return Err(CoreError::UnknownPermissionOption(option_id.to_owned()));
             }
-            slot.take().expect("checked above")
-        };
-        // Working before the answer goes out: the Agent may finish the turn straight away.
-        self.inner.set_state(&session, SessionState::Working);
-        session.record(|t| {
-            t.resolve_permission(pending.index, PermissionOutcome::Selected { option_id: option_id.to_owned() })
-        });
-        pending.responder.result(json!({ "outcome": { "outcome": "selected", "optionId": option_id } }));
-        Ok(())
+            let question = control.questions.remove(at);
+            let outcome = PermissionOutcome::Selected { option_id: option_id.to_owned() };
+            question.responder.result(permissions::acp_outcome(&outcome));
+            session.record(|t| t.resolve_permission(question.index, outcome));
+            Ok(())
+        })
     }
 
     /// Switches how much the session's Agent may do without asking.
@@ -243,7 +273,7 @@ impl Core {
             .connection
             .request("session/set_mode", json!({ "sessionId": session.acp_id, "modeId": mode.acp_id() }))
             .await?;
-        self.inner.set_mode(&session, mode);
+        session.set_mode(mode);
         Ok(())
     }
 
@@ -320,24 +350,6 @@ impl Core {
 }
 
 impl Inner {
-    fn set_state(&self, session: &Session, state: SessionState) {
-        let mut info = session.info.lock().expect("info lock");
-        if info.state == state {
-            return;
-        }
-        info.state = state;
-        let _ = self.events.send(CoreEvent::SessionStateChanged { session_id: info.id, state });
-    }
-
-    fn set_mode(&self, session: &Session, mode: PermissionMode) {
-        let mut info = session.info.lock().expect("info lock");
-        if info.permission_mode == mode {
-            return;
-        }
-        info.permission_mode = mode;
-        let _ = self.events.send(CoreEvent::PermissionModeChanged { session_id: info.id, mode });
-    }
-
     /// Handles what the adapter sends us, in arrival order (see `acp`).
     fn handle(&self, incoming: Incoming) {
         match incoming {
@@ -354,7 +366,7 @@ impl Inner {
                     // The Agent can change mode itself, e.g. when leaving plan mode.
                     Some("current_mode_update") => {
                         if let Some(mode) = update["currentModeId"].as_str().and_then(PermissionMode::from_acp_id) {
-                            self.set_mode(&session, mode);
+                            session.set_mode(mode);
                         }
                     }
                     _ => {}
@@ -362,18 +374,20 @@ impl Inner {
             }
             Incoming::Notification { .. } => {}
             Incoming::Request { method, params, responder } if method == "session/request_permission" => {
-                let Some(session) = self.session_for(&params) else {
-                    return responder.result(json!({ "outcome": { "outcome": "cancelled" } }));
-                };
-                session.ask_permission(&params, responder);
-                self.set_state(&session, SessionState::NeedsYou);
+                match self.session_for(&params) {
+                    Some(session) => session.ask_permission(&params, responder),
+                    None => responder.result(permissions::acp_outcome(&PermissionOutcome::Cancelled)),
+                }
             }
             Incoming::Request { responder, .. } => responder.error(-32601, "method not supported by this client"),
             Incoming::Closed => {
                 let sessions: Vec<_> = self.state.lock().expect("state lock").sessions.values().cloned().collect();
                 for session in sessions {
-                    session.cancel_pending_permission();
-                    self.set_state(&session, SessionState::Exited);
+                    session.update(|control| {
+                        session.cancel_questions(control);
+                        control.in_turn = false;
+                        control.exited = true;
+                    });
                 }
             }
         }
@@ -387,16 +401,33 @@ impl Inner {
 }
 
 impl Session {
-    fn state(&self) -> SessionState {
-        self.info.lock().expect("info lock").state
+    /// Changes the facts behind the session's state under one lock, then publishes the state they
+    /// now imply. Lock order: control, then transcript, then info.
+    fn update<R>(&self, change: impl FnOnce(&mut Control) -> R) -> R {
+        let mut control = self.control.lock().expect("control lock");
+        let result = change(&mut control);
+        let state = control.state();
+        let mut info = self.info.lock().expect("info lock");
+        if info.state != state {
+            info.state = state;
+            let _ = self.events.send(CoreEvent::SessionStateChanged { session_id: info.id, state });
+        }
+        result
+    }
+
+    fn set_mode(&self, mode: PermissionMode) {
+        let mut info = self.info.lock().expect("info lock");
+        if info.permission_mode != mode {
+            info.permission_mode = mode;
+            let _ = self.events.send(CoreEvent::PermissionModeChanged { session_id: info.id, mode });
+        }
     }
 
     /// Applies a transcript change and streams its delta, atomically with respect to `watch_session`.
-    fn record(&self, change: impl FnOnce(&mut Transcript) -> TranscriptDelta) -> TranscriptDelta {
+    fn record(&self, change: impl FnOnce(&mut Transcript) -> TranscriptDelta) {
         let mut transcript = self.transcript.lock().expect("transcript lock");
         let delta = change(&mut transcript);
-        let _ = self.deltas.send(delta.clone());
-        delta
+        let _ = self.deltas.send(delta);
     }
 
     fn note_tool_call(&self, update: &Value) {
@@ -405,7 +436,8 @@ impl Session {
         permissions::merge_tool_call(tool_calls.entry(id.to_owned()).or_insert_with(|| json!({})), update);
     }
 
-    /// Puts a permission card in the transcript and holds the question until it's answered.
+    /// Puts a permission card in the transcript and holds the question until it's answered. The
+    /// card is published under the control lock, so it can't be answered before it's registered.
     fn ask_permission(&self, params: &Value, responder: Responder) {
         let mut tool_call = params["toolCall"]["toolCallId"]
             .as_str()
@@ -414,22 +446,26 @@ impl Session {
         permissions::merge_tool_call(&mut tool_call, &params["toolCall"]);
         let worktree = self.info.lock().expect("info lock").worktree.clone();
         let request = permissions::request_from(&tool_call, &params["options"], &worktree);
-        let option_ids = request.options.iter().map(|o| o.id.clone()).collect();
-        // Only one question at a time: a newer one supersedes an unanswered older one.
-        self.cancel_pending_permission();
-        let TranscriptDelta::ItemAdded { index, .. } =
-            self.record(|t| t.push(TranscriptItem::Permission { request, outcome: None }))
-        else {
-            unreachable!("push always adds an item")
-        };
-        *self.pending_permission.lock().expect("permission lock") = Some(PendingPermission { index, option_ids, responder });
+        self.update(|control| {
+            if control.exited {
+                return responder.result(permissions::acp_outcome(&PermissionOutcome::Cancelled));
+            }
+            let tool_call_id = request.tool_call_id.clone();
+            let option_ids = request.options.iter().map(|o| o.id.clone()).collect();
+            let mut index = 0;
+            self.record(|t| {
+                index = t.items().len();
+                t.push(TranscriptItem::Permission { request, outcome: None })
+            });
+            control.questions.push(OpenQuestion { tool_call_id, index, option_ids, responder });
+        });
     }
 
-    fn cancel_pending_permission(&self) {
-        let pending = self.pending_permission.lock().expect("permission lock").take();
-        if let Some(pending) = pending {
-            pending.responder.result(json!({ "outcome": { "outcome": "cancelled" } }));
-            self.record(|t| t.resolve_permission(pending.index, PermissionOutcome::Cancelled));
+    /// Tells the Agent every open question is cancelled and marks their cards so.
+    fn cancel_questions(&self, control: &mut Control) {
+        for question in control.questions.drain(..) {
+            question.responder.result(permissions::acp_outcome(&PermissionOutcome::Cancelled));
+            self.record(|t| t.resolve_permission(question.index, PermissionOutcome::Cancelled));
         }
     }
 

@@ -80,6 +80,17 @@ pub fn core_with(agent: &FakeAgent) -> Core {
     Core::new(CoreConfig { adapter: agent.command() })
 }
 
+/// Polls `check` until it holds (or panics after `TIMEOUT`), for facts no event announces.
+pub async fn eventually(what: &str, mut check: impl FnMut() -> bool) {
+    tokio::time::timeout(TIMEOUT, async {
+        while !check() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for {what}"));
+}
+
 /// Waits for state changes of `session`, returning them in order, until `last` is seen.
 pub async fn states_until(
     events: &mut broadcast::Receiver<CoreEvent>,

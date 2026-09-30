@@ -3,10 +3,12 @@
 
 use std::path::Path;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use similar::{ChangeTag, TextDiff};
 
-use crate::session::{DiffLine, DiffLineKind, PermissionOption, PermissionOptionKind, PermissionRequest};
+use crate::session::{
+    DiffLine, DiffLineKind, PermissionOption, PermissionOptionKind, PermissionOutcome, PermissionRequest,
+};
 
 /// Diffs longer than this are cut short on the card; the full change is still what gets applied.
 const MAX_DIFF_LINES: usize = 400;
@@ -52,6 +54,14 @@ pub(crate) fn request_from(tool_call: &Value, options: &Value, worktree: &Path) 
                 })
             })
             .collect(),
+    }
+}
+
+/// The `RequestPermissionResponse` for an answer.
+pub(crate) fn acp_outcome(outcome: &PermissionOutcome) -> Value {
+    match outcome {
+        PermissionOutcome::Selected { option_id } => json!({ "outcome": { "outcome": "selected", "optionId": option_id } }),
+        PermissionOutcome::Cancelled => json!({ "outcome": { "outcome": "cancelled" } }),
     }
 }
 

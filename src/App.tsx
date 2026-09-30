@@ -13,7 +13,7 @@ import {
   type TranscriptItem,
   type WorkspaceInfo,
 } from "./core";
-import { PermissionCard } from "./PermissionCard";
+import { answerByKey, PermissionCard } from "./PermissionCard";
 
 const STATE_LABEL: Record<SessionState, string> = {
   working: "Working",
@@ -122,6 +122,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       else setSessions(event.sessionId, "permissionMode", event.mode);
     });
     onCleanup(unlisten);
+    // Y/N answer the oldest open permission card anywhere in the Tab (outside text fields).
+    const onKey = (e: KeyboardEvent) => {
+      const s = session();
+      if (s?.state === "needsYou" && answerByKey(e, s.id, items)) e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    onCleanup(() => window.removeEventListener("keydown", onKey));
     try {
       const id = await core.newSession();
       setActiveId(id);

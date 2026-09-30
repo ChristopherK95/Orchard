@@ -1,9 +1,41 @@
 // An inline permission card (ticket 03): what the Agent wants to do, the diff for edits, and the
-// Agent's own options. Y answers with the allow-once option, N with the reject option.
+// Agent's own options by name. Y/N are handled for the whole Tab by `answerByKey`.
 import { createSignal, For, onMount, Show } from "solid-js";
-import { core, type PermissionOption, type PermissionOutcome, type PermissionRequest, type SessionId } from "./core";
+import {
+  core,
+  type PermissionOption,
+  type PermissionOutcome,
+  type PermissionRequest,
+  type SessionId,
+  type TranscriptItem,
+} from "./core";
 
 const DIFF_PREFIX = { hunk: "", context: " ", added: "+", removed: "−" } as const;
+
+/** The option `Y` picks: allow once. */
+export const yesOption = (request: PermissionRequest) => request.options.find((o) => o.kind === "allowOnce");
+/** The option `N` picks: reject (once, else always). */
+export const noOption = (request: PermissionRequest) =>
+  request.options.find((o) => o.kind === "rejectOnce") ?? request.options.find((o) => o.kind === "rejectAlways");
+
+/**
+ * Answers the oldest open card on `Y`/`N`, unless a text field has focus. Returns true if the key
+ * was used.
+ */
+export function answerByKey(event: KeyboardEvent, sessionId: SessionId, items: TranscriptItem[]): boolean {
+  const key = event.key.toLowerCase();
+  if ((key !== "y" && key !== "n") || event.ctrlKey || event.metaKey || event.altKey) return false;
+  const focused = document.activeElement;
+  if (focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement || focused instanceof HTMLSelectElement)
+    return false;
+  if (focused instanceof HTMLElement && focused.isContentEditable) return false;
+  const open = items.find((i) => i.kind === "permission" && i.outcome === null);
+  if (open?.kind !== "permission") return false;
+  const option = key === "y" ? yesOption(open.request) : noOption(open.request);
+  if (!option) return false;
+  void core.answerPermission(sessionId, open.request.toolCallId, option.id);
+  return true;
+}
 
 export function PermissionCard(props: {
   sessionId: SessionId;
@@ -15,21 +47,20 @@ export function PermissionCard(props: {
   const pending = () => props.outcome === null;
   let card!: HTMLDivElement;
 
-  const answer = async (option: PermissionOption | undefined) => {
-    if (!option || !pending() || sending()) return;
+  const answer = async (option: PermissionOption) => {
+    if (!pending() || sending()) return;
     setSending(true);
     setError("");
     try {
-      await core.answerPermission(props.sessionId, option.id);
+      await core.answerPermission(props.sessionId, props.request.toolCallId, option.id);
     } catch (err) {
       setError(String(err));
     } finally {
       setSending(false);
     }
   };
-  const optionOf = (kind: PermissionOption["kind"]) => props.request.options.find((o) => o.kind === kind);
 
-  // Take focus while waiting, so Y/N work straight away (the composer is disabled meanwhile).
+  // Bring the question into view (and move focus off the disabled composer).
   onMount(() => pending() && card.focus());
 
   const chosen = () => {
@@ -40,16 +71,7 @@ export function PermissionCard(props: {
   };
 
   return (
-    <div
-      ref={card}
-      class={`permission ${pending() ? "pending" : "answered"}`}
-      tabindex={pending() ? 0 : -1}
-      onKeyDown={(e) => {
-        if (e.target !== card) return;
-        if (e.key === "y" || e.key === "Y") void answer(optionOf("allowOnce"));
-        if (e.key === "n" || e.key === "N") void answer(optionOf("rejectOnce") ?? optionOf("rejectAlways"));
-      }}
-    >
+    <div ref={card} class={`permission ${pending() ? "pending" : "answered"}`} tabindex={-1}>
       <div class="permission-head">
         <span class={`dot ${pending() ? "needsYou" : "idle"}`} />
         <b>{props.request.title}</b>
@@ -77,17 +99,13 @@ export function PermissionCard(props: {
         <div class="permission-actions">
           <For each={props.request.options}>
             {(option) => (
-              <button
-                class={option.kind === "allowOnce" ? "primary" : ""}
-                disabled={sending()}
-                onClick={() => void answer(option)}
-              >
+              <button class={option.kind === "allowOnce" ? "primary" : ""} disabled={sending()} onClick={() => void answer(option)}>
                 {option.name}
-                <Show when={option.kind === "allowOnce"}>
+                <Show when={option === yesOption(props.request)}>
                   {" "}
                   <kbd>Y</kbd>
                 </Show>
-                <Show when={option === (optionOf("rejectOnce") ?? optionOf("rejectAlways"))}>
+                <Show when={option === noOption(props.request)}>
                   {" "}
                   <kbd>N</kbd>
                 </Show>

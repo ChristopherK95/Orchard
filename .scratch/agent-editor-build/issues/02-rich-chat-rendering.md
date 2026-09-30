@@ -9,6 +9,7 @@
 - [ ] Markdown renders: paragraphs, lists, inline code, links, emphasis.
 - [ ] Fenced code blocks render as static highlighted HTML (no editor instance), with line numbers, a language label and Copy.
 - [ ] Unknown languages render as plain monospace.
+- [ ] Permission-card diffs (from ticket 03) use the same static highlighter, by the file's language, keeping their +/− line colours.
 - [ ] Tool calls (Read, Edit, Bash, …) render as compact rows naming the tool and target.
 - [ ] A transcript of 1,000+ messages scrolls smoothly, with only on-screen items in the DOM.
 - [ ] The fake ACP agent can emit tool-call events, and a core test asserts they reach the transcript.
