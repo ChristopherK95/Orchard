@@ -1,10 +1,11 @@
 // Walking skeleton view (ticket 01): prerequisite gate → open a Workspace → one Tab with a
 // streaming transcript and a composer. It only renders core state and sends commands (ADR 0003).
 import { createEffect, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
-import { createStore, reconcile } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
 import {
   core,
   type MissingPrerequisite,
+  type PermissionMode,
   type SessionId,
   type SessionInfo,
   type SessionState,
@@ -12,8 +13,14 @@ import {
   type TranscriptItem,
   type WorkspaceInfo,
 } from "./core";
+import { PermissionCard } from "./PermissionCard";
 
-const STATE_LABEL: Record<SessionState, string> = { working: "Working", idle: "Idle", exited: "Exited" };
+const STATE_LABEL: Record<SessionState, string> = {
+  working: "Working",
+  needsYou: "Needs you",
+  idle: "Idle",
+  exited: "Exited",
+};
 
 export function App() {
   const [problems, setProblems] = createSignal<MissingPrerequisite[] | null>(null);
@@ -96,15 +103,23 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   const apply = (batch: TranscriptDelta[]) => {
     for (const delta of batch) {
       if (delta.kind === "reset") setItems(reconcile(delta.items));
-      else if (delta.kind === "itemAdded") setItems(delta.index, delta.item);
-      else setItems(delta.index, "text", (t) => t + delta.text);
+      else if (delta.kind === "itemAdded" || delta.kind === "itemUpdated") setItems(delta.index, delta.item);
+      else
+        setItems(
+          produce((all) => {
+            const item = all[delta.index];
+            if (item.kind === "agent") item.text += delta.text;
+          }),
+        );
     }
   };
 
   onMount(async () => {
     const unlisten = await core.onEvent((event) => {
       if (event.kind === "sessionCreated") setSessions(event.session.id, event.session);
-      else if (sessions[event.sessionId]) setSessions(event.sessionId, "state", event.state);
+      else if (!sessions[event.sessionId]) return;
+      else if (event.kind === "sessionStateChanged") setSessions(event.sessionId, "state", event.state);
+      else setSessions(event.sessionId, "permissionMode", event.mode);
     });
     onCleanup(unlisten);
     try {
@@ -136,25 +151,45 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       <Show when={error()}>
         <p class="error banner">{error()}</p>
       </Show>
-      <Transcript items={items} />
-      <Show when={session()}>{(s) => <Composer session={s()} />}</Show>
+      <Show when={session()}>
+        {(s) => (
+          <>
+            <Transcript sessionId={s().id} items={items} />
+            <Composer session={s()} />
+          </>
+        )}
+      </Show>
     </div>
   );
 }
 
-function Transcript(props: { items: TranscriptItem[] }) {
+function Transcript(props: { sessionId: SessionId; items: TranscriptItem[] }) {
   let log!: HTMLDivElement;
   // Keep the newest output in view while it streams (virtualisation arrives in ticket 02).
   createEffect(() => {
-    for (const item of props.items) void item.text;
+    for (const item of props.items) void (item.kind === "permission" ? item.outcome : item.text);
     requestAnimationFrame(() => (log.scrollTop = log.scrollHeight));
   });
   return (
     <div class="transcript" ref={log}>
-      <For each={props.items}>{(item) => <div class={`msg ${item.kind}`}>{item.text}</div>}</For>
+      <For each={props.items}>
+        {(item) =>
+          item.kind === "permission" ? (
+            <PermissionCard sessionId={props.sessionId} request={item.request} outcome={item.outcome} />
+          ) : (
+            <div class={`msg ${item.kind}`}>{item.text}</div>
+          )
+        }
+      </For>
     </div>
   );
 }
+
+const MODE_LABEL: Record<PermissionMode, string> = {
+  askForEdits: "Ask for edits",
+  acceptEdits: "Accept edits",
+  plan: "Plan",
+};
 
 function Composer(props: { session: SessionInfo }) {
   const [text, setText] = createSignal("");
@@ -162,6 +197,17 @@ function Composer(props: { session: SessionInfo }) {
   const disabled = () => props.session.state !== "idle";
   let input!: HTMLTextAreaElement;
   onMount(() => input.focus());
+  // Back to the composer once a turn (or a permission question) is over.
+  createEffect(() => props.session.state === "idle" && input.focus());
+
+  const setMode = async (mode: PermissionMode) => {
+    setError("");
+    try {
+      await core.setPermissionMode(props.session.id, mode);
+    } catch (err) {
+      setError(String(err));
+    }
+  };
 
   const send = async () => {
     const prompt = text().trim();
@@ -191,12 +237,30 @@ function Composer(props: { session: SessionInfo }) {
             void send();
           }
         }}
-        placeholder={props.session.state === "exited" ? "The Agent exited." : "Message the Agent (Enter to send, Shift+Enter for a newline)"}
-        disabled={props.session.state === "exited"}
+        placeholder={
+          props.session.state === "exited"
+            ? "The Agent exited."
+            : props.session.state === "needsYou"
+              ? "Answer the permission card above first (Y / N)."
+              : "Message the Agent (Enter to send, Shift+Enter for a newline)"
+        }
+        disabled={props.session.state === "exited" || props.session.state === "needsYou"}
       />
-      <button class="primary" onClick={send} disabled={disabled() || !text().trim()}>
-        Send
-      </button>
+      <div class="composer-side">
+        <select
+          title="Permission mode"
+          value={props.session.permissionMode}
+          onChange={(e) => void setMode(e.currentTarget.value as PermissionMode)}
+          disabled={props.session.state === "exited"}
+        >
+          <For each={Object.keys(MODE_LABEL) as PermissionMode[]}>
+            {(mode) => <option value={mode}>{MODE_LABEL[mode]}</option>}
+          </For>
+        </select>
+        <button class="primary" onClick={send} disabled={disabled() || !text().trim()}>
+          Send
+        </button>
+      </div>
     </div>
   );
 }

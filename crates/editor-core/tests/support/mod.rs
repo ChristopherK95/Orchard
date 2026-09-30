@@ -125,6 +125,7 @@ fn apply(items: &mut Vec<TranscriptItem>, delta: TranscriptDelta) {
             assert_eq!(index, items.len(), "items are appended in order");
             items.push(item);
         }
+        TranscriptDelta::ItemUpdated { index, item } => items[index] = item,
         TranscriptDelta::TextAppended { index, text } => match &mut items[index] {
             TranscriptItem::Agent { text: t } => t.push_str(&text),
             other => panic!("text appended to non-agent item {other:?}"),

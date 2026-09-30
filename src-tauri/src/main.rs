@@ -5,8 +5,8 @@
 use std::path::PathBuf;
 
 use editor_core::{
-    check_prerequisites, AdapterCommand, Core, CoreConfig, MissingPrerequisite, SessionId, Tools, TranscriptDelta,
-    WorkspaceInfo,
+    check_prerequisites, AdapterCommand, Core, CoreConfig, MissingPrerequisite, PermissionMode, SessionId, Tools,
+    TranscriptDelta, WorkspaceInfo,
 };
 use tauri::ipc::Channel;
 use tauri::{Emitter, Manager, State};
@@ -51,6 +51,16 @@ async fn send_prompt(core: State<'_, Core>, session_id: SessionId, text: String)
     core.send_prompt(session_id, &text).await.map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn answer_permission(core: State<'_, Core>, session_id: SessionId, option_id: String) -> CommandResult<()> {
+    core.answer_permission(session_id, &option_id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn set_permission_mode(core: State<'_, Core>, session_id: SessionId, mode: PermissionMode) -> CommandResult<()> {
+    core.set_permission_mode(session_id, mode).await.map_err(|e| e.to_string())
+}
+
 /// Streams a session's transcript to the visible Tab over a dedicated channel.
 /// Async so it runs on Tauri's runtime: the core spawns the streaming task there.
 #[tauri::command]
@@ -90,6 +100,8 @@ fn main() {
             open_workspace,
             new_session,
             send_prompt,
+            answer_permission,
+            set_permission_mode,
             watch_session
         ])
         .run(tauri::generate_context!())

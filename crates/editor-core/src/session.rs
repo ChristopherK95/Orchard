@@ -8,16 +8,42 @@ use serde::Serialize;
 #[serde(transparent)]
 pub struct SessionId(pub u64);
 
-/// The Agent session states this slice supports. Needs you and Suspended arrive in later tickets.
+/// The Agent session states this slice supports. Suspended arrives in a later ticket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionState {
     /// The Agent is mid-turn.
     Working,
+    /// The Agent is blocked on the user: a permission prompt is waiting.
+    NeedsYou,
     /// The turn has finished and the Agent is waiting for the next prompt.
     Idle,
     /// The Agent's process ended without being Suspended (crash, or it quit).
     Exited,
+}
+
+/// How much the Agent may do without asking, chosen per Tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PermissionMode {
+    AskForEdits,
+    AcceptEdits,
+    Plan,
+}
+
+impl PermissionMode {
+    /// The mode id `claude-agent-acp` uses.
+    pub(crate) fn acp_id(self) -> &'static str {
+        match self {
+            Self::AskForEdits => "default",
+            Self::AcceptEdits => "acceptEdits",
+            Self::Plan => "plan",
+        }
+    }
+
+    pub(crate) fn from_acp_id(id: &str) -> Option<Self> {
+        [Self::AskForEdits, Self::AcceptEdits, Self::Plan].into_iter().find(|m| m.acp_id() == id)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -27,6 +53,7 @@ pub struct SessionInfo {
     pub name: String,
     pub worktree: PathBuf,
     pub state: SessionState,
+    pub permission_mode: PermissionMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -36,6 +63,78 @@ pub enum TranscriptItem {
     Agent { text: String },
     /// Something the editor tells the user about the session (errors, declined requests).
     Notice { text: String },
+    /// A permission card: what the Agent wants to do, and the answer once given.
+    Permission { request: PermissionRequest, outcome: Option<PermissionOutcome> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRequest {
+    pub tool_call_id: String,
+    pub title: String,
+    /// ACP's tool kind: `edit`, `execute`, `read`, …
+    pub kind: Option<String>,
+    /// The file or command the tool acts on.
+    pub target: Option<String>,
+    /// For edits, the change the Agent wants to make, shown before approval.
+    pub diff: Option<Vec<DiffLine>>,
+    /// The choices the Agent offers, in its order and with its names.
+    pub options: Vec<PermissionOption>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionOption {
+    pub id: String,
+    pub name: String,
+    pub kind: PermissionOptionKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PermissionOptionKind {
+    AllowOnce,
+    AllowAlways,
+    RejectOnce,
+    RejectAlways,
+}
+
+impl PermissionOptionKind {
+    pub(crate) fn from_acp(kind: &str) -> Option<Self> {
+        Some(match kind {
+            "allow_once" => Self::AllowOnce,
+            "allow_always" => Self::AllowAlways,
+            "reject_once" => Self::RejectOnce,
+            "reject_always" => Self::RejectAlways,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PermissionOutcome {
+    #[serde(rename_all = "camelCase")]
+    Selected { option_id: String },
+    /// The turn ended (or the Agent went away) before an answer was given.
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffLine {
+    pub kind: DiffLineKind,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DiffLineKind {
+    /// An `@@ -a,b +c,d @@` hunk header.
+    Hunk,
+    Context,
+    Added,
+    Removed,
 }
 
 /// A change to a session's transcript, as streamed to the visible Tab.
@@ -47,6 +146,8 @@ pub enum TranscriptDelta {
     ItemAdded { index: usize, item: TranscriptItem },
     /// Streamed text appended to the Agent message at `index`.
     TextAppended { index: usize, text: String },
+    /// The item at `index` changed (e.g. a permission card got its answer).
+    ItemUpdated { index: usize, item: TranscriptItem },
 }
 
 /// A session's transcript, producing the delta for every change it applies.
@@ -93,5 +194,13 @@ impl Transcript {
         let delta = self.push(TranscriptItem::Agent { text: text.to_owned() });
         self.open_agent_message = Some(OpenAgentMessage { message_id });
         delta
+    }
+
+    /// Records the answer on the permission card at `index`.
+    pub(crate) fn resolve_permission(&mut self, index: usize, answer: PermissionOutcome) -> TranscriptDelta {
+        if let TranscriptItem::Permission { outcome, .. } = &mut self.items[index] {
+            *outcome = Some(answer);
+        }
+        TranscriptDelta::ItemUpdated { index, item: self.items[index].clone() }
     }
 }
