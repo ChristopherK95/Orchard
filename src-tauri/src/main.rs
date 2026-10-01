@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use editor_core::{
     check_prerequisites, AdapterCommand, Core, CoreConfig, MissingPrerequisite, PermissionMode,
-    SessionId, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo,
+    SessionId, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo, WorktreeInfo,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -58,6 +58,25 @@ async fn open_workspace(core: State<'_, Core>, path: String) -> CommandResult<Wo
 #[tauri::command]
 async fn new_session(core: State<'_, Core>) -> CommandResult<SessionId> {
     core.new_session().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn new_session_in(core: State<'_, Core>, worktree: String) -> CommandResult<SessionId> {
+    core.new_session_in(worktree.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn worktrees(core: State<'_, Core>) -> Vec<WorktreeInfo> {
+    core.worktrees()
+}
+
+/// Called when the window regains focus, in case Worktrees changed while the editor was away.
+#[tauri::command]
+async fn refresh_worktrees(core: State<'_, Core>) -> CommandResult<()> {
+    core.refresh_worktrees().await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -172,6 +191,9 @@ fn main() {
             default_workspace_path,
             open_workspace,
             new_session,
+            new_session_in,
+            worktrees,
+            refresh_worktrees,
             send_prompt,
             answer_permission,
             set_permission_mode,

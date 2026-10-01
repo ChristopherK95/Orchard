@@ -35,10 +35,25 @@ input, textarea { background: var(--bg3); border: 1px solid var(--line); border-
 
 .workspace { height: 100%; display: flex; flex-direction: column; }
 .titlebar { display: flex; gap: 12px; align-items: center; padding: 8px 14px; background: var(--bg2); border-bottom: 1px solid var(--line); }
-.tabs { display: flex; gap: 2px; padding: 6px 8px 0; background: var(--bg2); border-bottom: 1px solid var(--line); }
+/* Worktree row (A1): Worktrees on top; the active one is raised and joins the session row below. */
+.worktree-row { display: flex; gap: 4px; padding: 6px 8px 0; background: #111318; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.worktree-tab { display: flex; align-items: center; gap: 7px; padding: 6px 14px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; background: transparent; color: var(--fg2); max-width: 320px; }
+.worktree-tab:hover { background: var(--bg2); }
+.worktree-tab.on { background: var(--bg2); color: var(--fg); border-color: var(--line); box-shadow: inset 0 3px var(--c); }
+.worktree-tab.dimmed:not(.on) { opacity: 0.6; }
+.branch-glyph { color: var(--c); font-weight: 700; }
+.agent-glyph { color: var(--fg2); font-size: 11px; }
+.mini-dots { display: inline-flex; gap: 3px; }
+.dot.mini { width: 6px; height: 6px; }
+.badge.needs { background: var(--needs-you); }
+.tabs { display: flex; gap: 2px; padding: 6px 8px 0; background: var(--bg2); border-bottom: 1px solid var(--line); box-shadow: inset 3px 0 var(--c, transparent); }
+.context-bar { display: flex; align-items: center; gap: 8px; padding: 5px 14px; font-size: 12px; background: color-mix(in srgb, var(--c) 8%, var(--bg)); border-bottom: 1px solid var(--line); box-shadow: inset 3px 0 var(--c); white-space: nowrap; overflow: hidden; }
+.context-bar .path { overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
+.context-bar .sep { color: var(--fg2); font-size: 15px; }
+.empty-worktree { flex: 1; flex-direction: column; gap: 8px; height: auto; }
 .tab { display: flex; gap: 8px; align-items: center; padding: 6px 12px; border: 0; border-radius: 7px 7px 0 0; background: var(--bg3); }
 .tab:hover { background: var(--bg4); }
-.tab.active { background: var(--bg); box-shadow: inset 0 2px var(--accent); cursor: default; }
+.tab.active { background: var(--bg); box-shadow: inset 0 2px var(--c, var(--accent)); cursor: default; }
 .badge { background: var(--accent); color: #0d1117; font-size: 10.5px; font-weight: 700; border-radius: 8px; padding: 0 6px; }
 button.ghost { background: transparent; border-color: transparent; color: var(--fg2); }
 button.ghost:hover { background: var(--bg3); color: var(--fg); }

@@ -17,6 +17,7 @@ use crate::session::{
     PermissionMode, PermissionOutcome, SessionId, SessionInfo, SessionState, Transcript,
     TranscriptDelta, TranscriptItem, TranscriptPage,
 };
+use crate::worktrees::{self, Discovery, WorktreeInfo};
 
 /// How long streamed transcript changes are gathered before being flushed to the visible Tab.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(16);
@@ -31,6 +32,8 @@ pub enum CoreError {
     NoWorkspace,
     #[error("`{0}` is not inside a git repository")]
     NotARepository(PathBuf),
+    #[error("`{0}` is not a Worktree of this Workspace")]
+    UnknownWorktree(PathBuf),
     #[error("no such Agent session")]
     UnknownSession,
     #[error("the Agent session is still working on the previous prompt")]
@@ -75,6 +78,10 @@ pub enum CoreEvent {
         session_id: SessionId,
         unread: usize,
     },
+    /// The Worktree list or a Worktree's branch/status changed.
+    WorktreesChanged {
+        worktrees: Vec<WorktreeInfo>,
+    },
 }
 
 /// Batches of transcript changes for one session, flushed about once per frame.
@@ -101,11 +108,14 @@ struct Inner {
     adapter: tokio::sync::Mutex<Option<Arc<Connection>>>,
     /// The session whose Tab is visible, and the switch that ends its stream when another is shown.
     visible_tab: Mutex<Option<(Arc<Session>, oneshot::Sender<()>)>>,
+    /// Watches for Worktrees added or removed outside the editor.
+    discovery: Mutex<Option<Arc<Discovery>>>,
 }
 
 #[derive(Default)]
 struct State {
     workspace: Option<WorkspaceInfo>,
+    worktrees: Vec<WorktreeInfo>,
     sessions: HashMap<SessionId, Arc<Session>>,
     by_acp_id: HashMap<String, SessionId>,
     next_session: u64,
@@ -174,6 +184,7 @@ impl Core {
                 state: Mutex::default(),
                 adapter: tokio::sync::Mutex::new(None),
                 visible_tab: Mutex::new(None),
+                discovery: Mutex::new(None),
             }),
         }
     }
@@ -182,26 +193,67 @@ impl Core {
         self.inner.events.subscribe()
     }
 
-    /// Opens the git repository containing `path` as the Workspace.
+    /// Opens the git repository containing `path` as the Workspace, lists its Worktrees and starts
+    /// watching for Worktrees added or removed elsewhere.
     pub async fn open_workspace(&self, path: &Path) -> Result<WorkspaceInfo, CoreError> {
-        let root = git::toplevel(path)
+        let toplevel = git::toplevel(path)
             .await
             .ok_or_else(|| CoreError::NotARepository(path.to_owned()))?;
-        let root = std::fs::canonicalize(&root)
-            .map(strip_verbatim)
-            .unwrap_or(root);
+        // The main checkout, even if `path` is inside another Worktree.
+        let root = match git::worktree_list(&toplevel)
+            .await
+            .and_then(|w| w.into_iter().next())
+        {
+            Some(main) => worktrees::normalize(main.path),
+            None => worktrees::normalize(toplevel),
+        };
         let name = root
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let workspace = WorkspaceInfo { root, name };
-        self.inner.state.lock().expect("state lock").workspace = Some(workspace.clone());
+        let listed = worktrees::list(&workspace.root).await;
+        {
+            let mut state = self.inner.state.lock().expect("state lock");
+            state.workspace = Some(workspace.clone());
+            state.worktrees = listed;
+        }
+        self.inner.watch_worktrees(&workspace.root).await;
         Ok(workspace)
+    }
+
+    /// The Workspace's Worktrees, main checkout first.
+    pub fn worktrees(&self) -> Vec<WorktreeInfo> {
+        self.inner
+            .state
+            .lock()
+            .expect("state lock")
+            .worktrees
+            .clone()
+    }
+
+    /// Re-lists the Worktrees and their status (e.g. when the window regains focus), emitting
+    /// `WorktreesChanged` if anything differs.
+    pub async fn refresh_worktrees(&self) {
+        self.inner.refresh_worktrees().await;
     }
 
     /// Starts a new Agent session in the Workspace's main checkout.
     pub async fn new_session(&self) -> Result<SessionId, CoreError> {
         let root = self.workspace()?.root;
+        self.new_session_in(&root).await
+    }
+
+    /// Starts a new Agent session in one of the Workspace's Worktrees.
+    pub async fn new_session_in(&self, worktree: &Path) -> Result<SessionId, CoreError> {
+        self.workspace()?;
+        let wanted = worktrees::normalize(worktree.to_owned());
+        let root = self
+            .worktrees()
+            .into_iter()
+            .map(|w| w.path)
+            .find(|path| *path == wanted)
+            .ok_or_else(|| CoreError::UnknownWorktree(worktree.to_owned()))?;
         let connection = self.adapter().await?;
         let created = connection
             .request("session/new", json!({ "cwd": root, "mcpServers": [] }))
@@ -270,8 +322,12 @@ impl Core {
 
         let params =
             json!({ "sessionId": session.acp_id, "prompt": [{ "type": "text", "text": text }] });
+        let inner = self.inner.clone();
         tokio::spawn(async move {
             let result = session.connection.request("session/prompt", params).await;
+            // The Agent may have committed or changed files: refresh ahead/changed counts.
+            let refresh = inner.clone();
+            tokio::spawn(async move { refresh.refresh_worktrees().await });
             session.update(|control| {
                 // A question still open when the turn ends will never be answered.
                 session.cancel_questions(control);
@@ -474,6 +530,53 @@ impl Core {
 }
 
 impl Inner {
+    async fn refresh_worktrees(&self) {
+        let Some(root) = self
+            .state
+            .lock()
+            .expect("state lock")
+            .workspace
+            .as_ref()
+            .map(|w| w.root.clone())
+        else {
+            return;
+        };
+        let listed = worktrees::list(&root).await;
+        let mut state = self.state.lock().expect("state lock");
+        if state.worktrees != listed {
+            state.worktrees = listed.clone();
+            let _ = self
+                .events
+                .send(CoreEvent::WorktreesChanged { worktrees: listed });
+        }
+    }
+
+    /// Re-lists the Worktrees whenever the repository's `worktrees/` folder changes (debounced, so
+    /// one `git worktree add` triggers one refresh).
+    async fn watch_worktrees(self: &Arc<Self>, root: &Path) {
+        let Some(common_dir) = git::common_dir(root).await else {
+            return;
+        };
+        let Some((discovery, mut changes)) = Discovery::start(&common_dir) else {
+            return;
+        };
+        let weak = Arc::downgrade(self);
+        let discovery = Arc::new(discovery);
+        *self.discovery.lock().expect("discovery lock") = Some(discovery.clone());
+        let watching = Arc::downgrade(&discovery);
+        tokio::spawn(async move {
+            while changes.recv().await.is_some() {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                while changes.try_recv().is_ok() {}
+                let (Some(inner), Some(discovery)) = (weak.upgrade(), watching.upgrade()) else {
+                    return; // the core, or this Workspace's watch, is gone
+                };
+                discovery.watch_worktrees_dir();
+                inner.refresh_worktrees().await;
+            }
+        });
+    }
+
     /// Handles what the adapter sends us, in arrival order (see `acp`).
     fn handle(&self, incoming: Incoming) {
         match incoming {
@@ -693,13 +796,5 @@ impl Session {
             ),
             Err(broadcast::error::RecvError::Closed) => None,
         }
-    }
-}
-
-/// `canonicalize` on Windows yields `\\?\C:\...`; child processes and users expect `C:\...`.
-fn strip_verbatim(path: PathBuf) -> PathBuf {
-    match path.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
-        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
-        _ => path,
     }
 }

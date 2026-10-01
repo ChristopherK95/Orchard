@@ -21,6 +21,19 @@ export interface SessionInfo {
   unread: number;
 }
 
+export interface WorktreeInfo {
+  path: string;
+  /** The checked-out branch, or null when HEAD is detached. */
+  branch: string | null;
+  /** HEAD's short commit id. */
+  head: string;
+  isMain: boolean;
+  /** Commits ahead of / behind the upstream; null without an upstream. */
+  ahead: number | null;
+  behind: number | null;
+  changed: number;
+}
+
 export interface MissingPrerequisite {
   tool: string;
   found: string | null;
@@ -83,13 +96,17 @@ export type CoreEvent =
   | { kind: "sessionCreated"; session: SessionInfo }
   | { kind: "sessionStateChanged"; sessionId: SessionId; state: SessionState }
   | { kind: "permissionModeChanged"; sessionId: SessionId; mode: PermissionMode }
-  | { kind: "sessionUnreadChanged"; sessionId: SessionId; unread: number };
+  | { kind: "sessionUnreadChanged"; sessionId: SessionId; unread: number }
+  | { kind: "worktreesChanged"; worktrees: WorktreeInfo[] };
 
 export const core = {
   prerequisites: () => invoke<MissingPrerequisite[]>("prerequisites"),
   defaultWorkspacePath: () => invoke<string | null>("default_workspace_path"),
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
   newSession: () => invoke<SessionId>("new_session"),
+  newSessionIn: (worktree: string) => invoke<SessionId>("new_session_in", { worktree }),
+  worktrees: () => invoke<WorktreeInfo[]>("worktrees"),
+  refreshWorktrees: () => invoke<void>("refresh_worktrees"),
   sendPrompt: (sessionId: SessionId, text: string) => invoke<void>("send_prompt", { sessionId, text }),
   answerPermission: (sessionId: SessionId, toolCallId: string, optionId: string) =>
     invoke<void>("answer_permission", { sessionId, toolCallId, optionId }),

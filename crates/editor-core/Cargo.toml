@@ -8,6 +8,8 @@ publish.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+# Watches .git/worktrees so Worktrees made in a terminal show up live.
+notify = "8"
 similar = "2"
 thiserror.workspace = true
 tokio.workspace = true

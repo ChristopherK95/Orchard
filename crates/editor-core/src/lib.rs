@@ -8,6 +8,7 @@ mod permissions;
 mod prerequisites;
 mod process;
 mod session;
+mod worktrees;
 
 pub use crate::acp::{AcpError, AdapterCommand, PROTOCOL_VERSION};
 pub use crate::core::{Core, CoreConfig, CoreError, CoreEvent, TranscriptStream, WorkspaceInfo};
@@ -17,3 +18,4 @@ pub use crate::session::{
     PermissionOutcome, PermissionRequest, SessionId, SessionInfo, SessionState, ToolCallStatus,
     TranscriptDelta, TranscriptItem, TranscriptPage, TRANSCRIPT_PAGE,
 };
+pub use crate::worktrees::WorktreeInfo;

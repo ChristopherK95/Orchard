@@ -14,30 +14,40 @@ use tokio::sync::broadcast;
 
 pub const TIMEOUT: Duration = Duration::from_secs(10);
 
-/// A temporary directory holding a fresh git repository with one commit.
+/// A temporary directory holding a fresh git repository (branch `main`) with one commit.
 pub fn git_repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("temp dir");
-    let git = |args: &[&str]| {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(dir.path())
-            .status()
-            .expect("run git");
-        assert!(status.success(), "git {args:?} failed");
-    };
-    git(&["init", "--quiet"]);
-    git(&[
-        "-c",
-        "user.name=Test",
-        "-c",
-        "user.email=test@example.com",
-        "commit",
-        "--quiet",
-        "--allow-empty",
-        "-m",
-        "init",
-    ]);
+    git(dir.path(), &["init", "--quiet", "-b", "main"]);
+    commit(dir.path(), "init");
     dir
+}
+
+/// Runs `git` in `dir`, panicking on failure.
+pub fn git(dir: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .status()
+        .expect("run git");
+    assert!(status.success(), "git {args:?} failed in {}", dir.display());
+}
+
+/// An empty commit in `dir`.
+pub fn commit(dir: &Path, message: &str) {
+    git(
+        dir,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            message,
+        ],
+    );
 }
 
 pub fn fake_agent_path() -> PathBuf {

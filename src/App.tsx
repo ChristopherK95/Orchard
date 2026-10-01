@@ -12,10 +12,12 @@ import {
   type TranscriptDelta,
   type TranscriptItem,
   type WorkspaceInfo,
+  type WorktreeInfo,
 } from "./core";
 import { type BenchDriver, runBenchmark } from "./benchmark";
 import { answerByKey } from "./PermissionCard";
 import { Transcript } from "./Transcript";
+import { ContextBar, worktreeColour, WorktreeRow } from "./Worktrees";
 import { notify, NOTIFY_WHEN_BACKGROUND_TURN_FINISHES, onNotificationClicked } from "./notify";
 
 const STATE_LABEL: Record<SessionState, string> = {
@@ -116,6 +118,14 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   const [start, setStart] = createSignal(0);
   const [error, setError] = createSignal("");
 
+  // Worktrees as the core reports them, the one whose sessions are shown, and the session last
+  // used in each (so switching back returns to it).
+  const [worktrees, setWorktrees] = createSignal<WorktreeInfo[]>([]);
+  const [activeWorktree, setActiveWorktree] = createSignal(props.workspace.root);
+  const lastSessionIn = new Map<string, SessionId>();
+  const sessionsIn = (path: string) => order().map((id) => sessions[id]).filter((s) => s.worktree === path);
+  const worktree = () => worktrees().find((w) => w.path === activeWorktree());
+
   // Each show() gets a token; batches from an earlier stream (even of the same session) are dropped.
   let currentShow = 0;
   const applyFor = (token: number) => (batch: TranscriptDelta[]) => {
@@ -141,6 +151,11 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
 
   const show = async (id: SessionId) => {
     const token = ++currentShow;
+    const path = sessions[id]?.worktree;
+    if (path) {
+      setActiveWorktree(path);
+      lastSessionIn.set(path, id);
+    }
     setActiveId(id);
     setItems([]);
     setStart(0);
@@ -151,10 +166,23 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     }
   };
 
+  /** Shows a Worktree: its last-used session, else its first, else an empty Tab row. */
+  const selectWorktree = (path: string) => {
+    const here = sessionsIn(path);
+    const last = lastSessionIn.get(path);
+    const id = here.some((s) => s.id === last) ? last : here[0]?.id;
+    if (id !== undefined) return void show(id);
+    ++currentShow; // nothing should stream into an empty Worktree's view
+    setActiveWorktree(path);
+    setActiveId(null);
+    setItems([]);
+  };
+
+  /** A new Agent session in the active Worktree. */
   const newSession = async (): Promise<SessionId | undefined> => {
     setError("");
     try {
-      const id = await core.newSession();
+      const id = await core.newSessionIn(activeWorktree());
       await show(id);
       return id;
     } catch (err) {
@@ -228,7 +256,11 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
 
   onMount(async () => {
     const unlisten = await core.onEvent((event) => {
-      if (event.kind === "sessionCreated") {
+      if (event.kind === "worktreesChanged") {
+        setWorktrees(event.worktrees);
+        // The active Worktree was removed: fall back to the main checkout.
+        if (!event.worktrees.some((w) => w.path === activeWorktree())) selectWorktree(props.workspace.root);
+      } else if (event.kind === "sessionCreated") {
         setSessions(event.session.id, event.session);
         setOrder((ids) => [...ids, event.session.id]);
       } else if (!sessions[event.sessionId]) return;
@@ -247,6 +279,11 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     };
     window.addEventListener("keydown", onKey);
     onCleanup(() => window.removeEventListener("keydown", onKey));
+    // Worktrees may have changed while the editor was in the background (the watcher covers the rest).
+    const onFocus = () => void core.refreshWorktrees();
+    window.addEventListener("focus", onFocus);
+    onCleanup(() => window.removeEventListener("focus", onFocus));
+    setWorktrees(await core.worktrees());
     const first = await newSession();
     if (first !== undefined && (await core.benchMode())) void runBenchmark(benchDriver, first).catch((err) => setError(`Benchmark failed: ${err}`));
   });
@@ -262,10 +299,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         <b>{props.workspace.name}</b>
         <span class="muted mono">{props.workspace.root}</span>
       </header>
-      <nav class="tabs">
-        <For each={order()}>
+      <WorktreeRow worktrees={worktrees()} active={activeWorktree()} sessionsIn={sessionsIn} onSelect={selectWorktree} />
+      <nav class="tabs" style={{ "--c": worktreeColour(activeWorktree()) }}>
+        <For each={sessionsIn(activeWorktree()).map((s) => s.id)}>
           {(id) => (
             <button class={`tab ${id === activeId() ? "active" : ""}`} onClick={() => id !== activeId() && void show(id)}>
+              <span class="agent-glyph">✦</span>
               <span class={`dot ${sessions[id].state}`} title={STATE_LABEL[sessions[id].state]} />
               {sessions[id].name}
               <Show when={id === activeId()} fallback={<Show when={sessions[id].unread}>{(n) => <span class="badge">{n()}</span>}</Show>}>
@@ -278,6 +317,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           ＋ session
         </button>
       </nav>
+      <ContextBar worktree={worktree()} session={session()} stateLabel={STATE_LABEL} />
       <Show when={sharing() > 1}>
         <p class="warning banner">
           {sharing()} Agent sessions share this Worktree, so they can edit the same files.
@@ -286,7 +326,18 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       <Show when={error()}>
         <p class="error banner">{error()}</p>
       </Show>
-      <Show when={session()} keyed>
+      <Show
+        when={session()}
+        keyed
+        fallback={
+          <div class="center muted empty-worktree">
+            <p>No Agent sessions in this Worktree yet.</p>
+            <button class="primary" onClick={() => void newSession()}>
+              ＋ session
+            </button>
+          </div>
+        }
+      >
         {(s) => (
           <>
             <Transcript sessionId={s.id} items={items} start={start()} onLoadEarlier={loadEarlier} onError={setError} />
