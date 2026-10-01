@@ -4,9 +4,9 @@
 
 **Blocked by:** 06 (Worktree row).
 
-**Status:** ready-for-agent
+**Status:** done (verified in the real app on Windows 11, 2026-10-01). Note: the prefilled name is agent/task-N; Worktree setup between creation and the first session comes with ticket 08.
 
-- [ ] Enter with defaults fetches, creates branch `agent/<slug>` from `origin/<default>` in a folder next to the repo, and opens a session Tab there.
-- [ ] A different base or an existing branch can be chosen.
-- [ ] Choosing a branch already checked out elsewhere is refused with a clear message.
-- [ ] Core tests with a temp repo and bare origin: the created Worktree has the expected path, branch and base.
+- [x] Enter with defaults fetches, creates branch `agent/<slug>` from `origin/<default>` in a folder next to the repo, and opens a session Tab there.
+- [x] A different base or an existing branch can be chosen.
+- [x] Choosing a branch already checked out elsewhere is refused with a clear message.
+- [x] Core tests with a temp repo and bare origin: the created Worktree has the expected path, branch and base.
