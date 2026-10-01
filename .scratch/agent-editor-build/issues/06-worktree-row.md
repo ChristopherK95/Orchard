@@ -4,12 +4,12 @@
 
 **Blocked by:** 04 (Multiple sessions and Tab states).
 
-**Status:** ready-for-agent
+**Status:** done (verified in the real app on Windows 11, 2026-10-01: live add/remove, last-used session per Worktree, context bar, a removed Worktree with a running session stays reachable)
 
-- [ ] Every Worktree from `git worktree list` appears; the main checkout comes first, and Worktrees without sessions are dimmed with "＋ session".
-- [ ] A Worktree added or removed from a terminal appears or disappears without a restart (via watching `.git/worktrees/`, and on window focus).
-- [ ] Selecting a Worktree restores its last-used session.
-- [ ] The context bar reflects the active Worktree and session.
-- [ ] Background Worktrees with Needs-you sessions show a badge.
-- [ ] Git calls use machine-readable output, with `GIT_OPTIONAL_LOCKS=0` for background calls and `GIT_TERMINAL_PROMPT=0` for all calls.
-- [ ] Core tests with real `git` in temporary repos: add a worktree via the CLI → a Worktree-list event is emitted.
+- [x] Every Worktree from `git worktree list` appears; the main checkout comes first, and Worktrees without sessions are dimmed with "＋ session".
+- [x] A Worktree added or removed from a terminal appears or disappears without a restart (via watching `.git/worktrees/`, and on window focus).
+- [x] Selecting a Worktree restores its last-used session.
+- [x] The context bar reflects the active Worktree and session.
+- [x] Background Worktrees with Needs-you sessions show a badge.
+- [x] Git calls use machine-readable output, with `GIT_OPTIONAL_LOCKS=0` for background calls and `GIT_TERMINAL_PROMPT=0` for all calls.
+- [x] Core tests with real `git` in temporary repos: add a worktree via the CLI → a Worktree-list event is emitted.
