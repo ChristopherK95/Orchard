@@ -4,14 +4,14 @@
 
 **Blocked by:** 07 (Create a Worktree + session).
 
-**Status:** ready-for-agent
+**Status:** done (Windows; Arch pending)
 
-- [ ] Settings load at startup and changes apply without a restart. Invalid TOML shows an error and keeps the last good settings.
-- [ ] A notifications setting switches on the optional "background turn finished" notification (ticket 04 built it, off by default).
-- [ ] The repo section is matched by `origin` URL, falling back to the main checkout path.
-- [ ] Setup commands run in order in the new Worktree and stop at the first failure.
-- [ ] Output streams into the Tab; Retry reruns from the failed command; Start anyway starts the session.
-- [ ] The per-OS override replaces the shared list on that OS.
+- [x] Settings load at startup and changes apply without a restart. Invalid TOML shows an error and keeps the last good settings.
+- [x] A notifications setting switches on the optional "background turn finished" notification (ticket 04 built it, off by default).
+- [x] The repo section is matched by `origin` URL, falling back to the main checkout path.
+- [x] Setup commands run in order in the new Worktree and stop at the first failure.
+- [x] Output streams into the Tab; Retry reruns from the failed command; Start anyway starts the session.
+- [x] The per-OS override replaces the shared list on that OS.
 - [ ] Core tests: a succeeding and a failing setup list against a temp repo on both OSes. (Windows passes; Arch pending.)
 
 Notes: "Open repo settings" opens the file in the OS's app for `.toml` (or shows it in its folder) until the Manual editor (ticket 14) can open it. Unknown keys are errors, so typos show up.
