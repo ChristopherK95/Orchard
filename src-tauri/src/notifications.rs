@@ -16,7 +16,9 @@ pub fn notify(app: AppHandle, session_id: SessionId, title: String, body: String
         notification.summary(&title).body(&body);
         #[cfg(target_os = "linux")]
         notification.action("default", "Open");
-        let Ok(handle) = notification.show() else { return };
+        let Ok(handle) = notification.show() else {
+            return;
+        };
         let _ = handle.wait_for_response(|response: &NotificationResponse| {
             let clicked = match response {
                 NotificationResponse::Default => true,

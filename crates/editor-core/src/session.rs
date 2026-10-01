@@ -91,6 +91,37 @@ pub enum TranscriptItem {
         request: PermissionRequest,
         outcome: Option<PermissionOutcome>,
     },
+    /// A compact row for a tool the Agent ran (Read, Edit, Bash, …), updated as it progresses.
+    #[serde(rename_all = "camelCase")]
+    ToolCall {
+        tool_call_id: String,
+        title: String,
+        /// ACP's tool kind: `read`, `edit`, `execute`, … (not `kind`: that's the item tag).
+        tool_kind: Option<String>,
+        /// The file or command the tool acts on.
+        target: Option<String>,
+        status: ToolCallStatus,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolCallStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
+impl ToolCallStatus {
+    pub(crate) fn from_acp(status: &str) -> Self {
+        match status {
+            "in_progress" => Self::InProgress,
+            "completed" => Self::Completed,
+            "failed" => Self::Failed,
+            _ => Self::Pending,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -268,6 +299,12 @@ impl Transcript {
         });
         self.open_agent_message = Some(OpenAgentMessage { message_id });
         delta
+    }
+
+    /// Replaces the item at `index` (e.g. a tool call row whose status changed).
+    pub(crate) fn replace(&mut self, index: usize, item: TranscriptItem) -> TranscriptDelta {
+        self.items[index] = item.clone();
+        TranscriptDelta::ItemUpdated { index, item }
     }
 
     /// Records the answer on the permission card at `index`.

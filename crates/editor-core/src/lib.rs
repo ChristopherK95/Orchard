@@ -14,6 +14,6 @@ pub use crate::core::{Core, CoreConfig, CoreError, CoreEvent, TranscriptStream, 
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};
 pub use crate::session::{
     DiffLine, DiffLineKind, PermissionMode, PermissionOption, PermissionOptionKind,
-    PermissionOutcome, PermissionRequest, SessionId, SessionInfo, SessionState, TranscriptDelta,
-    TranscriptItem, TranscriptPage, TRANSCRIPT_PAGE,
+    PermissionOutcome, PermissionRequest, SessionId, SessionInfo, SessionState, ToolCallStatus,
+    TranscriptDelta, TranscriptItem, TranscriptPage, TRANSCRIPT_PAGE,
 };

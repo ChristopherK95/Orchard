@@ -190,7 +190,7 @@ impl Rebuilt {
             TranscriptDelta::TextAppended { index, text } => {
                 match &mut self.items[index - self.start] {
                     TranscriptItem::Agent { text: t } => t.push_str(&text),
-                    other => panic!("text appended to non-agent item {other:?}"),
+                    other => panic!("text appended to non-Agent item {other:?}"),
                 }
             }
         }

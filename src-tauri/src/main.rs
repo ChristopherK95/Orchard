@@ -104,8 +104,14 @@ fn bench_mode() -> bool {
 #[tauri::command]
 fn bench_mark(phase: String) -> CommandResult<()> {
     use std::io::Write;
-    let Some(path) = std::env::var_os("AGENT_EDITOR_BENCH") else { return Ok(()) };
-    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(|e| e.to_string())?;
+    let Some(path) = std::env::var_os("AGENT_EDITOR_BENCH") else {
+        return Ok(());
+    };
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| e.to_string())?;
     writeln!(file, "{phase}").map_err(|e| e.to_string())
 }
 

@@ -58,6 +58,9 @@ struct Turn {
     messages: Vec<String>,
     #[serde(default)]
     delay_ms: u64,
+    /// Tool calls announced (pending) and then updated to their final status, before anything else.
+    #[serde(default)]
+    tool_calls: Vec<ToolCallScript>,
     /// Ask for permission before sending `chunks`.
     permission: Option<Permission>,
     /// A second question asked alongside `permission`, before either is answered (parallel tool calls).
@@ -71,6 +74,19 @@ struct Turn {
     /// Exit the process (after sending `chunks`) instead of finishing the turn.
     #[serde(default)]
     exit: bool,
+}
+
+#[derive(Deserialize)]
+struct ToolCallScript {
+    title: String,
+    kind: String,
+    path: Option<String>,
+    #[serde(default = "completed")]
+    status: String,
+}
+
+fn completed() -> String {
+    "completed".into()
 }
 
 #[derive(Deserialize)]
@@ -179,6 +195,20 @@ impl Agent {
             ],
             ..Turn::default()
         });
+        for call in turn.tool_calls {
+            self.requests += 1;
+            let tool_call_id = format!("call-{}", self.requests);
+            let locations: Vec<Value> = call.path.iter().map(|p| json!({ "path": p })).collect();
+            notify_update(
+                &session_id,
+                json!({ "sessionUpdate": "tool_call", "toolCallId": tool_call_id, "title": call.title,
+                        "kind": call.kind, "status": "pending", "locations": locations }),
+            );
+            notify_update(
+                &session_id,
+                json!({ "sessionUpdate": "tool_call_update", "toolCallId": tool_call_id, "status": call.status }),
+            );
+        }
         let mut chunks = turn.chunks;
         let questions: Vec<Permission> = turn.permission.into_iter().chain(turn.also_ask).collect();
         if !questions.is_empty() {

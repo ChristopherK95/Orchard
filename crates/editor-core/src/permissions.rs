@@ -8,7 +8,7 @@ use similar::{ChangeTag, TextDiff};
 
 use crate::session::{
     DiffLine, DiffLineKind, PermissionOption, PermissionOptionKind, PermissionOutcome,
-    PermissionRequest,
+    PermissionRequest, ToolCallStatus, TranscriptItem,
 };
 
 /// Diffs longer than this are cut short on the card; the full change is still what gets applied.
@@ -25,16 +25,7 @@ pub(crate) fn request_from(
         .as_array()
         .map(|content| content.iter().filter(|c| c["type"] == "diff").collect())
         .unwrap_or_default();
-    let target = diffs
-        .first()
-        .and_then(|d| d["path"].as_str())
-        .or_else(|| tool_call["locations"][0]["path"].as_str())
-        .or_else(|| tool_call["rawInput"]["command"].as_str())
-        .or_else(|| tool_call["rawInput"]["file_path"].as_str())
-        .map(|target| match Path::new(target).strip_prefix(worktree) {
-            Ok(relative) => relative.display().to_string(),
-            Err(_) => target.to_owned(),
-        });
+    let target = target_of(tool_call, worktree);
     let diff = (!diffs.is_empty()).then(|| {
         diffs
             .iter()
@@ -71,6 +62,38 @@ pub(crate) fn request_from(
             })
             .collect(),
     }
+}
+
+/// The transcript row for a tool call as known so far.
+pub(crate) fn tool_call_row(tool_call: &Value, worktree: &Path) -> TranscriptItem {
+    TranscriptItem::ToolCall {
+        tool_call_id: tool_call["toolCallId"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+        title: tool_call["title"]
+            .as_str()
+            .unwrap_or("A tool call")
+            .to_owned(),
+        tool_kind: tool_call["kind"].as_str().map(str::to_owned),
+        target: target_of(tool_call, worktree),
+        status: ToolCallStatus::from_acp(tool_call["status"].as_str().unwrap_or("pending")),
+    }
+}
+
+/// The file or command a tool call acts on; paths inside `worktree` are shown relative to it.
+fn target_of(tool_call: &Value, worktree: &Path) -> Option<String> {
+    tool_call["content"]
+        .as_array()
+        .and_then(|content| content.iter().find(|c| c["type"] == "diff"))
+        .and_then(|d| d["path"].as_str())
+        .or_else(|| tool_call["locations"][0]["path"].as_str())
+        .or_else(|| tool_call["rawInput"]["command"].as_str())
+        .or_else(|| tool_call["rawInput"]["file_path"].as_str())
+        .map(|target| match Path::new(target).strip_prefix(worktree) {
+            Ok(relative) => relative.display().to_string(),
+            Err(_) => target.to_owned(),
+        })
 }
 
 /// The `RequestPermissionResponse` for an answer.

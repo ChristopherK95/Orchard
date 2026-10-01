@@ -122,8 +122,14 @@ struct Session {
     /// Whether this session's Tab is the visible one (and so isn't collecting unread items).
     visible: AtomicBool,
     /// Every tool call the Agent announced, merged with its updates, keyed by ACP tool call id.
-    tool_calls: Mutex<HashMap<String, Value>>,
+    tool_calls: Mutex<HashMap<String, KnownToolCall>>,
     control: Mutex<Control>,
+}
+
+/// A tool call as merged from the Agent's announcements, and its transcript row once added.
+struct KnownToolCall {
+    call: Value,
+    row: Option<usize>,
 }
 
 /// The facts a session's state is derived from, changed only under one lock (see `Session::update`),
@@ -568,7 +574,7 @@ impl Session {
     fn record(&self, change: impl FnOnce(&mut Transcript) -> TranscriptDelta) {
         let mut transcript = self.transcript.lock().expect("transcript lock");
         let delta = change(&mut transcript);
-        let unseen = matches!(&delta, TranscriptDelta::ItemAdded { item, .. } if !matches!(item, TranscriptItem::User { .. }))
+        let unseen = matches!(&delta, TranscriptDelta::ItemAdded { item, .. } if !matches!(item, TranscriptItem::User { .. } | TranscriptItem::ToolCall { .. }))
             && !self.visible.load(Ordering::SeqCst);
         let _ = self.deltas.send(delta);
         if unseen {
@@ -598,15 +604,28 @@ impl Session {
         }
     }
 
+    /// Merges a tool call (or its update) into what's known, and adds or updates its transcript row.
     fn note_tool_call(&self, update: &Value) {
         let Some(id) = update["toolCallId"].as_str() else {
             return;
         };
+        let worktree = self.info.lock().expect("info lock").worktree.clone();
         let mut tool_calls = self.tool_calls.lock().expect("tool calls lock");
-        permissions::merge_tool_call(
-            tool_calls.entry(id.to_owned()).or_insert_with(|| json!({})),
-            update,
-        );
+        let known = tool_calls
+            .entry(id.to_owned())
+            .or_insert_with(|| KnownToolCall {
+                call: json!({}),
+                row: None,
+            });
+        permissions::merge_tool_call(&mut known.call, update);
+        let row = permissions::tool_call_row(&known.call, &worktree);
+        match known.row {
+            Some(index) => self.record(|t| t.replace(index, row)),
+            None => self.record(|t| {
+                known.row = Some(t.items().len());
+                t.push(row)
+            }),
+        }
     }
 
     /// Puts a permission card in the transcript and holds the question until it's answered. The
@@ -619,7 +638,7 @@ impl Session {
                     .lock()
                     .expect("tool calls lock")
                     .get(id)
-                    .cloned()
+                    .map(|known| known.call.clone())
             })
             .unwrap_or_else(|| json!({}));
         permissions::merge_tool_call(&mut tool_call, &params["toolCall"]);
