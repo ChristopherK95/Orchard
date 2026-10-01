@@ -152,6 +152,7 @@ async fn show_session(
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let core = Core::new(CoreConfig {
                 adapter: adapter_command(),

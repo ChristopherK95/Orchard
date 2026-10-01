@@ -14,7 +14,8 @@ import {
   type WorkspaceInfo,
 } from "./core";
 import { type BenchDriver, runBenchmark } from "./benchmark";
-import { answerByKey, PermissionCard } from "./PermissionCard";
+import { answerByKey } from "./PermissionCard";
+import { Transcript } from "./Transcript";
 import { notify, NOTIFY_WHEN_BACKGROUND_TURN_FINISHES, onNotificationClicked } from "./notify";
 
 const STATE_LABEL: Record<SessionState, string> = {
@@ -285,45 +286,11 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       <Show when={session()} keyed>
         {(s) => (
           <>
-            <Transcript sessionId={s.id} items={items} hasEarlier={start() > 0} onLoadEarlier={loadEarlier} />
+            <Transcript sessionId={s.id} items={items} start={start()} hasEarlier={start() > 0} onLoadEarlier={loadEarlier} />
             <Composer session={s} />
           </>
         )}
       </Show>
-    </div>
-  );
-}
-
-function Transcript(props: {
-  sessionId: SessionId;
-  items: TranscriptItem[];
-  hasEarlier: boolean;
-  onLoadEarlier: () => void;
-}) {
-  let log!: HTMLDivElement;
-  // Keep the newest output in view while it streams (virtualisation arrives in ticket 02).
-  createEffect(() => {
-    const last = props.items[props.items.length - 1];
-    void (last && (last.kind === "permission" ? last.outcome : last.text));
-    void props.items.length;
-    requestAnimationFrame(() => (log.scrollTop = log.scrollHeight));
-  });
-  return (
-    <div class="transcript" ref={log}>
-      <Show when={props.hasEarlier}>
-        <button class="ghost load-earlier" onClick={() => props.onLoadEarlier()}>
-          Load earlier messages
-        </button>
-      </Show>
-      <For each={props.items}>
-        {(item) =>
-          item.kind === "permission" ? (
-            <PermissionCard sessionId={props.sessionId} request={item.request} outcome={item.outcome} />
-          ) : (
-            <div class={`msg ${item.kind}`}>{item.text}</div>
-          )
-        }
-      </For>
     </div>
   );
 }

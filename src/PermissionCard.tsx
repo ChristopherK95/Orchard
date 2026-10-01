@@ -9,6 +9,7 @@ import {
   type SessionId,
   type TranscriptItem,
 } from "./core";
+import { highlightCode, languageOfPath } from "./highlight";
 
 const DIFF_PREFIX = { hunk: "", context: " ", added: "+", removed: "−" } as const;
 
@@ -45,6 +46,7 @@ export function PermissionCard(props: {
   const [error, setError] = createSignal("");
   const [sending, setSending] = createSignal(false);
   const pending = () => props.outcome === null;
+  const language = () => languageOfPath(props.request.target);
   let card!: HTMLDivElement;
 
   const answer = async (option: PermissionOption) => {
@@ -85,12 +87,17 @@ export function PermissionCard(props: {
         {(diff) => (
           <pre class="diff">
             <For each={diff()}>
-              {(line) => (
-                <span class={`line ${line.kind}`}>
-                  {DIFF_PREFIX[line.kind]}
-                  {line.text}
-                </span>
-              )}
+              {(line) =>
+                line.kind === "hunk" ? (
+                  <span class="line hunk">{line.text}</span>
+                ) : (
+                  // Each line is highlighted on its own: cheap, and good enough for short snippets.
+                  <span class={`line ${line.kind}`}>
+                    {DIFF_PREFIX[line.kind]}
+                    <span innerHTML={highlightCode(line.text, language())} />
+                  </span>
+                )
+              }
             </For>
           </pre>
         )}

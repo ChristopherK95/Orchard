@@ -44,7 +44,6 @@ button.ghost { background: transparent; border-color: transparent; color: var(--
 button.ghost:hover { background: var(--bg3); color: var(--fg); }
 .add-tab { align-self: center; margin-bottom: 4px; }
 .warning { color: var(--needs-you); }
-.load-earlier { align-self: center; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot.working { background: var(--working); animation: pulse 1.2s infinite; }
 .dot.idle { background: var(--idle); }
@@ -53,10 +52,59 @@ button.ghost:hover { background: var(--bg3); color: var(--fg); }
 @keyframes pulse { 50% { opacity: 0.35; } }
 .banner { margin: 0; padding: 8px 14px; border-bottom: 1px solid var(--line); }
 
-.transcript { flex: 1; overflow: auto; padding: 18px 22px; display: flex; flex-direction: column; gap: 12px; }
-.msg { white-space: pre-wrap; max-width: 90%; }
+/* Virtualised transcript: only on-screen rows exist; each is absolutely positioned. */
+.transcript { flex: 1; overflow: auto; position: relative; }
+.transcript-inner { position: relative; width: 100%; }
+.row { position: absolute; top: 0; left: 0; width: 100%; padding: 6px 22px; display: flex; flex-direction: column; }
+.msg { max-width: 90%; }
+.msg.user, .msg.notice { white-space: pre-wrap; }
 .msg.user { align-self: flex-end; max-width: 75%; background: var(--bg4); padding: 8px 12px; border-radius: 10px 10px 2px 10px; }
 .msg.notice { color: var(--fg2); font-size: 12.5px; border-left: 2px solid var(--line); padding-left: 10px; }
+
+/* Markdown in Agent messages */
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown p, .markdown ul, .markdown ol { margin: 0 0 8px; }
+.markdown ul, .markdown ol { padding-left: 22px; }
+.markdown code { font: 12.5px var(--mono); background: var(--bg3); padding: 1px 5px; border-radius: 4px; }
+.markdown a { color: var(--accent); }
+.markdown blockquote { margin: 0 0 8px; padding-left: 12px; border-left: 2px solid var(--line); color: var(--fg2); }
+.markdown table { border-collapse: collapse; margin: 0 0 8px; }
+.markdown th, .markdown td { border: 1px solid var(--line); padding: 3px 8px; }
+
+/* Static code blocks */
+.cb { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #111318; margin: 4px 0 10px; }
+.cb-head { display: flex; align-items: center; gap: 8px; padding: 2px 4px 2px 12px; background: var(--bg2); border-bottom: 1px solid var(--line); font: 11.5px var(--mono); color: var(--fg2); }
+.cb-head button { font: 11.5px system-ui, sans-serif; padding: 2px 8px; }
+.cb pre { margin: 0; overflow-x: auto; font: 12.5px/1.6 var(--mono); tab-size: 4; }
+.cb pre code { background: none; padding: 8px 0; display: block; counter-reset: ln; }
+.cb .l { display: block; padding-right: 14px; white-space: pre; }
+.cb .l::before { counter-increment: ln; content: counter(ln); display: inline-block; width: 2.6em; margin-right: 14px; text-align: right; color: #6b7280; user-select: none; }
+
+/* Tool call rows */
+.tool { display: flex; align-items: center; gap: 8px; font: 12px var(--mono); color: var(--fg2); border-left: 2px solid var(--line); padding: 2px 10px; max-width: 90%; }
+.tool b { color: var(--fg); font-weight: 500; }
+.tool-icon { font-size: 11px; }
+.tool-status { font-size: 11px; }
+.tool.inProgress .tool-status, .tool.pending .tool-status { color: var(--working); }
+.tool.failed { border-left-color: var(--exited); }
+.tool.failed .tool-status { color: var(--exited); }
+
+/* Lezer token colours (classHighlighter emits tok-* classes) */
+.tok-keyword, .tok-modifier, .tok-controlKeyword, .tok-operatorKeyword { color: #c49cf0; }
+.tok-string, .tok-string2, .tok-character, .tok-inserted { color: #a5d6a7; }
+.tok-number, .tok-bool, .tok-atom, .tok-null { color: #f0a35e; }
+.tok-comment, .tok-lineComment, .tok-blockComment { color: #6b7280; font-style: italic; }
+.tok-typeName, .tok-className, .tok-namespace { color: #e5c07b; }
+.tok-definition { color: #7aa2f7; }
+.tok-propertyName, .tok-attributeName { color: #6cc5d9; }
+.tok-macroName, .tok-meta, .tok-tagName { color: #ef8f9a; }
+.tok-operator, .tok-punctuation { color: #9aa1ad; }
+.tok-heading { color: #7aa2f7; font-weight: 600; }
+.tok-emphasis { font-style: italic; }
+.tok-strong { font-weight: 700; }
+.tok-link, .tok-url { color: #6cc5d9; }
+.tok-invalid, .tok-deleted { color: #ef6b73; }
 
 .grow { flex: 1; }
 kbd { font: 11px var(--mono); background: var(--bg4); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; }

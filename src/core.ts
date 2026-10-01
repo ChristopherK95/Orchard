@@ -55,7 +55,16 @@ export type TranscriptItem =
   | { kind: "user"; text: string }
   | { kind: "agent"; text: string }
   | { kind: "notice"; text: string }
-  | { kind: "permission"; request: PermissionRequest; outcome: PermissionOutcome | null };
+  | { kind: "permission"; request: PermissionRequest; outcome: PermissionOutcome | null }
+  | {
+      kind: "toolCall";
+      toolCallId: string;
+      title: string;
+      /** ACP's tool kind: read, edit, execute, … */
+      toolKind: string | null;
+      target: string | null;
+      status: "pending" | "inProgress" | "completed" | "failed";
+    };
 
 /** A run of transcript items starting at absolute index `start`. */
 export interface TranscriptPage {
