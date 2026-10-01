@@ -9,7 +9,9 @@ use editor_core::{
     SessionId, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo,
 };
 use tauri::ipc::Channel;
-use tauri::{Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+mod notifications;
 
 /// The pinned ACP adapter installed by `pnpm install` (see the root `package.json`).
 /// `AGENT_EDITOR_ACP_ADAPTER` swaps in another executable, e.g. the fake agent for demos.
@@ -92,6 +94,12 @@ async fn set_permission_mode(
         .map_err(|e| e.to_string())
 }
 
+/// Shows an OS notification about a session; clicking it opens that session's Tab.
+#[tauri::command]
+fn notify_session(app: AppHandle, session_id: SessionId, title: String, body: String) {
+    notifications::notify(app, session_id, title, body);
+}
+
 #[tauri::command]
 async fn transcript_page_before(
     core: State<'_, Core>,
@@ -123,7 +131,6 @@ async fn show_session(
 
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let core = Core::new(CoreConfig {
                 adapter: adapter_command(),
@@ -147,6 +154,7 @@ fn main() {
             answer_permission,
             set_permission_mode,
             transcript_page_before,
+            notify_session,
             show_session
         ])
         .run(tauri::generate_context!())

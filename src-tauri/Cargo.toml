@@ -12,4 +12,5 @@ tauri-build = { version = "2", features = [] }
 editor-core = { path = "../crates/editor-core" }
 serde.workspace = true
 tauri = { version = "2", features = [] }
-tauri-plugin-notification = "2"
+# Native notifications with click handling (the Tauri plugin can't report clicks on desktop).
+notify-rust = "4.18"

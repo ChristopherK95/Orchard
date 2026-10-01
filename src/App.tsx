@@ -14,7 +14,7 @@ import {
   type WorkspaceInfo,
 } from "./core";
 import { answerByKey, PermissionCard } from "./PermissionCard";
-import { notify, NOTIFY_WHEN_BACKGROUND_TURN_FINISHES } from "./notify";
+import { notify, NOTIFY_WHEN_BACKGROUND_TURN_FINISHES, onNotificationClicked } from "./notify";
 
 const STATE_LABEL: Record<SessionState, string> = {
   working: "Working",
@@ -175,9 +175,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     setSessions(id, "state", state);
     const unseen = id !== activeId() || !document.hasFocus();
     if (!unseen) return;
-    if (state === "needsYou") void notify(`${name} needs you`, "The Agent is waiting for your answer.");
+    if (state === "needsYou") void notify(id, `${name} needs you`, "The Agent is waiting for your answer.");
     else if (NOTIFY_WHEN_BACKGROUND_TURN_FINISHES && previous === "working" && state === "idle")
-      void notify(`${name} finished`, "The Agent's turn is done.");
+      void notify(id, `${name} finished`, "The Agent's turn is done.");
   };
 
   onMount(async () => {
@@ -191,6 +191,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       else setSessions(event.sessionId, "unread", event.unread);
     });
     onCleanup(unlisten);
+    // Clicking a notification opens the session it was about.
+    const unlistenClicks = await onNotificationClicked((id) => sessions[id] && id !== activeId() && void show(id));
+    onCleanup(unlistenClicks);
     // Y/N answer the oldest open permission card anywhere in the Tab (outside text fields).
     const onKey = (e: KeyboardEvent) => {
       const s = session();
