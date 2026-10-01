@@ -3,6 +3,7 @@
 
 mod acp;
 mod core;
+mod create_worktree;
 mod git;
 mod permissions;
 mod prerequisites;
@@ -12,6 +13,7 @@ mod worktrees;
 
 pub use crate::acp::{AcpError, AdapterCommand, PROTOCOL_VERSION};
 pub use crate::core::{Core, CoreConfig, CoreError, CoreEvent, TranscriptStream, WorkspaceInfo};
+pub use crate::create_worktree::{BranchInfo, NewWorktree};
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};
 pub use crate::session::{
     DiffLine, DiffLineKind, PermissionMode, PermissionOption, PermissionOptionKind,

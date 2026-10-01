@@ -19,10 +19,142 @@ fn git(cwd: &Path) -> Command {
 
 /// Runs git and returns stdout, or `None` if it failed.
 async fn output(cwd: &Path, args: &[&str]) -> Option<String> {
-    let out = git(cwd).args(args).output().await.ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    run(cwd, args).await.ok()
+}
+
+/// Runs git and returns stdout, or git's own error message (stderr) if it failed.
+async fn run(cwd: &Path, args: &[&str]) -> Result<String, String> {
+    let out = git(cwd)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| format!("could not run git: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+    }
+}
+
+/// Fetches `origin` (if the repository has one) so new Worktrees start from what's upstream now.
+pub(crate) async fn fetch_origin(repo: &Path) -> Result<(), String> {
+    let remotes = run(repo, &["remote"]).await?;
+    if !remotes.lines().any(|r| r.trim() == "origin") {
+        return Ok(());
+    }
+    run(repo, &["fetch", "--quiet", "--prune", "origin"])
+        .await
+        .map(|_| ())
+}
+
+/// `origin/<default branch>` if origin has one, else the main checkout's branch (or HEAD).
+pub(crate) async fn default_base(repo: &Path) -> String {
+    if let Some(origin_head) = output(
+        repo,
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
+    )
+    .await
+    {
+        return origin_head.trim().to_owned();
+    }
+    output(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .await
+        .map(|b| b.trim().to_owned())
+        .unwrap_or_else(|| "HEAD".into())
+}
+
+/// A local or remote-tracking branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ListedBranch {
+    /// `feat/x` for a local branch, `origin/feat/x` for a remote one.
+    pub(crate) name: String,
+    pub(crate) remote: bool,
+    /// The Worktree a local branch is checked out in, if any.
+    pub(crate) checked_out_in: Option<PathBuf>,
+}
+
+pub(crate) async fn branches(repo: &Path) -> Result<Vec<ListedBranch>, String> {
+    let out = run(
+        repo,
+        &[
+            "for-each-ref",
+            "--format=%(refname)%00%(worktreepath)",
+            "refs/heads",
+            "refs/remotes",
+        ],
+    )
+    .await?;
+    Ok(out
+        .lines()
+        .filter_map(|line| {
+            let (refname, worktree) = line.split_once('\0').unwrap_or((line, ""));
+            let checked_out_in = (!worktree.is_empty()).then(|| PathBuf::from(worktree));
+            if let Some(name) = refname.strip_prefix("refs/heads/") {
+                return Some(ListedBranch {
+                    name: name.to_owned(),
+                    remote: false,
+                    checked_out_in,
+                });
+            }
+            let name = refname.strip_prefix("refs/remotes/")?;
+            (!name.ends_with("/HEAD")).then(|| ListedBranch {
+                name: name.to_owned(),
+                remote: true,
+                checked_out_in: None,
+            })
+        })
+        .collect())
+}
+
+/// Adds a Worktree at `path` on a new branch `name` starting at `base`.
+pub(crate) async fn worktree_add_new_branch(
+    repo: &Path,
+    path: &Path,
+    name: &str,
+    base: &str,
+) -> Result<(), String> {
+    let path = path.to_string_lossy();
+    run(
+        repo,
+        &["worktree", "add", "--quiet", "-b", name, &path, base],
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Adds a Worktree at `path` on the existing local branch `name`.
+pub(crate) async fn worktree_add_existing(
+    repo: &Path,
+    path: &Path,
+    name: &str,
+) -> Result<(), String> {
+    let path = path.to_string_lossy();
+    run(repo, &["worktree", "add", "--quiet", &path, name])
+        .await
+        .map(|_| ())
+}
+
+/// Adds a Worktree at `path` on a new local branch `name` tracking the remote branch `remote`.
+pub(crate) async fn worktree_add_tracking(
+    repo: &Path,
+    path: &Path,
+    name: &str,
+    remote: &str,
+) -> Result<(), String> {
+    let path = path.to_string_lossy();
+    run(
+        repo,
+        &[
+            "worktree", "add", "--quiet", "--track", "-b", name, &path, remote,
+        ],
+    )
+    .await
+    .map(|_| ())
 }
 
 /// The root of the checkout containing `path`, or `None` if it isn't inside a git repository.

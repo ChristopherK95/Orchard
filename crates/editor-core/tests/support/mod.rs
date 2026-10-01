@@ -22,6 +22,70 @@ pub fn git_repo() -> tempfile::TempDir {
     dir
 }
 
+/// A repository cloned from a bare `origin` (both on branch `main`), in a temp folder of its own so
+/// Worktrees created next to the repo stay inside it: `<tmp>/origin.git`, `<tmp>/repo`.
+pub struct RepoWithOrigin {
+    dir: tempfile::TempDir,
+}
+
+impl RepoWithOrigin {
+    pub fn new() -> Self {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let origin = dir.path().join("origin.git");
+        git(
+            dir.path(),
+            &[
+                "init",
+                "--quiet",
+                "--bare",
+                "-b",
+                "main",
+                origin.to_str().unwrap(),
+            ],
+        );
+        let seed = dir.path().join("seed");
+        git(
+            dir.path(),
+            &["init", "--quiet", "-b", "main", seed.to_str().unwrap()],
+        );
+        git(&seed, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        commit(&seed, "init");
+        git(&seed, &["push", "--quiet", "origin", "main"]);
+        git(
+            dir.path(),
+            &["clone", "--quiet", origin.to_str().unwrap(), "repo"],
+        );
+        Self { dir }
+    }
+
+    pub fn repo(&self) -> PathBuf {
+        self.dir.path().join("repo")
+    }
+
+    pub fn root(&self) -> &Path {
+        self.dir.path()
+    }
+
+    /// Adds a commit to origin's `branch` (from another clone), returning its id.
+    pub fn push_to_origin(&self, branch: &str, message: &str) -> String {
+        let seed = self.dir.path().join("seed");
+        git(&seed, &["checkout", "--quiet", "-B", branch]);
+        commit(&seed, message);
+        git(&seed, &["push", "--quiet", "origin", branch]);
+        rev_parse(&seed, "HEAD")
+    }
+}
+
+pub fn rev_parse(dir: &Path, rev: &str) -> String {
+    let out = Command::new("git")
+        .args(["rev-parse", rev])
+        .current_dir(dir)
+        .output()
+        .expect("run git");
+    assert!(out.status.success(), "git rev-parse {rev} failed");
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
 /// Runs `git` in `dir`, panicking on failure.
 pub fn git(dir: &Path, args: &[&str]) {
     let status = Command::new("git")
