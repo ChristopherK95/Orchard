@@ -9,10 +9,6 @@ use editor_core::{Core, CoreError, CoreEvent, NewWorktree, SessionId, SetupStatu
 use support::*;
 use tokio::sync::broadcast;
 
-fn repo_settings(key: &str, body: &str) -> String {
-    format!("[repos.{}]\n{body}\n", toml_literal(key))
-}
-
 async fn new_worktree(core: &Core, name: &str) -> editor_core::CreatedWorktree {
     core.create_worktree(NewWorktree::NewBranch {
         name: name.into(),
@@ -92,17 +88,6 @@ async fn setup_runs_in_order_in_the_new_worktree_then_starts_its_first_session()
         output.contains("setup-says-hi"),
         "output captured: {output}"
     );
-}
-
-/// A setup command that prints `text`, then runs until `until` exists. Forward slashes, so the
-/// same text works in bash and PowerShell.
-fn print_then_wait(text: &str, until: &Path) -> String {
-    let slashes = |p: &Path| p.display().to_string().replace('\\', "/");
-    format!(
-        "{} --print {text} --until {}",
-        slashes(&fake_agent_path()),
-        slashes(until)
-    )
 }
 
 #[tokio::test(flavor = "multi_thread")]

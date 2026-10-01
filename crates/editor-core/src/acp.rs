@@ -167,6 +167,12 @@ impl Connection {
         rx.await.unwrap_or(Err(AcpError::Closed))
     }
 
+    /// Sends a notification (no reply comes).
+    pub(crate) fn notify(&self, method: &str, params: Value) -> Result<(), AcpError> {
+        let msg = json!({ "jsonrpc": "2.0", "method": method, "params": params });
+        self.out.send(msg.to_string()).map_err(|_| AcpError::Closed)
+    }
+
     pub(crate) fn is_closed(&self) -> bool {
         self.pending.lock().expect("pending lock").is_none()
     }

@@ -22,11 +22,14 @@
 //! echoes as a `[permission <optionId>]` chunk before sending `chunks`.
 //!
 //! Every received message is appended to the file named by `FAKE_ACP_LOG`, preceded by a
-//! `{"started": <pid>}` line, so tests can assert on what the core sent.
+//! `{"started": <pid>}` line, so tests can assert on what the core sent. A `session/close` is
+//! followed by `{"closedWhileCwdExists": <bool>}`: whether the session's folder was still there.
 //!
 //! It also answers `--print <text>` by printing `<text>` and exiting, so tests can stand it in for
 //! `git --version` / `node --version`. With `--until <file>` after that, it waits for `<file>` to exist
-//! before exiting (a setup command that's still running for as long as a test needs).
+//! before exiting (a setup command that's still running for as long as a test needs); with
+//! `--beat <file>` as well, it rewrites `<file>` with a counter while it waits (so a test can tell
+//! it's alive).
 
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
@@ -103,6 +106,8 @@ struct Agent {
     stdin: Lines<StdinLock<'static>>,
     sessions: u32,
     requests: u32,
+    /// Each session's working directory, by session id.
+    cwds: std::collections::HashMap<String, String>,
 }
 
 fn main() {
@@ -110,7 +115,16 @@ fn main() {
     if args.get(1).map(String::as_str) == Some("--print") {
         println!("{}", args.get(2).cloned().unwrap_or_default());
         if let (Some("--until"), Some(file)) = (args.get(3).map(String::as_str), args.get(4)) {
+            let beat = match (args.get(5).map(String::as_str), args.get(6)) {
+                (Some("--beat"), Some(beat)) => Some(beat),
+                _ => None,
+            };
+            let mut count = 0u64;
             while !std::path::Path::new(file).exists() {
+                if let Some(beat) = beat {
+                    count += 1;
+                    let _ = std::fs::write(beat, count.to_string());
+                }
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
@@ -140,6 +154,7 @@ fn main() {
         stdin: std::io::stdin().lines(),
         sessions: 0,
         requests: 0,
+        cwds: Default::default(),
     };
     agent.record(&json!({ "started": std::process::id() }));
     agent.run();
@@ -159,8 +174,11 @@ impl Agent {
                 }
                 "session/new" => {
                     self.sessions += 1;
+                    let session_id = format!("fake-{}", self.sessions);
+                    let cwd = params["cwd"].as_str().unwrap_or_default().to_owned();
+                    self.cwds.insert(session_id.clone(), cwd);
                     json!({
-                        "sessionId": format!("fake-{}", self.sessions),
+                        "sessionId": session_id,
                         "modes": {
                             "currentModeId": self.script.initial_mode,
                             "availableModes": [
@@ -173,6 +191,14 @@ impl Agent {
                     })
                 }
                 "session/set_mode" => json!({}),
+                "session/close" => {
+                    let cwd = params["sessionId"]
+                        .as_str()
+                        .and_then(|id| self.cwds.get(id));
+                    let exists = cwd.is_some_and(|cwd| std::path::Path::new(cwd).exists());
+                    self.record(&json!({ "closedWhileCwdExists": exists }));
+                    json!({})
+                }
                 "session/prompt" => self.prompt(&params),
                 _ => {
                     if let Some(id) = id {

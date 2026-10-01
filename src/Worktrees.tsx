@@ -85,6 +85,7 @@ export function ContextBar(props: {
   worktree: WorktreeTab | undefined;
   session: SessionInfo | undefined;
   stateLabel: Record<SessionState, string>;
+  onRemove: (path: string) => void;
 }) {
   return (
     <Show when={props.worktree}>
@@ -111,6 +112,11 @@ export function ContextBar(props: {
                 <span class="muted">{props.stateLabel[s().state]}</span>
               </>
             )}
+          </Show>
+          <Show when={!w().isMain && !w().removed}>
+            <button class="ghost remove" onClick={() => props.onRemove(w().path)} title="Remove this Worktree (asks first)">
+              Remove Worktree…
+            </button>
           </Show>
         </div>
       )}

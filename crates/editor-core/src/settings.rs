@@ -229,7 +229,8 @@ pub(crate) fn add_repo_section(path: &Path, key: &str, name: &str) -> std::io::R
     let quoted_key = toml::Value::String(key.to_owned()).to_string();
     let section = format!(
         "\n# {name}. Worktree setup runs in each new Worktree before its first Agent session, in\n\
-         # order, stopping at the first failure.\n\
+         # order, stopping at the first failure. Anything a command leaves running in the\n\
+         # background is stopped when it finishes.\n\
          [repos.{quoted_key}]\n\
          setup = []\n\
          # setup_windows = []         # replaces `setup` on Windows\n\

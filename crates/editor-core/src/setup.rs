@@ -11,6 +11,7 @@ use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::mpsc;
 
+use crate::process::ProcessTree;
 use crate::session::SessionId;
 use crate::settings::WindowsShell;
 
@@ -64,7 +65,8 @@ const LINGER: Duration = Duration::from_millis(500);
 const OUTPUT_BATCH: Duration = Duration::from_millis(50);
 
 /// Runs one setup command in `cwd`, passing its output to `output` in batches as it arrives. `Err`
-/// says why it failed (couldn't start, or a non-zero exit).
+/// says why it failed (couldn't start, or a non-zero exit). Anything the command leaves running is
+/// stopped with it, as is everything it started if this is dropped mid-run.
 pub(crate) async fn run(
     command: &str,
     cwd: &Path,
@@ -72,15 +74,18 @@ pub(crate) async fn run(
     output: impl Fn(String),
 ) -> Result<(), String> {
     let (program, args) = shell_command(shell, command).await?;
-    let mut child = crate::process::command(&program)
-        .args(&args)
+    let mut cmd = crate::process::command(&program);
+    cmd.args(&args)
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    ProcessTree::own_group(&mut cmd);
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("couldn't start {}: {e}", program.display()))?;
+    let _tree = ProcessTree::attach(&child);
     let (tx, mut rx) = mpsc::unbounded_channel();
     let readers = [
         tokio::spawn(forward(child.stdout.take().expect("piped"), tx.clone())),

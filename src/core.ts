@@ -56,6 +56,48 @@ export interface CreatedWorktree {
   setup: SetupInfo | null;
 }
 
+export interface CommitSummary {
+  id: string;
+  subject: string;
+}
+
+/** What removing a Worktree would stop and lose, for the confirmation dialog. */
+export interface RemovalCheck {
+  worktree: string;
+  branch: string | null;
+  /** Agent sessions that removal stops first. */
+  sessions: SessionId[];
+  /** `XY path` lines as `git status --short` shows them (`??` = untracked); the first 100. */
+  changes: string[];
+  changedCount: number;
+  /** Ignored files and folders (`node_modules/`, `.env`): deleted too, shown so it's no surprise. */
+  ignored: string[];
+  ignoredCount: number;
+  /** Commits only this Worktree has (not pushed, merged into the Base, or on another branch). */
+  unpushed: CommitSummary[];
+  unpushedCount: number;
+  base: string;
+  /** Merged into the Base: "Delete branch too" starts ticked. */
+  merged: boolean;
+  /** Removing it at all needs "Discard and remove". */
+  discardToRemove: boolean;
+  /** Deleting the branch too needs "Discard and remove". */
+  discardToDeleteBranch: boolean;
+  /** Identifies exactly the work listed; "Discard and remove" sends it back. */
+  fingerprint: string;
+}
+
+export interface RemoveWorktree {
+  /** "Discard and remove": the shown check's fingerprint (work that changed since is refused). */
+  discard: string | null;
+  deleteBranch: boolean;
+}
+
+export interface RemovedWorktree {
+  /** E.g. the Worktree is gone but its branch couldn't be deleted. */
+  warning: string | null;
+}
+
 export type SetupStatus =
   | { kind: "running"; step: number }
   | { kind: "startingSession" }
@@ -152,6 +194,7 @@ export type CoreEvent =
   | { kind: "permissionModeChanged"; sessionId: SessionId; mode: PermissionMode }
   | { kind: "sessionUnreadChanged"; sessionId: SessionId; unread: number }
   | { kind: "worktreesChanged"; worktrees: WorktreeInfo[] }
+  | { kind: "sessionClosed"; sessionId: SessionId }
   | { kind: "settingsChanged"; settings: LoadedSettings }
   | { kind: "setupChanged"; worktree: string; commands: string[]; status: SetupStatus }
   | { kind: "setupOutput"; worktree: string; text: string };
@@ -165,6 +208,9 @@ export const core = {
   worktrees: () => invoke<WorktreeInfo[]>("worktrees"),
   refreshWorktrees: () => invoke<void>("refresh_worktrees"),
   createWorktree: (spec: NewWorktree) => invoke<CreatedWorktree>("create_worktree", { spec }),
+  removalCheck: (worktree: string) => invoke<RemovalCheck>("removal_check", { worktree }),
+  /** Stops the Worktree's sessions and setup, then removes it; refuses if that loses work without `discard`. */
+  removeWorktree: (worktree: string, options: RemoveWorktree) => invoke<RemovedWorktree>("remove_worktree", { worktree, options }),
   /** Fetches first, so remote branches are current. */
   branches: () => invoke<BranchList>("branches"),
   suggestBranchName: () => invoke<string>("suggest_branch_name"),

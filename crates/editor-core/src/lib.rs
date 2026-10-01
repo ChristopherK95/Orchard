@@ -8,6 +8,7 @@ mod git;
 mod permissions;
 mod prerequisites;
 mod process;
+mod remove_worktree;
 mod session;
 mod settings;
 mod setup;
@@ -17,6 +18,7 @@ pub use crate::acp::{AcpError, AdapterCommand, PROTOCOL_VERSION};
 pub use crate::core::{Core, CoreConfig, CoreError, CoreEvent, TranscriptStream, WorkspaceInfo};
 pub use crate::create_worktree::{BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};
+pub use crate::remove_worktree::{CommitSummary, RemovalCheck, RemoveWorktree, RemovedWorktree};
 pub use crate::session::{
     DiffLine, DiffLineKind, PermissionMode, PermissionOption, PermissionOptionKind,
     PermissionOutcome, PermissionRequest, SessionId, SessionInfo, SessionState, ToolCallStatus,

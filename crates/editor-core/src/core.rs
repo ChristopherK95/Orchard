@@ -14,6 +14,7 @@ use crate::acp::{AcpError, AdapterCommand, Connection, Incoming, Responder, PROT
 use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 use crate::git;
 use crate::permissions;
+use crate::remove_worktree::{self, RemovalCheck, RemoveWorktree, RemovedWorktree};
 use crate::session::{
     PermissionMode, PermissionOutcome, SessionId, SessionInfo, SessionState, Transcript,
     TranscriptDelta, TranscriptItem, TranscriptPage,
@@ -24,6 +25,36 @@ use crate::worktrees::{self, Discovery, WorktreeInfo};
 
 /// How long streamed transcript changes are gathered before being flushed to the visible Tab.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(16);
+
+/// How long a stopped session's Agent gets to confirm it closed before removal goes ahead anyway.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Refuses removal options that would lose work the user didn't agree to discard.
+fn refuse_loss(check: &RemovalCheck, options: &RemoveWorktree) -> Result<(), CoreError> {
+    match check.would_lose(options) {
+        Some(lost) => Err(CoreError::WouldDiscard(lost)),
+        None => Ok(()),
+    }
+}
+
+/// Whether a failed delete looks like Windows' "in use by another process" (worth retrying), not a
+/// refusal that will stay one.
+fn in_use(err: &str) -> bool {
+    let err = err.to_lowercase();
+    [
+        "permission denied",
+        "being used by another process",
+        "access is denied",
+        "invalid argument",
+        "directory not empty",
+    ]
+    .iter()
+    .any(|sign| err.contains(sign))
+}
+
+/// `git worktree remove` is retried this often (a while apart) while Windows still holds the folder.
+const REMOVE_RETRIES: u32 = 30;
+const REMOVE_RETRY_DELAY: Duration = Duration::from_millis(300);
 
 pub struct CoreConfig {
     pub adapter: AdapterCommand,
@@ -71,6 +102,14 @@ pub enum CoreError {
     SetupFailed,
     #[error("this Worktree has no failed setup to retry or skip")]
     NoFailedSetup,
+    #[error("the main checkout can't be removed")]
+    MainCheckout,
+    #[error("this Worktree is being removed")]
+    BeingRemoved,
+    #[error("an Agent session in this Worktree didn't stop in time; try again")]
+    SessionWontStop,
+    #[error("removing it would lose {0}; choose Discard and remove to go ahead")]
+    WouldDiscard(String),
     #[error(transparent)]
     Acp(#[from] AcpError),
 }
@@ -112,6 +151,11 @@ pub enum CoreEvent {
     /// The settings file was saved: the settings now in force, or why the file was rejected.
     SettingsChanged {
         settings: LoadedSettings,
+    },
+    /// The session was stopped and is gone (e.g. its Worktree was removed).
+    #[serde(rename_all = "camelCase")]
+    SessionClosed {
+        session_id: SessionId,
     },
     /// A Worktree's setup moved on (to a command, a failure, or its first session).
     SetupChanged {
@@ -168,6 +212,8 @@ struct State {
     worktrees: Vec<WorktreeInfo>,
     /// Worktree setups started by this editor, by Worktree path.
     setups: HashMap<PathBuf, SetupRun>,
+    /// Worktrees being removed: no session or setup may start in them.
+    removing: std::collections::HashSet<PathBuf>,
     sessions: HashMap<SessionId, Arc<Session>>,
     by_acp_id: HashMap<String, SessionId>,
     next_session: u64,
@@ -177,7 +223,7 @@ struct SetupRun {
     info: SetupInfo,
     shell: WindowsShell,
     /// The task running it, aborted (killing its command) if the Worktree goes away.
-    task: Option<tokio::task::AbortHandle>,
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl SetupRun {
@@ -402,26 +448,21 @@ impl Core {
         (!commands.is_empty()).then_some((commands, repo.windows_shell))
     }
 
-    /// Runs a claimed setup on from `resume` in the background, keeping a handle to stop it.
+    /// Runs a claimed setup on from `resume` in the background, keeping a handle to stop it. The
+    /// handle is stored under the same lock the task is started under, so a removal can't miss it.
     fn resume_setup(&self, worktree: PathBuf, resume: Resume) {
+        let mut state = self.inner.state.lock().expect("state lock");
+        let Some(run) = state.setups.get_mut(&worktree) else {
+            return;
+        };
         let core = self.clone();
         let path = worktree.clone();
-        let task = tokio::spawn(async move {
+        run.task = Some(tokio::spawn(async move {
             match resume {
                 Resume::Command(from) => core.run_setup(path, from).await,
                 Resume::Session => core.start_first_session(path).await,
             }
-        });
-        if let Some(run) = self
-            .inner
-            .state
-            .lock()
-            .expect("state lock")
-            .setups
-            .get_mut(&worktree)
-        {
-            run.task = Some(task.abort_handle());
-        }
+        }));
     }
 
     /// Runs setup commands from `from` on, stopping at the first failure; then starts the session.
@@ -457,7 +498,14 @@ impl Core {
         self.start_first_session(worktree).await;
     }
 
+    /// Starts the Worktree's first session on a task of its own: stopping the setup mustn't drop a
+    /// `session/new` half way (the Agent would start one nobody closes).
     async fn start_first_session(&self, worktree: PathBuf) {
+        let core = self.clone();
+        let _ = tokio::spawn(async move { core.open_first_session(worktree).await }).await;
+    }
+
+    async fn open_first_session(&self, worktree: PathBuf) {
         let status = match self.start_session_in(&worktree).await {
             Ok(session_id) => SetupStatus::Done { session_id },
             Err(err) => {
@@ -562,6 +610,246 @@ impl Core {
         Some(info)
     }
 
+    /// What removing `worktree` would stop and lose, for the confirmation dialog.
+    pub async fn removal_check(&self, worktree: &Path) -> Result<RemovalCheck, CoreError> {
+        let (root, info) = self.removable(worktree)?;
+        self.inspect_for_removal(&root, &info).await
+    }
+
+    /// Removes a Worktree: stops its setup and Agent sessions first, then `git worktree remove`.
+    /// Refuses (before stopping anything) if that would lose work the user didn't choose to
+    /// discard; "Delete branch too" deletes the local branch afterwards. While it runs, no session
+    /// or setup starts in the Worktree.
+    pub async fn remove_worktree(
+        &self,
+        worktree: &Path,
+        options: RemoveWorktree,
+    ) -> Result<RemovedWorktree, CoreError> {
+        let (root, info) = self.removable(worktree)?;
+        refuse_loss(&self.inspect_for_removal(&root, &info).await?, &options)?;
+        if !self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .removing
+            .insert(info.path.clone())
+        {
+            return Err(CoreError::BeingRemoved);
+        }
+        let removed = self.stop_and_remove(&root, &info, &options).await;
+        self.inner
+            .state
+            .lock()
+            .expect("state lock")
+            .removing
+            .remove(&info.path);
+        self.inner.refresh_worktrees().await;
+        removed
+    }
+
+    async fn stop_and_remove(
+        &self,
+        root: &Path,
+        info: &WorktreeInfo,
+        options: &RemoveWorktree,
+    ) -> Result<RemovedWorktree, CoreError> {
+        self.stop_setup(&info.path).await;
+        for session in self.sessions_in(&info.path) {
+            self.close_session(session).await?;
+        }
+        // An Agent may have changed something before it stopped.
+        let check = self.inspect_for_removal(root, info).await?;
+        refuse_loss(&check, options)?;
+        // git needs --force only to delete uncommitted changes the user chose to discard.
+        let force = options.discard.is_some() && check.changed_count > 0;
+        let mut warnings: Vec<String> = self
+            .remove_folder(root, &info.path, force)
+            .await?
+            .into_iter()
+            .collect();
+        if let (true, Some(branch)) = (options.delete_branch, &info.branch) {
+            if let Err(err) = git::delete_branch(root, branch).await {
+                warnings.push(format!("Its branch `{branch}` couldn't be deleted: {err}"));
+            }
+        }
+        Ok(RemovedWorktree {
+            warning: (!warnings.is_empty()).then(|| warnings.join(" ")),
+        })
+    }
+
+    /// `git worktree remove`, retried while Windows still holds the folder for a moment after the
+    /// processes in it exited. git may unregister the Worktree and delete its files before failing
+    /// on the folder itself; then only that emptied folder is left, and failing to delete it is a
+    /// warning (the Worktree is gone) rather than an error.
+    async fn remove_folder(
+        &self,
+        root: &Path,
+        path: &Path,
+        force: bool,
+    ) -> Result<Option<String>, CoreError> {
+        let mut attempt = 0;
+        let mut git_ran = false;
+        loop {
+            let Some(listed) = git::worktree_list(root).await else {
+                return Err(CoreError::Git("couldn't list the Worktrees".into()));
+            };
+            let listed: Vec<PathBuf> = listed
+                .into_iter()
+                .map(|w| worktrees::normalize(w.path))
+                .collect();
+            if listed.iter().any(|w| w != path && w.starts_with(path)) {
+                return Err(CoreError::Git(format!(
+                    "another Worktree is inside {}; remove that one first",
+                    path.display()
+                )));
+            }
+            let registered = listed.iter().any(|w| w == path);
+            let removed = if registered {
+                git_ran = true;
+                git::worktree_remove(root, path, force).await
+            } else if !git_ran || path.join(".git").exists() {
+                // Not git's half-finished removal (that deletes `.git` first): leave it alone.
+                return Err(CoreError::Git(format!(
+                    "{} is no longer a Worktree of this repository",
+                    path.display()
+                )));
+            } else {
+                match std::fs::remove_dir_all(path) {
+                    Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+                        Err(format!("couldn't delete {}: {err}", path.display()))
+                    }
+                    _ => Ok(()),
+                }
+            };
+            match removed {
+                Ok(()) => return Ok(None),
+                Err(err) if attempt < REMOVE_RETRIES && path.exists() && in_use(&err) => {
+                    attempt += 1;
+                    tokio::time::sleep(REMOVE_RETRY_DELAY).await;
+                }
+                Err(err) if !registered => {
+                    return Ok(Some(format!(
+                        "git no longer has the Worktree, but its emptied folder is still in use ({err}); delete {} when nothing is using it.",
+                        path.display()
+                    )))
+                }
+                Err(err) => return Err(CoreError::Git(err)),
+            }
+        }
+    }
+
+    /// The Workspace's root and the linked (not main) Worktree at `worktree`.
+    fn removable(&self, worktree: &Path) -> Result<(PathBuf, WorktreeInfo), CoreError> {
+        let root = self.workspace()?.root;
+        let wanted = worktrees::normalize(worktree.to_owned());
+        let info = self
+            .worktrees()
+            .into_iter()
+            .find(|w| w.path == wanted)
+            .ok_or_else(|| CoreError::UnknownWorktree(worktree.to_owned()))?;
+        if info.is_main {
+            return Err(CoreError::MainCheckout);
+        }
+        Ok((root, info))
+    }
+
+    async fn inspect_for_removal(
+        &self,
+        root: &Path,
+        info: &WorktreeInfo,
+    ) -> Result<RemovalCheck, CoreError> {
+        let base = git::default_start_point(root).await;
+        // By commit id, resolved in the main checkout: in the Worktree, a Base of `HEAD` (or a name
+        // its own branch shadows) would mean its own HEAD, and everything would look merged.
+        let base_id = git::resolve_commit(root, &base)
+            .await
+            .ok_or_else(|| CoreError::Git(format!("couldn't find the Base `{base}`")))?;
+        let mut check =
+            remove_worktree::inspect(&info.path, info.branch.as_deref(), &base, &base_id)
+                .await
+                .map_err(CoreError::Git)?;
+        check.sessions = self
+            .sessions_in(&info.path)
+            .iter()
+            .map(|s| s.info.lock().expect("info lock").id)
+            .collect();
+        check.sessions.sort();
+        Ok(check)
+    }
+
+    fn sessions_in(&self, worktree: &Path) -> Vec<Arc<Session>> {
+        self.inner
+            .state
+            .lock()
+            .expect("state lock")
+            .sessions
+            .values()
+            .filter(|s| s.info.lock().expect("info lock").worktree == worktree)
+            .cloned()
+            .collect()
+    }
+
+    /// Stops a Worktree's setup (with everything its command started) and forgets it. A first
+    /// session it's starting finishes on its own task, and is refused or closed (see `removing`).
+    async fn stop_setup(&self, worktree: &Path) {
+        let run = self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .setups
+            .remove(worktree);
+        if let Some(task) = run.and_then(|run| run.task) {
+            task.abort();
+            let _ = task.await; // returns once the command has been dropped, and so killed
+        }
+    }
+
+    /// Ends an Agent session: open questions are cancelled, the Agent closes it (its Claude process
+    /// exits), and it's gone from the editor. If the Agent doesn't confirm in time, the session
+    /// stays (marked exited) and removal stops, rather than deleting a folder it's still in.
+    async fn close_session(&self, session: Arc<Session>) -> Result<(), CoreError> {
+        session.update(|control| {
+            session.cancel_questions(control);
+            control.exited = true;
+        });
+        // Stop a turn in progress first (closing does too, but this works on any ACP agent).
+        let _ = session
+            .connection
+            .notify("session/cancel", json!({ "sessionId": session.acp_id }));
+        let close = session
+            .connection
+            .request("session/close", json!({ "sessionId": session.acp_id }));
+        // An error reply (e.g. the adapter already dropped it, or exited) means it's gone too.
+        if tokio::time::timeout(CLOSE_TIMEOUT, close).await.is_err() {
+            return Err(CoreError::SessionWontStop);
+        }
+        self.forget_session(&session);
+        Ok(())
+    }
+
+    /// Drops a closed session from the editor and ends its Tab's stream.
+    fn forget_session(&self, session: &Arc<Session>) {
+        let id = session.info.lock().expect("info lock").id;
+        {
+            let mut state = self.inner.state.lock().expect("state lock");
+            state.sessions.remove(&id);
+            state.by_acp_id.remove(&session.acp_id);
+        }
+        let mut visible = self.inner.visible_tab.lock().expect("visible tab lock");
+        if visible
+            .as_ref()
+            .is_some_and(|(shown, _)| Arc::ptr_eq(shown, session))
+        {
+            visible.take(); // ends its stream
+        }
+        drop(visible);
+        let _ = self
+            .inner
+            .events
+            .send(CoreEvent::SessionClosed { session_id: id });
+    }
     /// Local and remote branches, for the "existing branch" picker. Fetches first, so a colleague's
     /// branch pushed a minute ago is there; if that fails, it says so and lists what was last fetched.
     pub async fn branches(&self) -> Result<BranchList, CoreError> {
@@ -631,6 +919,17 @@ impl Core {
             .map(|w| w.path)
             .find(|path| *path == wanted)
             .ok_or_else(|| CoreError::UnknownWorktree(worktree.to_owned()))?;
+        let being_removed = || {
+            self.inner
+                .state
+                .lock()
+                .expect("state lock")
+                .removing
+                .contains(&root)
+        };
+        if being_removed() {
+            return Err(CoreError::BeingRemoved);
+        }
         let connection = self.adapter().await?;
         let created = connection
             .request("session/new", json!({ "cwd": root, "mcpServers": [] }))
@@ -647,32 +946,47 @@ impl Core {
                 .await?;
         }
 
-        let mut state = self.inner.state.lock().expect("state lock");
-        state.next_session += 1;
-        let id = SessionId(state.next_session);
-        let info = SessionInfo {
-            id,
-            name: format!("Session {}", id.0),
-            worktree: root,
-            state: SessionState::Idle,
-            permission_mode: PermissionMode::AskForEdits,
-            unread: 0,
+        // Registered under the same lock `remove_worktree` marks the Worktree under, so a session
+        // either is in `sessions_in` for removal to close, or is refused here.
+        let added = {
+            let mut state = self.inner.state.lock().expect("state lock");
+            if state.removing.contains(&root) {
+                None
+            } else {
+                state.next_session += 1;
+                let id = SessionId(state.next_session);
+                let info = SessionInfo {
+                    id,
+                    name: format!("Session {}", id.0),
+                    worktree: root,
+                    state: SessionState::Idle,
+                    permission_mode: PermissionMode::AskForEdits,
+                    unread: 0,
+                };
+                let (deltas, _) = broadcast::channel(4096);
+                let session = Arc::new(Session {
+                    info: Mutex::new(info.clone()),
+                    acp_id: acp_id.clone(),
+                    connection: connection.clone(),
+                    transcript: Mutex::default(),
+                    deltas,
+                    events: self.inner.events.clone(),
+                    visible: AtomicBool::new(false),
+                    tool_calls: Mutex::default(),
+                    control: Mutex::default(),
+                });
+                state.sessions.insert(id, session);
+                state.by_acp_id.insert(acp_id.clone(), id);
+                Some(info)
+            }
         };
-        let (deltas, _) = broadcast::channel(4096);
-        let session = Arc::new(Session {
-            info: Mutex::new(info.clone()),
-            acp_id: acp_id.clone(),
-            connection,
-            transcript: Mutex::default(),
-            deltas,
-            events: self.inner.events.clone(),
-            visible: AtomicBool::new(false),
-            tool_calls: Mutex::default(),
-            control: Mutex::default(),
-        });
-        state.sessions.insert(id, session);
-        state.by_acp_id.insert(acp_id, id);
-        drop(state);
+        let Some(info) = added else {
+            // Removal began while the Agent was starting it: it mustn't outlive the folder.
+            let close = connection.request("session/close", json!({ "sessionId": acp_id }));
+            let _ = tokio::time::timeout(CLOSE_TIMEOUT, close).await;
+            return Err(CoreError::BeingRemoved);
+        };
+        let id = info.id;
         let _ = self
             .inner
             .events
@@ -945,6 +1259,9 @@ impl Inner {
         decide: impl FnOnce(&mut SetupRun) -> Resume,
     ) -> Result<Resume, CoreError> {
         let mut state = self.state.lock().expect("state lock");
+        if state.removing.contains(worktree) {
+            return Err(CoreError::BeingRemoved);
+        }
         let run = state
             .setups
             .get_mut(worktree)

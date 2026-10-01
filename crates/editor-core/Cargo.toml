@@ -16,6 +16,14 @@ tokio.workspace = true
 # The settings file (ticket 08).
 toml = "1"
 
+# Stopping a setup command together with everything it started (ticket 09): a Job object on
+# Windows, a process group on Linux.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 

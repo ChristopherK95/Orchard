@@ -18,8 +18,9 @@ import {
 import { type BenchDriver, runBenchmark } from "./benchmark";
 import { answerByKey } from "./PermissionCard";
 import { NewWorktreeDialog } from "./NewWorktreeDialog";
+import { RemoveWorktreeDialog } from "./RemoveWorktreeDialog";
 import { Transcript } from "./Transcript";
-import { ContextBar, removedWorktree, worktreeColour, WorktreeRow, type WorktreeTab } from "./Worktrees";
+import { ContextBar, removedWorktree, worktreeColour, worktreeLabel, WorktreeRow, type WorktreeTab } from "./Worktrees";
 import { notify, onNotificationClicked } from "./notify";
 import { keepOutput, Setup, type SetupView } from "./Setup";
 
@@ -127,6 +128,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   const [activeWorktree, setActiveWorktree] = createSignal(props.workspace.root);
   const lastSessionIn = new Map<string, SessionId>();
   const [creatingWorktree, setCreatingWorktree] = createSignal(false);
+  /** The Worktree whose removal dialog is open. */
+  const [removing, setRemoving] = createSignal<WorktreeTab | null>(null);
   /** Worktree setups this editor started, by Worktree path; shown until the first session opens. */
   const [setups, setSetups] = createStore<Record<string, SetupView>>({});
   const updateSetup = (worktree: string, change: (setup: SetupView) => void) =>
@@ -291,6 +294,14 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         // The active Worktree was removed: fall back to the main checkout.
         const active = activeWorktree();
         if (!event.worktrees.some((w) => w.path === active) && sessionsIn(active).length === 0) selectWorktree(props.workspace.root);
+      } else if (event.kind === "sessionClosed") {
+        // Stopped by the core (its Worktree is being removed): its Tab goes.
+        const id = event.sessionId;
+        const path = sessions[id]?.worktree;
+        setOrder((ids) => ids.filter((other) => other !== id));
+        setSessions(produce((all) => void delete all[id]));
+        // Back to what's left of its Worktree, or to the main checkout if the Worktree's gone.
+        if (activeId() === id && path) selectWorktree(worktrees().some((w) => w.path === path) ? path : props.workspace.root);
       } else if (event.kind === "settingsChanged") {
         sawSettingsEvent = true;
         setSettings(event.settings);
@@ -316,6 +327,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     onCleanup(unlistenClicks);
     // Y/N answer the oldest open permission card anywhere in the Tab (outside text fields).
     const onKey = (e: KeyboardEvent) => {
+      if (removing() || creatingWorktree()) return; // a dialog is open over the Tab
       const s = session();
       if (s?.state === "needsYou" && answerByKey(e, s.id, items)) e.preventDefault();
     };
@@ -390,7 +402,24 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           ＋ session
         </button>
       </nav>
-      <ContextBar worktree={worktree()} session={session()} stateLabel={STATE_LABEL} />
+      <ContextBar worktree={worktree()} session={session()} stateLabel={STATE_LABEL} onRemove={() => setRemoving(worktree() ?? null)} />
+      <Show when={removing()}>
+        {(w) => (
+          <RemoveWorktreeDialog
+            worktree={w().path}
+            label={worktreeLabel(w())}
+            sessionName={(id) => sessions[id]?.name ?? `Session ${id}`}
+            onRemoved={(warning) => {
+              const path = w().path;
+              setRemoving(null);
+              setNotice(warning ?? "");
+              setSetups(produce((all) => void delete all[path]));
+              selectWorktree(props.workspace.root);
+            }}
+            onClose={() => setRemoving(null)}
+          />
+        )}
+      </Show>
       <Show when={sharing() > 1}>
         <p class="warning banner">
           {sharing()} Agent sessions share this Worktree, so they can edit the same files.

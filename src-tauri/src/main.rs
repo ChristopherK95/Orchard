@@ -6,8 +6,9 @@ use std::path::PathBuf;
 
 use editor_core::{
     check_prerequisites, AdapterCommand, BranchList, Core, CoreConfig, CreatedWorktree,
-    LoadedSettings, MissingPrerequisite, NewWorktree, PermissionMode, SessionId, SetupInfo, Tools,
-    TranscriptDelta, TranscriptPage, WorkspaceInfo, WorktreeInfo,
+    LoadedSettings, MissingPrerequisite, NewWorktree, PermissionMode, RemovalCheck, RemoveWorktree,
+    RemovedWorktree, SessionId, SetupInfo, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo,
+    WorktreeInfo,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -80,6 +81,25 @@ async fn create_worktree(
     spec: NewWorktree,
 ) -> CommandResult<CreatedWorktree> {
     core.create_worktree(spec).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn removal_check(core: State<'_, Core>, worktree: String) -> CommandResult<RemovalCheck> {
+    core.removal_check(worktree.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Stops the Worktree's sessions and setup, then removes it (see `Core::remove_worktree`).
+#[tauri::command]
+async fn remove_worktree(
+    core: State<'_, Core>,
+    worktree: String,
+    options: RemoveWorktree,
+) -> CommandResult<RemovedWorktree> {
+    core.remove_worktree(worktree.as_ref(), options)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -274,6 +294,8 @@ fn main() {
             worktrees,
             refresh_worktrees,
             create_worktree,
+            removal_check,
+            remove_worktree,
             branches,
             suggest_branch_name,
             default_start_point,

@@ -230,6 +230,22 @@ pub fn toml_literal(text: &str) -> String {
     format!("'{text}'")
 }
 
+/// A settings-file section for the repo keyed `key` (an origin URL or a path).
+pub fn repo_settings(key: &str, body: &str) -> String {
+    format!("[repos.{}]\n{body}\n", toml_literal(key))
+}
+
+/// A setup command that prints `text`, then runs until `until` exists. Forward slashes, so the
+/// same text works in bash and PowerShell.
+pub fn print_then_wait(text: &str, until: &Path) -> String {
+    let slashes = |p: &Path| p.display().to_string().replace('\\', "/");
+    format!(
+        "{} --print {text} --until {}",
+        slashes(&fake_agent_path()),
+        slashes(until)
+    )
+}
+
 /// `origin`'s URL as git reports it, which is how a repo's settings section is keyed.
 pub fn origin_url(repo: &Path) -> String {
     let out = Command::new("git")

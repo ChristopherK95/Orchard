@@ -864,6 +864,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 name = "editor-core"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "notify",
  "serde",
  "serde_json",
@@ -872,6 +873,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "toml 1.1.6+spec-1.1.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

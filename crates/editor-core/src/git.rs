@@ -11,12 +11,16 @@ use std::time::Duration;
 use tokio::process::Command;
 
 use crate::create_worktree::BranchInfo;
+use crate::remove_worktree::CommitSummary;
 
 fn git(cwd: &Path) -> Command {
     let mut cmd = crate::process::command("git");
     cmd.current_dir(cwd)
         .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_OPTIONAL_LOCKS", "0");
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        // No terminal to ask on: Git for Windows would otherwise wait on "Deletion of directory
+        // failed. Should I try again? (y/n)" when a folder is in use.
+        .stdin(std::process::Stdio::null());
     cmd
 }
 
@@ -302,4 +306,145 @@ fn parse_status(out: &str) -> StatusSummary {
         }
     }
     summary
+}
+
+/// Uncommitted changes in a Worktree, one `XY path` line each (`??` for untracked files), as
+/// `git status --short` shows them. Ignored files aren't listed.
+pub(crate) async fn changes(worktree: &Path) -> Result<Vec<String>, String> {
+    let out = run(
+        worktree,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )
+    .await?;
+    Ok(parse_changes(&out))
+}
+
+fn parse_changes(out: &str) -> Vec<String> {
+    let mut changes = vec![];
+    let mut entries = out.split('\0').filter(|e| !e.is_empty());
+    while let Some(entry) = entries.next() {
+        // A rename's or copy's original path is its own entry (either column can say so).
+        if entry
+            .as_bytes()
+            .iter()
+            .take(2)
+            .any(|c| matches!(c, b'R' | b'C'))
+        {
+            entries.next();
+        }
+        changes.push(entry.to_owned());
+    }
+    changes
+}
+
+/// Ignored files and folders in a Worktree (folders collapsed, like `node_modules/`): removal
+/// deletes them too, though they're not "changes".
+pub(crate) async fn ignored(worktree: &Path) -> Result<Vec<String>, String> {
+    let out = run(
+        worktree,
+        &[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+        ],
+    )
+    .await?;
+    Ok(out
+        .split('\0')
+        .filter(|e| !e.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
+/// Uncommitted changes to tracked files, as a binary diff against HEAD (for telling whether they
+/// changed, not for showing).
+pub(crate) async fn diff_vs_head(worktree: &Path) -> Result<String, String> {
+    run(worktree, &["diff", "HEAD", "--binary", "--no-ext-diff"]).await
+}
+
+/// The full id of the commit `rev` names in `repo`, if it names one.
+pub(crate) async fn resolve_commit(repo: &Path, rev: &str) -> Option<String> {
+    let commit = format!("{rev}^{{commit}}");
+    let id = output(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            &commit,
+        ],
+    )
+    .await?;
+    Some(id.trim().to_owned()).filter(|id| !id.is_empty())
+}
+
+/// The arguments selecting commits only `HEAD` has: not on a remote, a tag, `base`, or a local
+/// branch other than `branch` (with `branch` `None`, HEAD is detached and no branch holds it).
+fn only_here<'a>(exclude: &'a str, base: &'a str) -> Vec<&'a str> {
+    let mut args = vec!["HEAD", "--not", "--remotes", "--tags"];
+    if !exclude.is_empty() {
+        args.push(exclude);
+    }
+    args.extend(["--branches", "--end-of-options", base]);
+    args
+}
+
+/// Up to `limit` of the commits only this Worktree's `HEAD` has (newest first), and how many there
+/// are in all. These are what removing the Worktree (when detached) or deleting its branch loses.
+pub(crate) async fn commits_only_here(
+    worktree: &Path,
+    branch: Option<&str>,
+    base: &str,
+    limit: usize,
+) -> Result<(Vec<CommitSummary>, usize), String> {
+    let exclude = branch.map(|b| format!("--exclude={b}")).unwrap_or_default();
+    let selection = only_here(&exclude, base);
+    let mut count_args = vec!["rev-list", "--count"];
+    count_args.extend(&selection);
+    let count = run(worktree, &count_args)
+        .await?
+        .trim()
+        .parse()
+        .map_err(|e| format!("unexpected rev-list output: {e}"))?;
+    let max = format!("--max-count={limit}");
+    let mut log_args = vec!["log", "--format=%h%x00%s", &max];
+    log_args.extend(&selection);
+    let commits = run(worktree, &log_args)
+        .await?
+        .lines()
+        .filter_map(|line| line.split_once('\0'))
+        .map(|(id, subject)| CommitSummary {
+            id: id.to_owned(),
+            subject: subject.to_owned(),
+        })
+        .collect();
+    Ok((commits, count))
+}
+
+/// Whether `commit` is already contained in `base`.
+pub(crate) async fn is_merged(worktree: &Path, commit: &str, base: &str) -> bool {
+    run(worktree, &["merge-base", "--is-ancestor", commit, base])
+        .await
+        .is_ok()
+}
+
+/// Removes the Worktree at `path`. `force` (only when the user chose "Discard and remove") lets git
+/// delete uncommitted changes with it.
+pub(crate) async fn worktree_remove(repo: &Path, path: &Path, force: bool) -> Result<(), String> {
+    let path = path.display().to_string();
+    let mut args = vec!["worktree", "remove"];
+    if force {
+        args.push("--force");
+    }
+    args.extend(["--", &path]);
+    run(repo, &args).await.map(|_| ())
+}
+
+/// Deletes the local branch `name` (whatever it holds: the caller checked nothing is lost).
+pub(crate) async fn delete_branch(repo: &Path, name: &str) -> Result<(), String> {
+    run(repo, &["branch", "-D", "--", name]).await.map(|_| ())
 }

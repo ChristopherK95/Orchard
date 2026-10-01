@@ -13,3 +13,5 @@
 - [ ] Running sessions are stopped before removal.
 - [ ] A running Worktree setup is stopped with its whole process tree (a Job object on Windows, a process group on Linux). Today, aborting a setup kills only the shell, so `node`/`pnpm` under it keep running, and the folder stays locked on Windows. (Deferred from ticket 08's review.)
 - [ ] Core tests with real `git`: clean, dirty, unpushed and merged cases.
+
+Notes: uncommitted changes always need "Discard and remove". Unpushed/unmerged commits are always listed but need it only when they'd be lost: when the branch is deleted too, or HEAD is detached (keeping the branch keeps them). Discard covers exactly the work shown (by fingerprint); work that changed since is refused. Ignored files are listed too. "Merged" and "unpushed" are measured against the repo's default Base until a per-Worktree Base exists.
