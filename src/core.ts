@@ -119,6 +119,8 @@ export const core = {
     return invoke<void>("show_session", { sessionId, onBatch: channel });
   },
   /** Up to a page of items just before index `before` (for scrolling back). */
+  /** No Tab visible (an empty Worktree is selected): the previous Tab's stream ends. */
+  hideTabs: () => invoke<void>("hide_tabs"),
   transcriptPageBefore: (sessionId: SessionId, before: number) =>
     invoke<TranscriptPage>("transcript_page_before", { sessionId, before }),
   /** True when launched by the memory benchmark (ticket 05). */

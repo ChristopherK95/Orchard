@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] Suspend stops the session's Agent process; the Tab shows the conversation and a Suspended state.
+- [ ] Suspend stops the session's Agent process; the Tab shows the conversation and a Suspended state. Suspend is offered on the right of the context bar (layout decision, ticket 08 of the plan).
 - [ ] Sending a message from a Suspended Tab resumes the same conversation, then processes the message.
 - [ ] Exited sessions show a resume action that restores the conversation.
 - [ ] Killing the adapter process leads to an automatic restart; Idle sessions come back, and mid-turn sessions become Exited.

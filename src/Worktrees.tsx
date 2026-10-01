@@ -5,6 +5,14 @@ import type { SessionInfo, SessionState, WorktreeInfo } from "./core";
 
 const PALETTE = ["#7aa2f7", "#c49cf0", "#6cc5d9", "#e5c07b", "#7fd18b", "#ef8f9a", "#f0a35e", "#9aa1ad"];
 
+/** A Worktree as the row shows it: one git lists, or one that's gone but still has sessions. */
+export type WorktreeTab = WorktreeInfo & { removed?: boolean };
+
+/** A Worktree that disappeared (e.g. removed in a terminal) while sessions still run in it. */
+export const removedWorktree = (path: string): WorktreeTab => ({
+  path, branch: null, head: "", isMain: false, ahead: null, behind: null, changed: 0, removed: true,
+});
+
 /** A stable colour per Worktree path. */
 export function worktreeColour(path: string): string {
   let hash = 0;
@@ -12,13 +20,17 @@ export function worktreeColour(path: string): string {
   return PALETTE[Math.abs(hash) % PALETTE.length];
 }
 
-export const worktreeLabel = (w: WorktreeInfo) => w.branch ?? `detached ${w.head}`;
+export function worktreeLabel(w: WorktreeTab): string {
+  if (w.removed) return `${w.path.split(/[\\/]/).pop()} (removed)`;
+  return w.branch ?? `detached ${w.head}`;
+}
 
 export function WorktreeRow(props: {
-  worktrees: WorktreeInfo[];
+  worktrees: WorktreeTab[];
   active: string | undefined;
   sessionsIn: (path: string) => SessionInfo[];
   onSelect: (path: string) => void;
+  onNewSession: (path: string) => void;
 }) {
   return (
     <nav class="worktree-row">
@@ -29,9 +41,9 @@ export function WorktreeRow(props: {
           return (
             <button
               class="worktree-tab"
-              classList={{ on: w.path === props.active, dimmed: sessions().length === 0 }}
+              classList={{ on: w.path === props.active, dimmed: sessions().length === 0, removed: !!w.removed }}
               style={{ "--c": worktreeColour(w.path) }}
-              title={w.path}
+              title={w.removed ? `${w.path}: no longer a Worktree; its sessions still run` : w.path}
               onClick={() => props.onSelect(w.path)}
             >
               <span class="branch-glyph">⎇</span>
@@ -45,6 +57,18 @@ export function WorktreeRow(props: {
                   {needsYou()}
                 </span>
               </Show>
+              <Show when={sessions().length === 0 && !w.removed}>
+                <span
+                  class="new-session"
+                  title="New Agent session in this Worktree"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    props.onNewSession(w.path);
+                  }}
+                >
+                  ＋ session
+                </span>
+              </Show>
             </button>
           );
         }}
@@ -54,7 +78,7 @@ export function WorktreeRow(props: {
 }
 
 export function ContextBar(props: {
-  worktree: WorktreeInfo | undefined;
+  worktree: WorktreeTab | undefined;
   session: SessionInfo | undefined;
   stateLabel: Record<SessionState, string>;
 }) {
@@ -65,12 +89,14 @@ export function ContextBar(props: {
           <span class="branch-glyph">⎇</span>
           <b class="mono">{worktreeLabel(w())}</b>
           <span class="mono muted path">{w().path}</span>
-          <Show when={w().ahead !== null}>
-            <span class="muted">
-              ↑{w().ahead} ↓{w().behind}
-            </span>
+          <Show when={!w().removed}>
+            <Show when={w().ahead !== null}>
+              <span class="muted">
+                ↑{w().ahead} ↓{w().behind}
+              </span>
+            </Show>
+            <span class="muted">{w().changed === 1 ? "1 changed" : `${w().changed} changed`}</span>
           </Show>
-          <span class="muted">{w().changed === 1 ? "1 changed" : `${w().changed} changed`}</span>
           <Show when={props.session}>
             {(s) => (
               <>

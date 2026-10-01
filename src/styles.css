@@ -41,6 +41,10 @@ input, textarea { background: var(--bg3); border: 1px solid var(--line); border-
 .worktree-tab:hover { background: var(--bg2); }
 .worktree-tab.on { background: var(--bg2); color: var(--fg); border-color: var(--line); box-shadow: inset 0 3px var(--c); }
 .worktree-tab.dimmed:not(.on) { opacity: 0.6; }
+.worktree-tab.dimmed:not(.on):hover { opacity: 1; }
+.worktree-tab.removed .mono { text-decoration: line-through; text-decoration-color: var(--fg2); }
+.worktree-tab .new-session { font-size: 11px; color: var(--accent); padding: 0 4px; border-radius: 4px; }
+.worktree-tab .new-session:hover { background: var(--bg4); }
 .branch-glyph { color: var(--c); font-weight: 700; }
 .agent-glyph { color: var(--fg2); font-size: 11px; }
 .mini-dots { display: inline-flex; gap: 3px; }

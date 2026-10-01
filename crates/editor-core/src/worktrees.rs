@@ -30,18 +30,13 @@ pub struct WorktreeInfo {
 /// Every Worktree of the repository whose main checkout is `root`, main checkout first.
 pub(crate) async fn list(root: &Path) -> Vec<WorktreeInfo> {
     let mut worktrees = vec![];
-    for (i, listed) in git::worktree_list(root)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .enumerate()
-    {
+    for listed in git::worktree_list(root).await.unwrap_or_default() {
         let status = git::status_summary(&listed.path).await.unwrap_or_default();
         worktrees.push(WorktreeInfo {
             path: normalize(listed.path),
             branch: listed.branch,
             head: listed.head.chars().take(7).collect(),
-            is_main: i == 0,
+            is_main: listed.is_main,
             ahead: status.ahead,
             behind: status.behind,
             changed: status.changed,
@@ -73,12 +68,12 @@ pub(crate) struct Discovery {
 impl Discovery {
     pub(crate) fn start(common_dir: &Path) -> Option<(Self, mpsc::UnboundedReceiver<()>)> {
         let (tx, rx) = mpsc::unbounded_channel();
+        let worktrees_dir = common_dir.join("worktrees");
+        let filter_dir = worktrees_dir.clone();
         let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            let touches_worktrees = event.is_ok_and(|e| {
-                e.paths
-                    .iter()
-                    .any(|p| p.components().any(|c| c.as_os_str() == "worktrees"))
-            });
+            // Only `worktrees/` itself or its entries: index/HEAD writes in `.git` are noise.
+            let touches_worktrees =
+                event.is_ok_and(|e| e.paths.iter().any(|p| p.starts_with(&filter_dir)));
             if touches_worktrees {
                 let _ = tx.send(());
             }
@@ -86,7 +81,7 @@ impl Discovery {
         .ok()?;
         let discovery = Self {
             watcher: Arc::new(Mutex::new(watcher)),
-            worktrees_dir: common_dir.join("worktrees"),
+            worktrees_dir,
         };
         discovery
             .watcher

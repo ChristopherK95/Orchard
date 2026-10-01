@@ -17,7 +17,7 @@ import {
 import { type BenchDriver, runBenchmark } from "./benchmark";
 import { answerByKey } from "./PermissionCard";
 import { Transcript } from "./Transcript";
-import { ContextBar, worktreeColour, WorktreeRow } from "./Worktrees";
+import { ContextBar, removedWorktree, worktreeColour, WorktreeRow, type WorktreeTab } from "./Worktrees";
 import { notify, NOTIFY_WHEN_BACKGROUND_TURN_FINISHES, onNotificationClicked } from "./notify";
 
 const STATE_LABEL: Record<SessionState, string> = {
@@ -124,7 +124,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   const [activeWorktree, setActiveWorktree] = createSignal(props.workspace.root);
   const lastSessionIn = new Map<string, SessionId>();
   const sessionsIn = (path: string) => order().map((id) => sessions[id]).filter((s) => s.worktree === path);
-  const worktree = () => worktrees().find((w) => w.path === activeWorktree());
+  const rowWorktrees = (): WorktreeTab[] => {
+    const listed = worktrees();
+    const vanished = [...new Set(order().map((id) => sessions[id].worktree))].filter((p) => !listed.some((w) => w.path === p));
+    return [...listed, ...vanished.map(removedWorktree)];
+  };
+  const worktree = () => rowWorktrees().find((w) => w.path === activeWorktree());
 
   // Each show() gets a token; batches from an earlier stream (even of the same session) are dropped.
   let currentShow = 0;
@@ -176,13 +181,14 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     setActiveWorktree(path);
     setActiveId(null);
     setItems([]);
+    void core.hideTabs();
   };
 
   /** A new Agent session in the active Worktree. */
-  const newSession = async (): Promise<SessionId | undefined> => {
+  const newSession = async (path = activeWorktree()): Promise<SessionId | undefined> => {
     setError("");
     try {
-      const id = await core.newSessionIn(activeWorktree());
+      const id = await core.newSessionIn(path);
       await show(id);
       return id;
     } catch (err) {
@@ -254,12 +260,15 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       void notify(id, `${name} finished`, "The Agent's turn is done.");
   };
 
+  let sawWorktreesEvent = false;
   onMount(async () => {
     const unlisten = await core.onEvent((event) => {
       if (event.kind === "worktreesChanged") {
+        sawWorktreesEvent = true;
         setWorktrees(event.worktrees);
         // The active Worktree was removed: fall back to the main checkout.
-        if (!event.worktrees.some((w) => w.path === activeWorktree())) selectWorktree(props.workspace.root);
+        const active = activeWorktree();
+        if (!event.worktrees.some((w) => w.path === active) && sessionsIn(active).length === 0) selectWorktree(props.workspace.root);
       } else if (event.kind === "sessionCreated") {
         setSessions(event.session.id, event.session);
         setOrder((ids) => [...ids, event.session.id]);
@@ -283,7 +292,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     const onFocus = () => void core.refreshWorktrees();
     window.addEventListener("focus", onFocus);
     onCleanup(() => window.removeEventListener("focus", onFocus));
-    setWorktrees(await core.worktrees());
+    const snapshot = await core.worktrees();
+    if (!sawWorktreesEvent) setWorktrees(snapshot);
     const first = await newSession();
     if (first !== undefined && (await core.benchMode())) void runBenchmark(benchDriver, first).catch((err) => setError(`Benchmark failed: ${err}`));
   });
@@ -299,7 +309,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         <b>{props.workspace.name}</b>
         <span class="muted mono">{props.workspace.root}</span>
       </header>
-      <WorktreeRow worktrees={worktrees()} active={activeWorktree()} sessionsIn={sessionsIn} onSelect={selectWorktree} />
+      <WorktreeRow worktrees={rowWorktrees()} active={activeWorktree()} sessionsIn={sessionsIn} onSelect={selectWorktree} onNewSession={(path) => void newSession(path)} />
       <nav class="tabs" style={{ "--c": worktreeColour(activeWorktree()) }}>
         <For each={sessionsIn(activeWorktree()).map((s) => s.id)}>
           {(id) => (
@@ -313,7 +323,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
             </button>
           )}
         </For>
-        <button class="ghost add-tab" onClick={() => void newSession()} title="New Agent session in this Worktree">
+        <button class="ghost add-tab" onClick={() => void newSession()} title="New Agent session in this Worktree" disabled={worktree()?.removed}>
           ＋ session
         </button>
       </nav>

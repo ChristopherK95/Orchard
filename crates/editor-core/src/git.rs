@@ -2,6 +2,8 @@
 //! later replace a hot path without touching callers. Output is always machine-readable
 //! (`--porcelain` / `-z`), prompts are off (`GIT_TERMINAL_PROMPT=0`), and nothing here takes
 //! git's optional locks (`GIT_OPTIONAL_LOCKS=0`), so background refreshes never block an Agent.
+//! Optional locks only cover git's opportunistic index refresh, so turning them off is safe for the
+//! editor's own commands too.
 
 use std::path::{Path, PathBuf};
 
@@ -46,6 +48,9 @@ pub(crate) struct ListedWorktree {
     pub(crate) head: String,
     /// The checked-out branch (`main`, `feat/x`), or `None` when detached.
     pub(crate) branch: Option<String>,
+    /// git lists the main checkout first; this is false for the linked Worktrees after it, and for
+    /// all of them in a repository whose main entry is bare (and so isn't listed).
+    pub(crate) is_main: bool,
 }
 
 /// Every live worktree of the repository containing `path`, main checkout first. Worktrees whose
@@ -58,10 +63,10 @@ pub(crate) async fn worktree_list(path: &Path) -> Option<Vec<ListedWorktree>> {
 fn parse_worktree_list(out: &str) -> Vec<ListedWorktree> {
     let mut worktrees = vec![];
     // With -z, each attribute ends in NUL and an empty attribute ends a record.
-    for record in out
+    let records = out
         .split("\0\0")
-        .filter(|r| !r.trim_matches('\0').is_empty())
-    {
+        .filter(|r| !r.trim_matches('\0').is_empty());
+    for (position, record) in records.enumerate() {
         let (mut path, mut head, mut branch, mut skip) = (None, String::new(), None, false);
         for attribute in record.split('\0') {
             let (key, value) = attribute.split_once(' ').unwrap_or((attribute, ""));
@@ -74,7 +79,12 @@ fn parse_worktree_list(out: &str) -> Vec<ListedWorktree> {
             }
         }
         if let (Some(path), false) = (path, skip) {
-            worktrees.push(ListedWorktree { path, head, branch });
+            worktrees.push(ListedWorktree {
+                path,
+                head,
+                branch,
+                is_main: position == 0,
+            });
         }
     }
     worktrees

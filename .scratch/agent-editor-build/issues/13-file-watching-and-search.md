@@ -12,4 +12,5 @@
 - [ ] The Files drawer is scoped to the active Worktree and marks changed files.
 - [ ] Watch-limit exhaustion switches that Worktree to polling, with a toast.
 - [ ] Actors stop for Worktrees that are dimmed and idle.
+- [ ] The Worktree row's and context bar's ahead/behind and changed counts update live (ticket 06 refreshes them only on open, focus, Worktree-list changes and turn ends, so a terminal commit shows late).
 - [ ] Core tests with real temp directories on both OSes, including the forced polling fallback.

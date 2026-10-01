@@ -150,6 +150,12 @@ async fn transcript_page_before(
         .map_err(|e| e.to_string())
 }
 
+/// No Tab visible (a Worktree without sessions is selected): the previous Tab stops streaming.
+#[tauri::command]
+fn hide_tabs(core: State<'_, Core>) {
+    core.hide_tabs();
+}
+
 /// Makes a session the visible Tab and streams its transcript over a dedicated channel; the
 /// previously visible Tab's stream ends. Async so the core's streaming task runs on Tauri's runtime.
 #[tauri::command]
@@ -201,7 +207,8 @@ fn main() {
             notify_session,
             bench_mode,
             bench_mark,
-            show_session
+            show_session,
+            hide_tabs
         ])
         .run(tauri::generate_context!())
         .expect("error while running the editor");

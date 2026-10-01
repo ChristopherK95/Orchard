@@ -110,6 +110,8 @@ struct Inner {
     visible_tab: Mutex<Option<(Arc<Session>, oneshot::Sender<()>)>>,
     /// Watches for Worktrees added or removed outside the editor.
     discovery: Mutex<Option<Arc<Discovery>>>,
+    /// Serialises Worktree refreshes.
+    refresh_lock: tokio::sync::Mutex<()>,
 }
 
 #[derive(Default)]
@@ -185,6 +187,7 @@ impl Core {
                 adapter: tokio::sync::Mutex::new(None),
                 visible_tab: Mutex::new(None),
                 discovery: Mutex::new(None),
+                refresh_lock: tokio::sync::Mutex::new(()),
             }),
         }
     }
@@ -428,6 +431,20 @@ impl Core {
             .page_before(before))
     }
 
+    /// Makes no Tab visible (e.g. a Worktree with no sessions is selected): ends the visible Tab's
+    /// stream, and its new output counts as unread again.
+    pub fn hide_tabs(&self) {
+        let previous = self
+            .inner
+            .visible_tab
+            .lock()
+            .expect("visible tab lock")
+            .take();
+        if let Some((previous, _stop_previous)) = previous {
+            previous.set_visible(false);
+        } // dropping `_stop_previous` ends that stream
+    }
+
     /// Makes `id` the visible Tab: ends the previous visible Tab's stream, marks this session read,
     /// and streams its transcript: a `Reset` with the latest page, then batched changes.
     pub fn show_session(&self, id: SessionId) -> Result<TranscriptStream, CoreError> {
@@ -530,19 +547,26 @@ impl Core {
 }
 
 impl Inner {
+    /// Re-lists the Worktrees. Refreshes run one at a time (so an older listing can't overwrite a
+    /// newer one), and a listing is dropped if another Workspace was opened meanwhile.
     async fn refresh_worktrees(&self) {
-        let Some(root) = self
-            .state
-            .lock()
-            .expect("state lock")
-            .workspace
-            .as_ref()
-            .map(|w| w.root.clone())
-        else {
+        let _one_at_a_time = self.refresh_lock.lock().await;
+        let root_now = || {
+            self.state
+                .lock()
+                .expect("state lock")
+                .workspace
+                .as_ref()
+                .map(|w| w.root.clone())
+        };
+        let Some(root) = root_now() else {
             return;
         };
         let listed = worktrees::list(&root).await;
         let mut state = self.state.lock().expect("state lock");
+        if state.workspace.as_ref().map(|w| &w.root) != Some(&root) {
+            return;
+        }
         if state.worktrees != listed {
             state.worktrees = listed.clone();
             let _ = self
@@ -554,6 +578,8 @@ impl Inner {
     /// Re-lists the Worktrees whenever the repository's `worktrees/` folder changes (debounced, so
     /// one `git worktree add` triggers one refresh).
     async fn watch_worktrees(self: &Arc<Self>, root: &Path) {
+        // Stop watching the previous Workspace first, even if watching this one fails.
+        self.discovery.lock().expect("discovery lock").take();
         let Some(common_dir) = git::common_dir(root).await else {
             return;
         };
