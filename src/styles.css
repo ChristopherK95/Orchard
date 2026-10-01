@@ -119,8 +119,9 @@ select { font: inherit; color: inherit; background: var(--bg3); border: 1px soli
 .permission .error { margin: 0; padding: 0 12px 8px; }
 .diff { margin: 0; padding: 6px 0; background: #111318; font: 12.5px/1.55 var(--mono); overflow-x: auto; max-height: 360px; }
 .diff .line { display: block; padding: 0 12px; white-space: pre; }
-.diff .added { background: rgba(127, 209, 139, 0.1); color: var(--added); }
-.diff .removed { background: rgba(239, 107, 115, 0.1); color: var(--removed); }
+/* Syntax colours sit on a clear green/red line background (as on GitHub), so +/− stays readable. */
+.diff .added { background: rgba(127, 209, 139, 0.18); color: var(--added); box-shadow: inset 3px 0 rgba(127, 209, 139, 0.7); }
+.diff .removed { background: rgba(239, 107, 115, 0.18); color: var(--removed); box-shadow: inset 3px 0 rgba(239, 107, 115, 0.7); }
 .diff .hunk { color: var(--hunk); }
 
 .composer-side { display: flex; flex-direction: column; gap: 6px; }

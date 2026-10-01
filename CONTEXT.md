@@ -25,6 +25,10 @@ The UI surface of one Agent session. Hopping between Worktrees means switching o
 The branch or commit a Worktree's branch is compared against in "Changes vs base". Defaults to `origin/<default branch>`.
 _Avoid_: Upstream (that's the branch it pushes to), target
 
+**Tool call**:
+One action the Agent takes with a tool (reading or editing a file, running a command, …), shown as a compact row in the transcript with its status.
+_Avoid_: Step, action
+
 **Worktree setup**:
 The per-repo list of commands run in a newly created Worktree before its first Agent session starts.
 _Avoid_: Bootstrap, init script

@@ -1,6 +1,6 @@
 // Walking skeleton view (ticket 01): prerequisite gate → open a Workspace → one Tab with a
 // streaming transcript and a composer. It only renders core state and sends commands (ADR 0003).
-import { createEffect, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import { batch, createEffect, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import {
   core,
@@ -190,21 +190,24 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     if (state !== "working") turnWaiters.delete(id);
   };
 
+  /** Prepends the page before the loaded items; returns how many items were added. */
   let loadingEarlier = false;
-  const loadEarlier = async () => {
+  const loadEarlier = async (): Promise<number> => {
     const id = activeId();
     const before = start();
-    if (id === null || before === 0 || loadingEarlier) return;
+    if (id === null || before === 0 || loadingEarlier) return 0;
     loadingEarlier = true;
     const token = currentShow;
     try {
       const page = await core.transcriptPageBefore(id, before);
       // Only prepend if nothing moved underneath us (another Tab shown, or a Reset).
-      if (token !== currentShow || start() !== before) return;
-      setItems((current) => [...page.items, ...current]);
-      setStart(page.start);
-    } catch (err) {
-      setError(String(err));
+      if (token !== currentShow || start() !== before) return 0;
+      // Items and start change together, so row keys (start + index) never point at the wrong item.
+      batch(() => {
+        setItems((current) => [...page.items, ...current]);
+        setStart(page.start);
+      });
+      return page.items.length;
     } finally {
       loadingEarlier = false;
     }
@@ -286,7 +289,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       <Show when={session()} keyed>
         {(s) => (
           <>
-            <Transcript sessionId={s.id} items={items} start={start()} hasEarlier={start() > 0} onLoadEarlier={loadEarlier} />
+            <Transcript sessionId={s.id} items={items} start={start()} onLoadEarlier={loadEarlier} onError={setError} />
             <Composer session={s} />
           </>
         )}

@@ -1,9 +1,11 @@
 // Static syntax highlighting with Lezer grammars (ticket 02): highlighted HTML, no editor instance.
 // Grammars load on first use; anything rendered before its grammar arrives shows as plain text,
-// then re-renders because `highlightCode` reads the `grammarsLoaded` signal.
+// then re-renders, because `highlightCode` reads that language's "loaded" signal (and only that
+// language's, so loading one grammar doesn't re-render code in others).
 import type { Parser } from "@lezer/common";
 import { classHighlighter, highlightCode as lezerHighlight } from "@lezer/highlight";
-import { createSignal } from "solid-js";
+import { type Accessor, createSignal, type Setter } from "solid-js";
+import { escapeHtml } from "./html";
 
 type Loader = () => Promise<Parser>;
 
@@ -36,9 +38,24 @@ const ALIASES: Record<string, string> = {
   scss: "css", less: "css", golang: "go",
 };
 
-const parsers = new Map<string, Parser>();
-const loading = new Set<string>();
-const [grammarsLoaded, setGrammarsLoaded] = createSignal(0);
+interface Grammar {
+  parser: Parser | undefined;
+  loaded: Accessor<boolean>;
+  setLoaded: Setter<boolean>;
+  loading: boolean;
+}
+
+const grammars = new Map<string, Grammar>();
+
+function grammar(language: string): Grammar {
+  let g = grammars.get(language);
+  if (!g) {
+    const [loaded, setLoaded] = createSignal(false);
+    g = { parser: undefined, loaded, setLoaded, loading: false };
+    grammars.set(language, g);
+  }
+  return g;
+}
 
 /** The grammar for a fence label (`ts`, `rust`, …), or `undefined` if none is known. */
 export function languageOf(label: string | null | undefined): string | undefined {
@@ -54,25 +71,21 @@ export function languageOfPath(path: string | null | undefined): string | undefi
   return ext && ext !== path ? languageOf(ext) : undefined;
 }
 
-export function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-}
-
 /**
  * `code` as highlighted HTML (lines separated by "\n"), or escaped plain text while the grammar
- * loads or if the language is unknown. Reactive: re-runs once a grammar arrives.
+ * loads or if the language is unknown. Reactive: re-runs once that language's grammar arrives.
  */
 export function highlightCode(code: string, language: string | undefined): string {
-  grammarsLoaded(); // re-render when a grammar finishes loading
-  const parser = language ? parsers.get(language) : undefined;
-  if (!parser) {
-    if (language) void load(language);
+  if (!language) return escapeHtml(code);
+  const g = grammar(language);
+  if (!g.loaded()) {
+    void load(language, g);
     return escapeHtml(code);
   }
   let html = "";
   lezerHighlight(
     code,
-    parser.parse(code),
+    g.parser!.parse(code),
     classHighlighter,
     (text, classes) => (html += classes ? `<span class="${classes}">${escapeHtml(text)}</span>` : escapeHtml(text)),
     () => (html += "\n"),
@@ -80,15 +93,15 @@ export function highlightCode(code: string, language: string | undefined): strin
   return html;
 }
 
-async function load(language: string) {
-  if (loading.has(language) || parsers.has(language)) return;
-  loading.add(language);
+async function load(language: string, g: Grammar) {
+  if (g.loading || g.parser) return;
+  g.loading = true;
   try {
-    parsers.set(language, await LOADERS[language]());
-    setGrammarsLoaded((n) => n + 1);
+    g.parser = await LOADERS[language]();
+    g.setLoaded(true);
   } catch {
     // Leave it plain: an unloadable grammar shouldn't break the chat.
   } finally {
-    loading.delete(language);
+    g.loading = false;
   }
 }
