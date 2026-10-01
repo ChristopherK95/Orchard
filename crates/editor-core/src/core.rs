@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::acp::{AcpError, AdapterCommand, Connection, Incoming, Responder, PROTOCOL_VERSION};
-use crate::create_worktree::{self, BranchInfo, NewWorktree};
+use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 use crate::git;
 use crate::permissions;
 use crate::session::{
@@ -39,8 +39,12 @@ pub enum CoreError {
     BranchExists(String),
     #[error("`{branch}` is already checked out in {}; open that Worktree instead", worktree.display())]
     BranchCheckedOut { branch: String, worktree: PathBuf },
-    #[error("{} already exists; pick another branch name", .0.display())]
-    WorktreeFolderExists(PathBuf),
+    #[error("there is no branch `{0}`")]
+    UnknownBranch(String),
+    #[error("`{0}` isn't a branch, tag or commit in this repository")]
+    UnknownStartPoint(String),
+    #[error("git created {} but doesn't list it as a Worktree", .0.display())]
+    WorktreeNotListed(PathBuf),
     #[error("git: {0}")]
     Git(String),
     #[error("no such Agent session")]
@@ -250,108 +254,52 @@ impl Core {
         self.inner.refresh_worktrees().await;
     }
 
-    /// Creates a Worktree next to the repo (`<repo>.worktrees/<slug>/`) and returns it, listed.
-    /// A new branch starts from `base`, or by default from `origin/<default>` after a fetch.
-    pub async fn create_worktree(&self, spec: NewWorktree) -> Result<WorktreeInfo, CoreError> {
+    /// Creates a Worktree next to the repo (`<repo>.worktrees/<folder>/`) and returns it, listed.
+    /// A new branch starts from `start_point`, or by default from `origin/<default>` after a fetch.
+    pub async fn create_worktree(&self, spec: NewWorktree) -> Result<CreatedWorktree, CoreError> {
         let root = self.workspace()?.root;
-        let git_error = CoreError::Git;
-        let path = match &spec {
-            NewWorktree::NewBranch { name, base } => {
-                let branches = git::branches(&root).await.map_err(git_error)?;
-                if branches.iter().any(|b| !b.remote && b.name == *name) {
-                    return Err(CoreError::BranchExists(name.clone()));
-                }
-                let base = match base {
-                    Some(base) => base.clone(),
-                    None => {
-                        // Offline? Start from what we last fetched rather than failing.
-                        let _ = git::fetch_origin(&root).await;
-                        git::default_base(&root).await
-                    }
-                };
-                let path = create_worktree::folder_for(&root, name);
-                ensure_free(&path)?;
-                git::worktree_add_new_branch(&root, &path, name, &base)
-                    .await
-                    .map_err(git_error)?;
-                path
-            }
-            NewWorktree::ExistingBranch { name } => {
-                let branches = git::branches(&root).await.map_err(git_error)?;
-                let branch = branches
-                    .iter()
-                    .find(|b| b.name == *name)
-                    .ok_or_else(|| CoreError::Git(format!("there is no branch `{name}`")))?;
-                let local = create_worktree::local_name(&branch.name, branch.remote);
-                // A remote branch may already have a local branch of the same name: use that.
-                let local_branch = branches.iter().find(|b| !b.remote && b.name == local);
-                if let Some(worktree) = local_branch.and_then(|b| b.checked_out_in.clone()) {
-                    return Err(CoreError::BranchCheckedOut {
-                        branch: local.to_owned(),
-                        worktree: worktrees::normalize(worktree),
-                    });
-                }
-                let path = create_worktree::folder_for(&root, local);
-                ensure_free(&path)?;
-                if local_branch.is_some() {
-                    git::worktree_add_existing(&root, &path, local).await
-                } else {
-                    git::worktree_add_tracking(&root, &path, local, &branch.name).await
-                }
-                .map_err(git_error)?;
-                path
-            }
-        };
+        let (path, warning) = create_worktree::create(&root, &spec).await?;
         self.inner.refresh_worktrees().await;
         let path = worktrees::normalize(path);
-        self.worktrees()
+        let worktree = self
+            .worktrees()
             .into_iter()
             .find(|w| w.path == path)
-            .ok_or_else(|| {
-                CoreError::Git(format!(
-                    "git created {} but doesn't list it",
-                    path.display()
-                ))
-            })
+            .ok_or(CoreError::WorktreeNotListed(path))?;
+        Ok(CreatedWorktree { worktree, warning })
     }
 
     /// Local and remote branches, for the "existing branch" picker. Fetches first, so a colleague's
-    /// branch pushed a minute ago is there (offline, it lists what was last fetched).
-    pub async fn branches(&self) -> Result<Vec<BranchInfo>, CoreError> {
+    /// branch pushed a minute ago is there; if that fails, it says so and lists what was last fetched.
+    pub async fn branches(&self) -> Result<BranchList, CoreError> {
         let root = self.workspace()?.root;
-        let _ = git::fetch_origin(&root).await;
-        Ok(git::branches(&root)
+        let warning = git::fetch_origin(&root)
+            .await
+            .err()
+            .map(|err| format!("Couldn't fetch origin ({err}); showing branches as last fetched."));
+        let branches = git::branches(&root)
             .await
             .map_err(CoreError::Git)?
             .into_iter()
             .map(|b| BranchInfo {
-                name: b.name,
-                remote: b.remote,
                 checked_out_in: b.checked_out_in.map(worktrees::normalize),
+                ..b
             })
-            .collect())
+            .collect();
+        Ok(BranchList { branches, warning })
     }
 
-    /// A free `agent/task-N` name for a new Worktree's branch.
-    pub async fn suggest_branch_name(&self) -> String {
-        let taken: Vec<String> = match self.workspace() {
-            Ok(w) => git::branches(&w.root)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|b| !b.remote)
-                .map(|b| b.name)
-                .collect(),
-            Err(_) => vec![],
-        };
-        create_worktree::suggest_name(&taken)
+    /// A free `agent/task-N` name (not taken locally or on a remote) for a new Worktree's branch.
+    pub async fn suggest_branch_name(&self) -> Result<String, CoreError> {
+        let root = self.workspace()?.root;
+        let branches = git::branches(&root).await.map_err(CoreError::Git)?;
+        Ok(create_worktree::suggest_name(&branches))
     }
 
-    /// What a new branch starts from by default: `origin/<default>`, else the main checkout's branch.
-    pub async fn default_base(&self) -> Result<String, CoreError> {
-        Ok(git::default_base(&self.workspace()?.root).await)
+    /// Where a new branch starts by default: `origin/<default>`, else the main checkout's branch.
+    pub async fn default_start_point(&self) -> Result<String, CoreError> {
+        Ok(git::default_start_point(&self.workspace()?.root).await)
     }
-
     /// Starts a new Agent session in the Workspace's main checkout.
     pub async fn new_session(&self) -> Result<SessionId, CoreError> {
         let root = self.workspace()?.root;
@@ -934,12 +882,4 @@ impl Session {
             Err(broadcast::error::RecvError::Closed) => None,
         }
     }
-}
-
-/// A new Worktree's folder must not exist yet (git would refuse a non-empty one anyway).
-fn ensure_free(path: &Path) -> Result<(), CoreError> {
-    if path.exists() {
-        return Err(CoreError::WorktreeFolderExists(path.to_owned()));
-    }
-    Ok(())
 }

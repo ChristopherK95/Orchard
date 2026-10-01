@@ -34,9 +34,9 @@ export interface WorktreeInfo {
   changed: number;
 }
 
-/** What "＋ worktree" creates: a new branch from a base, or an existing (local or remote) branch. */
+/** What "＋ worktree" creates: a new branch from a start point, or an existing (local or remote) branch. */
 export type NewWorktree =
-  | { kind: "newBranch"; name: string; base: string | null }
+  | { kind: "newBranch"; name: string; startPoint: string | null }
   | { kind: "existingBranch"; name: string };
 
 export interface BranchInfo {
@@ -45,6 +45,18 @@ export interface BranchInfo {
   remote: boolean;
   /** Where a local branch is checked out; such a branch can't be checked out again. */
   checkedOutIn: string | null;
+}
+
+export interface CreatedWorktree {
+  worktree: WorktreeInfo;
+  /** E.g. the fetch failed, so it started from what was fetched last. */
+  warning: string | null;
+}
+
+export interface BranchList {
+  branches: BranchInfo[];
+  /** Set when origin couldn't be fetched (the list is as last fetched). */
+  warning: string | null;
 }
 
 export interface MissingPrerequisite {
@@ -120,11 +132,11 @@ export const core = {
   newSessionIn: (worktree: string) => invoke<SessionId>("new_session_in", { worktree }),
   worktrees: () => invoke<WorktreeInfo[]>("worktrees"),
   refreshWorktrees: () => invoke<void>("refresh_worktrees"),
-  createWorktree: (spec: NewWorktree) => invoke<WorktreeInfo>("create_worktree", { spec }),
+  createWorktree: (spec: NewWorktree) => invoke<CreatedWorktree>("create_worktree", { spec }),
   /** Fetches first, so remote branches are current. */
-  branches: () => invoke<BranchInfo[]>("branches"),
+  branches: () => invoke<BranchList>("branches"),
   suggestBranchName: () => invoke<string>("suggest_branch_name"),
-  defaultBase: () => invoke<string>("default_base"),
+  defaultStartPoint: () => invoke<string>("default_start_point"),
   sendPrompt: (sessionId: SessionId, text: string) => invoke<void>("send_prompt", { sessionId, text }),
   answerPermission: (sessionId: SessionId, toolCallId: string, optionId: string) =>
     invoke<void>("answer_permission", { sessionId, toolCallId, optionId }),

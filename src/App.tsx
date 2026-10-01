@@ -125,6 +125,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   const [activeWorktree, setActiveWorktree] = createSignal(props.workspace.root);
   const lastSessionIn = new Map<string, SessionId>();
   const [creatingWorktree, setCreatingWorktree] = createSignal(false);
+  /** Something to know that isn't an error (e.g. a fetch failed, so a Worktree started from stale refs). */
+  const [notice, setNotice] = createSignal("");
   const sessionsIn = (path: string) => order().map((id) => sessions[id]).filter((s) => s.worktree === path);
   const rowWorktrees = (): WorktreeTab[] => {
     const listed = worktrees();
@@ -315,9 +317,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       <Show when={creatingWorktree()}>
         <NewWorktreeDialog
           activeBranch={worktree()?.branch ?? null}
-          onCreated={async (w) => {
-            setWorktrees((list) => (list.some((x) => x.path === w.path) ? list : [...list, w]));
-            await newSession(w.path);
+          onCreated={(created) => {
+            // The Worktree exists now: close, and start its session in the main view, where a
+            // failure leaves the (empty) Worktree selected with "＋ session" to retry.
+            setCreatingWorktree(false);
+            setNotice(created.warning ?? "");
+            void newSession(created.worktree.path);
           }}
           onGoToWorktree={(path) => {
             setCreatingWorktree(false);
@@ -347,6 +352,11 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       <Show when={sharing() > 1}>
         <p class="warning banner">
           {sharing()} Agent sessions share this Worktree, so they can edit the same files.
+        </p>
+      </Show>
+      <Show when={notice()}>
+        <p class="warning banner" onClick={() => setNotice("")} title="Click to dismiss">
+          {notice()}
         </p>
       </Show>
       <Show when={error()}>

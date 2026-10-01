@@ -1,68 +1,85 @@
-// "＋ worktree" (ticket 07): a new branch (prefilled agent/task-N, base origin/<default> after a
-// fetch, or another base) or an existing branch, created next to the repo. Enter accepts the
-// defaults; the caller starts an Agent session in the new Worktree.
+// "＋ worktree" (ticket 07): a new branch (prefilled agent/task-N, starting from origin/<default>
+// after a fetch, or elsewhere) or an existing branch, created next to the repo. Enter accepts the
+// defaults. The dialog hands the new Worktree back as soon as it exists; the caller starts the
+// Agent session (so a failure there doesn't leave the dialog stuck on an already-created branch).
 import { createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import { type BranchInfo, core, type NewWorktree, type WorktreeInfo } from "./core";
+import { type BranchInfo, core, type CreatedWorktree, type NewWorktree } from "./core";
 
-type BaseChoice = "default" | "active" | "other";
+type StartChoice = "default" | "active" | "other";
 
 export function NewWorktreeDialog(props: {
-  /** The active Worktree's branch, offered as a base. */
+  /** The active Worktree's branch, offered as a start point. */
   activeBranch: string | null;
-  onCreated: (worktree: WorktreeInfo) => Promise<void>;
+  onCreated: (created: CreatedWorktree) => void;
   onGoToWorktree: (path: string) => void;
   onClose: () => void;
 }) {
   const [mode, setMode] = createSignal<"new" | "existing">("new");
   const [name, setName] = createSignal("");
-  const [baseChoice, setBaseChoice] = createSignal<BaseChoice>("default");
-  const [otherBase, setOtherBase] = createSignal("");
+  const [typed, setTyped] = createSignal(false);
+  const [startChoice, setStartChoice] = createSignal<StartChoice>("default");
+  const [otherStart, setOtherStart] = createSignal("");
   const [filter, setFilter] = createSignal("");
   const [busy, setBusy] = createSignal("");
   const [error, setError] = createSignal("");
-  const [defaultBase] = createResource(() => core.defaultBase());
+  const [taken, setTaken] = createSignal<BranchInfo | null>(null);
+  const [defaultStart] = createResource(() => core.defaultStartPoint());
   // Fetching for the branch list can take a moment; only start it when that mode is chosen.
-  const [branches] = createResource(() => mode() === "existing", () => core.branches());
+  const [branchList] = createResource(() => mode() === "existing", () => core.branches());
+  // The suggested name, awaited by Enter if it hasn't arrived yet.
+  const suggestion = core.suggestBranchName();
   let nameInput!: HTMLInputElement;
 
-  onMount(async () => {
-    setName(await core.suggestBranchName());
-    nameInput.select();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !busy() && props.onClose();
-    window.addEventListener("keydown", onKey);
-    onCleanup(() => window.removeEventListener("keydown", onKey));
+  // Registered before anything is awaited, so Solid ties the cleanup to this dialog.
+  const onKey = (e: KeyboardEvent) => e.key === "Escape" && !busy() && props.onClose();
+  window.addEventListener("keydown", onKey);
+  onCleanup(() => window.removeEventListener("keydown", onKey));
+
+  onMount(() => {
+    nameInput.focus();
+    void suggestion
+      .then((suggested) => {
+        if (typed()) return; // don't overwrite what the user started typing
+        setName(suggested);
+        nameInput.select();
+      })
+      .catch((err) => setError(String(err)));
   });
 
   const shown = createMemo(() => {
     const words = filter().toLowerCase();
-    return (branches() ?? []).filter((b) => b.name.toLowerCase().includes(words));
+    return (branchList()?.branches ?? []).filter((b) => b.name.toLowerCase().includes(words));
   });
 
   const create = async (spec: NewWorktree) => {
     if (busy()) return;
     setError("");
-    setBusy(spec.kind === "newBranch" && spec.base === null ? "Fetching and creating…" : "Creating…");
+    setTaken(null);
+    setBusy("Fetching origin and creating…");
     try {
-      await props.onCreated(await core.createWorktree(spec));
-      props.onClose();
+      props.onCreated(await core.createWorktree(spec));
     } catch (err) {
       setError(String(err));
-    } finally {
       setBusy("");
     }
   };
 
-  const createNew = (e: Event) => {
+  const createNew = async (e: Event) => {
     e.preventDefault();
-    const branch = name().trim();
+    const branch = name().trim() || (typed() ? "" : await suggestion.catch(() => ""));
     if (!branch) return setError("Give the branch a name.");
-    const base = baseChoice() === "default" ? null : baseChoice() === "active" ? props.activeBranch : otherBase().trim() || null;
-    if (baseChoice() === "other" && !base) return setError("Name the branch or commit to start from.");
-    void create({ kind: "newBranch", name: branch, base });
+    const startPoint =
+      startChoice() === "default" ? null : startChoice() === "active" ? props.activeBranch : otherStart().trim() || null;
+    if (startChoice() === "other" && !startPoint) return setError("Name the branch, tag or commit to start from.");
+    void create({ kind: "newBranch", name: branch, startPoint });
   };
 
-  const pick = (b: BranchInfo) =>
-    b.checkedOutIn ? props.onGoToWorktree(b.checkedOutIn) : void create({ kind: "existingBranch", name: b.name });
+  const pick = (b: BranchInfo) => {
+    if (b.checkedOutIn) {
+      setError("");
+      setTaken(b); // explain why it can't be used, and offer to go there instead
+    } else void create({ kind: "existingBranch", name: b.name });
+  };
 
   return (
     <div class="modal-backdrop" onClick={(e) => e.target === e.currentTarget && !busy() && props.onClose()}>
@@ -71,31 +88,44 @@ export function NewWorktreeDialog(props: {
           <b>New Worktree</b>
           <span class="grow" />
           <div class="segmented">
-            <button classList={{ on: mode() === "new" }} onClick={() => setMode("new")}>
+            <button classList={{ on: mode() === "new" }} onClick={() => setMode("new")} disabled={!!busy()}>
               New branch
             </button>
-            <button classList={{ on: mode() === "existing" }} onClick={() => setMode("existing")}>
+            <button classList={{ on: mode() === "existing" }} onClick={() => setMode("existing")} disabled={!!busy()}>
               Existing branch
             </button>
           </div>
         </div>
 
         <Show when={mode() === "new"}>
-          <form class="modal-body" onSubmit={createNew}>
+          <form class="modal-body" onSubmit={(e) => void createNew(e)}>
             <label>
               Branch
-              <input ref={nameInput} class="mono" value={name()} onInput={(e) => setName(e.currentTarget.value)} spellcheck={false} />
+              <input
+                ref={nameInput}
+                class="mono"
+                value={name()}
+                placeholder="agent/…"
+                onInput={(e) => {
+                  setTyped(true);
+                  setName(e.currentTarget.value);
+                }}
+                spellcheck={false}
+              />
             </label>
             <label>
               Start from
-              <select value={baseChoice()} onChange={(e) => setBaseChoice(e.currentTarget.value as BaseChoice)}>
-                <option value="default">{defaultBase() ?? "origin/<default>"} (fetched first)</option>
+              <select value={startChoice()} onChange={(e) => setStartChoice(e.currentTarget.value as StartChoice)}>
+                <option value="default">
+                  {defaultStart() ?? "origin/<default>"}
+                  {defaultStart()?.startsWith("origin/") ? " (fetched first)" : ""}
+                </option>
                 <Show when={props.activeBranch}>{(b) => <option value="active">{b()} (this Worktree)</option>}</Show>
-                <option value="other">Another branch or commit…</option>
+                <option value="other">Another branch, tag or commit…</option>
               </select>
             </label>
-            <Show when={baseChoice() === "other"}>
-              <input class="mono" placeholder="branch, tag or commit" value={otherBase()} onInput={(e) => setOtherBase(e.currentTarget.value)} autofocus />
+            <Show when={startChoice() === "other"}>
+              <input class="mono" placeholder="branch, tag or commit" value={otherStart()} onInput={(e) => setOtherStart(e.currentTarget.value)} autofocus />
             </Show>
             <p class="muted small">Created next to the repo, then an Agent session starts in it.</p>
             <div class="modal-actions">
@@ -112,8 +142,9 @@ export function NewWorktreeDialog(props: {
         <Show when={mode() === "existing"}>
           <div class="modal-body">
             <input placeholder="Filter branches" value={filter()} onInput={(e) => setFilter(e.currentTarget.value)} autofocus />
+            <Show when={branchList()?.warning}>{(w) => <p class="warning small">{w()}</p>}</Show>
             <div class="branch-list">
-              <Show when={!branches.loading} fallback={<p class="muted">Fetching branches…</p>}>
+              <Show when={!branchList.loading} fallback={<p class="muted">Fetching branches…</p>}>
                 <For each={shown()} fallback={<p class="muted">No matching branches.</p>}>
                   {(b) => (
                     <button class="branch" classList={{ taken: !!b.checkedOutIn }} disabled={!!busy()} onClick={() => pick(b)}>
@@ -122,14 +153,23 @@ export function NewWorktreeDialog(props: {
                         <span class="muted small">remote</span>
                       </Show>
                       <span class="grow" />
-                      <Show when={b.checkedOutIn} fallback={<span class="muted small">check out</span>}>
-                        <span class="small">checked out · Go to that Worktree</span>
-                      </Show>
+                      <span class="muted small">{b.checkedOutIn ? "checked out" : "check out"}</span>
                     </button>
                   )}
                 </For>
               </Show>
             </div>
+            <Show when={taken()}>
+              {(b) => (
+                <div class="taken-note">
+                  <span>
+                    <span class="mono">{b().name}</span> is already checked out in <span class="mono">{b().checkedOutIn}</span>, and
+                    a branch can only be checked out in one Worktree.
+                  </span>
+                  <button onClick={() => props.onGoToWorktree(b().checkedOutIn!)}>Go to that Worktree</button>
+                </div>
+              )}
+            </Show>
             <Show when={busy()}>
               <p class="muted">{busy()}</p>
             </Show>

@@ -6,8 +6,11 @@
 //! editor's own commands too.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use tokio::process::Command;
+
+use crate::create_worktree::BranchInfo;
 
 fn git(cwd: &Path) -> Command {
     let mut cmd = crate::process::command("git");
@@ -36,20 +39,31 @@ async fn run(cwd: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
-/// Fetches `origin` (if the repository has one) so new Worktrees start from what's upstream now.
-pub(crate) async fn fetch_origin(repo: &Path) -> Result<(), String> {
-    let remotes = run(repo, &["remote"]).await?;
-    if !remotes.lines().any(|r| r.trim() == "origin") {
-        return Ok(());
-    }
-    run(repo, &["fetch", "--quiet", "--prune", "origin"])
+/// How long a fetch may take before the editor gives up and uses what was fetched last (a login
+/// prompt from a credential helper would otherwise hang it).
+const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+
+async fn has_origin(repo: &Path) -> bool {
+    run(repo, &["remote"])
         .await
-        .map(|_| ())
+        .is_ok_and(|remotes| remotes.lines().any(|r| r.trim() == "origin"))
 }
 
-/// `origin/<default branch>` if origin has one, else the main checkout's branch (or HEAD).
-pub(crate) async fn default_base(repo: &Path) -> String {
-    if let Some(origin_head) = output(
+/// Fetches `origin` (if the repository has one) so new Worktrees start from what's upstream now.
+pub(crate) async fn fetch_origin(repo: &Path) -> Result<(), String> {
+    if !has_origin(repo).await {
+        return Ok(());
+    }
+    match tokio::time::timeout(FETCH_TIMEOUT, run(repo, &["fetch", "--quiet", "origin"])).await {
+        Ok(result) => result.map(|_| ()),
+        Err(_) => Err(format!("timed out after {} s", FETCH_TIMEOUT.as_secs())),
+    }
+}
+
+/// Where a new branch starts by default: `origin/HEAD`'s target, else origin's copy of the main
+/// checkout's branch (or `origin/main` / `origin/master`), else the main checkout's own branch.
+pub(crate) async fn default_start_point(repo: &Path) -> String {
+    let origin_head = output(
         repo,
         &[
             "symbolic-ref",
@@ -58,27 +72,48 @@ pub(crate) async fn default_base(repo: &Path) -> String {
             "refs/remotes/origin/HEAD",
         ],
     )
-    .await
-    {
+    .await;
+    if let Some(origin_head) = origin_head {
         return origin_head.trim().to_owned();
     }
-    output(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+    let local = output(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"])
         .await
-        .map(|b| b.trim().to_owned())
-        .unwrap_or_else(|| "HEAD".into())
+        .map(|b| b.trim().to_owned());
+    if has_origin(repo).await {
+        let candidates = local
+            .iter()
+            .cloned()
+            .chain(["main".into(), "master".into()]);
+        for branch in candidates {
+            let remote = format!("origin/{branch}");
+            if is_commit(repo, &remote).await {
+                return remote;
+            }
+        }
+    }
+    local.unwrap_or_else(|| "HEAD".into())
 }
 
-/// A local or remote-tracking branch.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ListedBranch {
-    /// `feat/x` for a local branch, `origin/feat/x` for a remote one.
-    pub(crate) name: String,
-    pub(crate) remote: bool,
-    /// The Worktree a local branch is checked out in, if any.
-    pub(crate) checked_out_in: Option<PathBuf>,
+/// Whether `rev` names a commit (branch, tag, id, …). `--end-of-options` stops git reading a
+/// `rev` that starts with `-` as an option.
+pub(crate) async fn is_commit(repo: &Path, rev: &str) -> bool {
+    let commit = format!("{rev}^{{commit}}");
+    run(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            &commit,
+        ],
+    )
+    .await
+    .is_ok()
 }
 
-pub(crate) async fn branches(repo: &Path) -> Result<Vec<ListedBranch>, String> {
+/// Local and remote-tracking branches, with where each local one is checked out.
+pub(crate) async fn branches(repo: &Path) -> Result<Vec<BranchInfo>, String> {
     let out = run(
         repo,
         &[
@@ -95,14 +130,14 @@ pub(crate) async fn branches(repo: &Path) -> Result<Vec<ListedBranch>, String> {
             let (refname, worktree) = line.split_once('\0').unwrap_or((line, ""));
             let checked_out_in = (!worktree.is_empty()).then(|| PathBuf::from(worktree));
             if let Some(name) = refname.strip_prefix("refs/heads/") {
-                return Some(ListedBranch {
+                return Some(BranchInfo {
                     name: name.to_owned(),
                     remote: false,
                     checked_out_in,
                 });
             }
             let name = refname.strip_prefix("refs/remotes/")?;
-            (!name.ends_with("/HEAD")).then(|| ListedBranch {
+            (!name.ends_with("/HEAD")).then(|| BranchInfo {
                 name: name.to_owned(),
                 remote: true,
                 checked_out_in: None,
@@ -111,20 +146,29 @@ pub(crate) async fn branches(repo: &Path) -> Result<Vec<ListedBranch>, String> {
         .collect())
 }
 
-/// Adds a Worktree at `path` on a new branch `name` starting at `base`.
+/// `git worktree add <options…> <path> <rest…>`.
+async fn worktree_add(
+    repo: &Path,
+    options: &[&str],
+    path: &Path,
+    rest: &[&str],
+) -> Result<(), String> {
+    let path = path.to_string_lossy();
+    let mut args = vec!["worktree", "add", "--quiet"];
+    args.extend_from_slice(options);
+    args.push(&path);
+    args.extend_from_slice(rest);
+    run(repo, &args).await.map(|_| ())
+}
+
+/// Adds a Worktree at `path` on a new branch `name` starting at `start` (already verified).
 pub(crate) async fn worktree_add_new_branch(
     repo: &Path,
     path: &Path,
     name: &str,
-    base: &str,
+    start: &str,
 ) -> Result<(), String> {
-    let path = path.to_string_lossy();
-    run(
-        repo,
-        &["worktree", "add", "--quiet", "-b", name, &path, base],
-    )
-    .await
-    .map(|_| ())
+    worktree_add(repo, &["-b", name], path, &[start]).await
 }
 
 /// Adds a Worktree at `path` on the existing local branch `name`.
@@ -133,10 +177,7 @@ pub(crate) async fn worktree_add_existing(
     path: &Path,
     name: &str,
 ) -> Result<(), String> {
-    let path = path.to_string_lossy();
-    run(repo, &["worktree", "add", "--quiet", &path, name])
-        .await
-        .map(|_| ())
+    worktree_add(repo, &[], path, &[name]).await
 }
 
 /// Adds a Worktree at `path` on a new local branch `name` tracking the remote branch `remote`.
@@ -146,15 +187,7 @@ pub(crate) async fn worktree_add_tracking(
     name: &str,
     remote: &str,
 ) -> Result<(), String> {
-    let path = path.to_string_lossy();
-    run(
-        repo,
-        &[
-            "worktree", "add", "--quiet", "--track", "-b", name, &path, remote,
-        ],
-    )
-    .await
-    .map(|_| ())
+    worktree_add(repo, &["--track", "-b", name], path, &[remote]).await
 }
 
 /// The root of the checkout containing `path`, or `None` if it isn't inside a git repository.

@@ -5,9 +5,9 @@
 use std::path::PathBuf;
 
 use editor_core::{
-    check_prerequisites, AdapterCommand, BranchInfo, Core, CoreConfig, MissingPrerequisite,
-    NewWorktree, PermissionMode, SessionId, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo,
-    WorktreeInfo,
+    check_prerequisites, AdapterCommand, BranchList, Core, CoreConfig, CreatedWorktree,
+    MissingPrerequisite, NewWorktree, PermissionMode, SessionId, Tools, TranscriptDelta,
+    TranscriptPage, WorkspaceInfo, WorktreeInfo,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -74,25 +74,27 @@ fn worktrees(core: State<'_, Core>) -> Vec<WorktreeInfo> {
 }
 
 #[tauri::command]
-async fn create_worktree(core: State<'_, Core>, spec: NewWorktree) -> CommandResult<WorktreeInfo> {
+async fn create_worktree(
+    core: State<'_, Core>,
+    spec: NewWorktree,
+) -> CommandResult<CreatedWorktree> {
     core.create_worktree(spec).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn branches(core: State<'_, Core>) -> CommandResult<Vec<BranchInfo>> {
+async fn branches(core: State<'_, Core>) -> CommandResult<BranchList> {
     core.branches().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn suggest_branch_name(core: State<'_, Core>) -> CommandResult<String> {
-    Ok(core.suggest_branch_name().await)
+    core.suggest_branch_name().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn default_base(core: State<'_, Core>) -> CommandResult<String> {
-    core.default_base().await.map_err(|e| e.to_string())
+async fn default_start_point(core: State<'_, Core>) -> CommandResult<String> {
+    core.default_start_point().await.map_err(|e| e.to_string())
 }
-
 /// Called when the window regains focus, in case Worktrees changed while the editor was away.
 #[tauri::command]
 async fn refresh_worktrees(core: State<'_, Core>) -> CommandResult<()> {
@@ -224,7 +226,7 @@ fn main() {
             create_worktree,
             branches,
             suggest_branch_name,
-            default_base,
+            default_start_point,
             send_prompt,
             answer_permission,
             set_permission_mode,
