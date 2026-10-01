@@ -13,7 +13,10 @@ pub struct ToolCommand {
 
 impl ToolCommand {
     fn system(program: &str) -> Self {
-        Self { program: program.into(), args: vec!["--version".into()] }
+        Self {
+            program: program.into(),
+            args: vec!["--version".into()],
+        }
     }
 }
 
@@ -26,7 +29,10 @@ pub struct Tools {
 
 impl Default for Tools {
     fn default() -> Self {
-        Self { git: ToolCommand::system("git"), node: ToolCommand::system("node") }
+        Self {
+            git: ToolCommand::system("git"),
+            node: ToolCommand::system("node"),
+        }
     }
 }
 
@@ -69,8 +75,14 @@ pub async fn check_prerequisites(tools: &Tools) -> Vec<MissingPrerequisite> {
 
 async fn check(command: &ToolCommand, requirement: &Requirement) -> Option<MissingPrerequisite> {
     let (major, minor) = requirement.minimum;
-    let needed = format!("{} {major}.{minor} or newer is required", requirement.display);
-    let output = crate::process::command(&command.program).args(&command.args).output().await;
+    let needed = format!(
+        "{} {major}.{minor} or newer is required",
+        requirement.display
+    );
+    let output = crate::process::command(&command.program)
+        .args(&command.args)
+        .output()
+        .await;
     let found = output
         .ok()
         .filter(|o| o.status.success())
@@ -79,7 +91,10 @@ async fn check(command: &ToolCommand, requirement: &Requirement) -> Option<Missi
         return Some(MissingPrerequisite {
             tool: requirement.tool.into(),
             found: None,
-            message: format!("{needed}, but `{}` was not found. {}", requirement.tool, requirement.install),
+            message: format!(
+                "{needed}, but `{}` was not found. {}",
+                requirement.tool, requirement.install
+            ),
         });
     };
     if parsed >= requirement.minimum {
@@ -96,10 +111,17 @@ async fn check(command: &ToolCommand, requirement: &Requirement) -> Option<Missi
 fn parse_version(output: &str) -> Option<(String, (u64, u64))> {
     output.split_whitespace().find_map(|word| {
         let word = word.trim_start_matches('v');
-        let parts: Vec<&str> = word.split('.').take_while(|p| p.parse::<u64>().is_ok()).take(3).collect();
+        let parts: Vec<&str> = word
+            .split('.')
+            .take_while(|p| p.parse::<u64>().is_ok())
+            .take(3)
+            .collect();
         if parts.len() < 2 {
             return None;
         }
-        Some((parts.join("."), (parts[0].parse().ok()?, parts[1].parse().ok()?)))
+        Some((
+            parts.join("."),
+            (parts[0].parse().ok()?, parts[1].parse().ok()?),
+        ))
     })
 }

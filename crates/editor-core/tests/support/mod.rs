@@ -18,11 +18,25 @@ pub const TIMEOUT: Duration = Duration::from_secs(10);
 pub fn git_repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("temp dir");
     let git = |args: &[&str]| {
-        let status = Command::new("git").args(args).current_dir(dir.path()).status().expect("run git");
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .status()
+            .expect("run git");
         assert!(status.success(), "git {args:?} failed");
     };
     git(&["init", "--quiet"]);
-    git(&["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--quiet", "--allow-empty", "-m", "init"]);
+    git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+        "init",
+    ]);
     dir
 }
 
@@ -52,7 +66,10 @@ impl FakeAgent {
             program: fake_agent_path(),
             args: vec![],
             env: vec![
-                ("FAKE_ACP_SCRIPT".into(), self.dir.path().join("script.json").display().to_string()),
+                (
+                    "FAKE_ACP_SCRIPT".into(),
+                    self.dir.path().join("script.json").display().to_string(),
+                ),
                 ("FAKE_ACP_LOG".into(), self.log_path().display().to_string()),
             ],
         }
@@ -72,12 +89,17 @@ impl FakeAgent {
     }
 
     pub fn received(&self, method: &str) -> Vec<serde_json::Value> {
-        self.log().into_iter().filter(|m| m["method"] == method).collect()
+        self.log()
+            .into_iter()
+            .filter(|m| m["method"] == method)
+            .collect()
     }
 }
 
 pub fn core_with(agent: &FakeAgent) -> Core {
-    Core::new(CoreConfig { adapter: agent.command() })
+    Core::new(CoreConfig {
+        adapter: agent.command(),
+    })
 }
 
 /// Polls `check` until it holds (or panics after `TIMEOUT`), for facts no event announces.
@@ -100,7 +122,9 @@ pub async fn states_until(
     let mut seen = vec![];
     tokio::time::timeout(TIMEOUT, async {
         loop {
-            if let CoreEvent::SessionStateChanged { session_id, state } = events.recv().await.expect("event") {
+            if let CoreEvent::SessionStateChanged { session_id, state } =
+                events.recv().await.expect("event")
+            {
                 if session_id == session {
                     seen.push(state);
                     if state == last {
@@ -130,7 +154,12 @@ pub async fn stream_until(stream: &mut TranscriptStream, expected: &[TranscriptI
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("timed out; rebuilt {:?}, expected {expected:?}", rebuilt.items));
+    .unwrap_or_else(|_| {
+        panic!(
+            "timed out; rebuilt {:?}, expected {expected:?}",
+            rebuilt.items
+        )
+    });
     batches
 }
 
@@ -146,14 +175,24 @@ impl Rebuilt {
         match delta {
             TranscriptDelta::Reset { start, items } => (self.start, self.items) = (start, items),
             TranscriptDelta::ItemAdded { index, item } => {
-                assert_eq!(index, self.start + self.items.len(), "items are appended in order");
+                assert_eq!(
+                    index,
+                    self.start + self.items.len(),
+                    "items are appended in order"
+                );
                 self.items.push(item);
             }
+            // Changes to items before the loaded page don't concern the view.
+            TranscriptDelta::ItemUpdated { index, .. }
+            | TranscriptDelta::TextAppended { index, .. }
+                if index < self.start => {}
             TranscriptDelta::ItemUpdated { index, item } => self.items[index - self.start] = item,
-            TranscriptDelta::TextAppended { index, text } => match &mut self.items[index - self.start] {
-                TranscriptItem::Agent { text: t } => t.push_str(&text),
-                other => panic!("text appended to non-agent item {other:?}"),
-            },
+            TranscriptDelta::TextAppended { index, text } => {
+                match &mut self.items[index - self.start] {
+                    TranscriptItem::Agent { text: t } => t.push_str(&text),
+                    other => panic!("text appended to non-agent item {other:?}"),
+                }
+            }
         }
     }
 }

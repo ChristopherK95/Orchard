@@ -13,6 +13,7 @@ pub use crate::acp::{AcpError, AdapterCommand, PROTOCOL_VERSION};
 pub use crate::core::{Core, CoreConfig, CoreError, CoreEvent, TranscriptStream, WorkspaceInfo};
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};
 pub use crate::session::{
-    DiffLine, DiffLineKind, PermissionMode, PermissionOption, PermissionOptionKind, PermissionOutcome,
-    PermissionRequest, SessionId, SessionInfo, SessionState, TranscriptDelta, TranscriptItem, TRANSCRIPT_PAGE,
+    DiffLine, DiffLineKind, PermissionMode, PermissionOption, PermissionOptionKind,
+    PermissionOutcome, PermissionRequest, SessionId, SessionInfo, SessionState, TranscriptDelta,
+    TranscriptItem, TranscriptPage, TRANSCRIPT_PAGE,
 };

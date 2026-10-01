@@ -16,9 +16,6 @@ import {
 import { answerByKey, PermissionCard } from "./PermissionCard";
 import { notify, NOTIFY_WHEN_BACKGROUND_TURN_FINISHES } from "./notify";
 
-/** Mirrors editor-core's page size for transcripts. */
-const TRANSCRIPT_PAGE = 200;
-
 const STATE_LABEL: Record<SessionState, string> = {
   working: "Working",
   needsYou: "Needs you",
@@ -107,31 +104,36 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   const [start, setStart] = createSignal(0);
   const [error, setError] = createSignal("");
 
-  const applyFor = (id: SessionId) => (batch: TranscriptDelta[]) => {
-    if (activeId() !== id) return; // a batch from a Tab that's no longer visible
+  // Each show() gets a token; batches from an earlier stream (even of the same session) are dropped.
+  let currentShow = 0;
+  const applyFor = (token: number) => (batch: TranscriptDelta[]) => {
+    if (token !== currentShow) return;
     for (const delta of batch) {
       if (delta.kind === "reset") {
         setStart(delta.start);
         setItems(reconcile(delta.items));
-      } else if (delta.kind === "itemAdded" || delta.kind === "itemUpdated") {
-        setItems(delta.index - start(), delta.item);
-      } else {
+        continue;
+      }
+      const at = delta.index - start();
+      if (at < 0) continue; // a change to an item before the loaded page
+      if (delta.kind === "itemAdded" || delta.kind === "itemUpdated") setItems(at, delta.item);
+      else
         setItems(
           produce((all) => {
-            const item = all[delta.index - start()];
-            if (item.kind === "agent") item.text += delta.text;
+            const item = all[at];
+            if (item?.kind === "agent") item.text += delta.text;
           }),
         );
-      }
     }
   };
 
   const show = async (id: SessionId) => {
+    const token = ++currentShow;
     setActiveId(id);
     setItems([]);
     setStart(0);
     try {
-      await core.showSession(id, applyFor(id));
+      await core.showSession(id, applyFor(token));
     } catch (err) {
       setError(String(err));
     }
@@ -146,23 +148,34 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     }
   };
 
+  let loadingEarlier = false;
   const loadEarlier = async () => {
     const id = activeId();
-    if (id === null || start() === 0) return;
-    const from = Math.max(0, start() - TRANSCRIPT_PAGE);
-    const older = await core.transcriptPage(id, from, start());
-    if (activeId() !== id) return;
-    setItems((current) => [...older, ...current]);
-    setStart(from);
+    const before = start();
+    if (id === null || before === 0 || loadingEarlier) return;
+    loadingEarlier = true;
+    const token = currentShow;
+    try {
+      const page = await core.transcriptPageBefore(id, before);
+      // Only prepend if nothing moved underneath us (another Tab shown, or a Reset).
+      if (token !== currentShow || start() !== before) return;
+      setItems((current) => [...page.items, ...current]);
+      setStart(page.start);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      loadingEarlier = false;
+    }
   };
 
-  // Tabs that see their state change while you're not looking get an OS notification.
+  // A session you're not looking at (another Tab is visible, or the window is in the background)
+  // raises an OS notification when it needs you (spec story 25).
   const onStateChanged = (id: SessionId, state: SessionState) => {
     const { name, state: previous } = sessions[id]; // read before the store updates
     setSessions(id, "state", state);
     const unseen = id !== activeId() || !document.hasFocus();
     if (!unseen) return;
-    if (state === "needsYou") void notify(`${name} needs you`, "The Agent is asking for permission.");
+    if (state === "needsYou") void notify(`${name} needs you`, "The Agent is waiting for your answer.");
     else if (NOTIFY_WHEN_BACKGROUND_TURN_FINISHES && previous === "working" && state === "idle")
       void notify(`${name} finished`, "The Agent's turn is done.");
   };

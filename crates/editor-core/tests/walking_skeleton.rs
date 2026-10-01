@@ -44,7 +44,11 @@ async fn sessions_run_in_the_main_checkout_and_share_one_adapter_process() {
     core.new_session().await.unwrap();
     core.new_session().await.unwrap();
 
-    let starts = fake.log().into_iter().filter(|m| m.get("started").is_some()).count();
+    let starts = fake
+        .log()
+        .into_iter()
+        .filter(|m| m.get("started").is_some())
+        .count();
     assert_eq!(starts, 1, "one shared adapter process");
     assert_eq!(fake.received("initialize").len(), 1);
     let new_sessions = fake.received("session/new");
@@ -60,7 +64,9 @@ async fn streamed_chunks_are_batched_rather_than_sent_one_by_one() {
     let repo = git_repo();
     // Chunks trickle in ~3 ms apart, so only the ~16 ms flush window can group them.
     let chunks: Vec<String> = (0..100).map(|i| format!("{i} ")).collect();
-    let fake = FakeAgent::new(&serde_json::json!({ "turns": [{ "chunks": chunks, "delayMs": 3 }] }).to_string());
+    let fake = FakeAgent::new(
+        &serde_json::json!({ "turns": [{ "chunks": chunks, "delayMs": 3 }] }).to_string(),
+    );
     let core = core_with(&fake);
     core.open_workspace(repo.path()).await.unwrap();
     let session = core.new_session().await.unwrap();
@@ -88,7 +94,10 @@ async fn a_session_shows_exited_when_the_adapter_process_dies() {
         states_until(&mut events, session, SessionState::Exited).await,
         vec![SessionState::Working, SessionState::Exited]
     );
-    assert!(core.send_prompt(session, "again").await.is_err(), "an Exited session takes no prompts");
+    assert!(
+        core.send_prompt(session, "again").await.is_err(),
+        "an Exited session takes no prompts"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -99,5 +108,8 @@ async fn opening_a_folder_that_is_not_a_git_repository_fails() {
 
     let err = core.open_workspace(not_a_repo.path()).await.unwrap_err();
 
-    assert!(matches!(err, editor_core::CoreError::NotARepository(_)), "{err}");
+    assert!(
+        matches!(err, editor_core::CoreError::NotARepository(_)),
+        "{err}"
+    );
 }

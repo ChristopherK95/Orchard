@@ -5,8 +5,8 @@
 use std::path::PathBuf;
 
 use editor_core::{
-    check_prerequisites, AdapterCommand, Core, CoreConfig, MissingPrerequisite, PermissionMode, SessionId, Tools,
-    TranscriptDelta, TranscriptItem, WorkspaceInfo,
+    check_prerequisites, AdapterCommand, Core, CoreConfig, MissingPrerequisite, PermissionMode,
+    SessionId, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo,
 };
 use tauri::ipc::Channel;
 use tauri::{Emitter, Manager, State};
@@ -16,11 +16,19 @@ use tauri::{Emitter, Manager, State};
 /// The path is fixed at build time, which only suits dev builds; distribution is out of scope for v1.
 fn adapter_command() -> AdapterCommand {
     if let Some(program) = std::env::var_os("AGENT_EDITOR_ACP_ADAPTER") {
-        return AdapterCommand { program: program.into(), args: vec![], env: vec![] };
+        return AdapterCommand {
+            program: program.into(),
+            args: vec![],
+            env: vec![],
+        };
     }
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js");
-    AdapterCommand { program: "node".into(), args: vec![script.display().to_string()], env: vec![] }
+    AdapterCommand {
+        program: "node".into(),
+        args: vec![script.display().to_string()],
+        env: vec![],
+    }
 }
 
 type CommandResult<T> = Result<T, String>;
@@ -33,12 +41,16 @@ async fn prerequisites() -> Vec<MissingPrerequisite> {
 /// The repo to offer on startup: the first CLI argument, else `AGENT_EDITOR_WORKSPACE`.
 #[tauri::command]
 fn default_workspace_path() -> Option<String> {
-    std::env::args().nth(1).or_else(|| std::env::var("AGENT_EDITOR_WORKSPACE").ok())
+    std::env::args()
+        .nth(1)
+        .or_else(|| std::env::var("AGENT_EDITOR_WORKSPACE").ok())
 }
 
 #[tauri::command]
 async fn open_workspace(core: State<'_, Core>, path: String) -> CommandResult<WorkspaceInfo> {
-    core.open_workspace(path.as_ref()).await.map_err(|e| e.to_string())
+    core.open_workspace(path.as_ref())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -47,8 +59,14 @@ async fn new_session(core: State<'_, Core>) -> CommandResult<SessionId> {
 }
 
 #[tauri::command]
-async fn send_prompt(core: State<'_, Core>, session_id: SessionId, text: String) -> CommandResult<()> {
-    core.send_prompt(session_id, &text).await.map_err(|e| e.to_string())
+async fn send_prompt(
+    core: State<'_, Core>,
+    session_id: SessionId,
+    text: String,
+) -> CommandResult<()> {
+    core.send_prompt(session_id, &text)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -58,22 +76,30 @@ async fn answer_permission(
     tool_call_id: String,
     option_id: String,
 ) -> CommandResult<()> {
-    core.answer_permission(session_id, &tool_call_id, &option_id).await.map_err(|e| e.to_string())
+    core.answer_permission(session_id, &tool_call_id, &option_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn set_permission_mode(core: State<'_, Core>, session_id: SessionId, mode: PermissionMode) -> CommandResult<()> {
-    core.set_permission_mode(session_id, mode).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn transcript_page(
+async fn set_permission_mode(
     core: State<'_, Core>,
     session_id: SessionId,
-    start: usize,
-    end: usize,
-) -> CommandResult<Vec<TranscriptItem>> {
-    core.transcript_page(session_id, start, end).map_err(|e| e.to_string())
+    mode: PermissionMode,
+) -> CommandResult<()> {
+    core.set_permission_mode(session_id, mode)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn transcript_page_before(
+    core: State<'_, Core>,
+    session_id: SessionId,
+    before: usize,
+) -> CommandResult<TranscriptPage> {
+    core.transcript_page_before(session_id, before)
+        .map_err(|e| e.to_string())
 }
 
 /// Makes a session the visible Tab and streams its transcript over a dedicated channel; the
@@ -99,7 +125,9 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            let core = Core::new(CoreConfig { adapter: adapter_command() });
+            let core = Core::new(CoreConfig {
+                adapter: adapter_command(),
+            });
             let mut events = core.subscribe();
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -118,7 +146,7 @@ fn main() {
             send_prompt,
             answer_permission,
             set_permission_mode,
-            transcript_page,
+            transcript_page_before,
             show_session
         ])
         .run(tauri::generate_context!())

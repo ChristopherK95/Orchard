@@ -39,8 +39,15 @@ pub enum AcpError {
 }
 
 pub(crate) enum Incoming {
-    Notification { method: String, params: Value },
-    Request { method: String, params: Value, responder: Responder },
+    Notification {
+        method: String,
+        params: Value,
+    },
+    Request {
+        method: String,
+        params: Value,
+        responder: Responder,
+    },
     /// The adapter process closed its stdout (exited or crashed).
     Closed,
 }
@@ -53,7 +60,9 @@ pub(crate) struct Responder {
 
 impl Responder {
     pub(crate) fn result(self, result: Value) {
-        let _ = self.out.send(json!({ "jsonrpc": "2.0", "id": self.id, "result": result }).to_string());
+        let _ = self
+            .out
+            .send(json!({ "jsonrpc": "2.0", "id": self.id, "result": result }).to_string());
     }
 
     pub(crate) fn error(self, code: i64, message: &str) {
@@ -136,7 +145,12 @@ impl Connection {
             on_incoming(Incoming::Closed);
         });
 
-        Ok(Self { out, pending, next_id: AtomicU64::new(1), _child: child })
+        Ok(Self {
+            out,
+            pending,
+            next_id: AtomicU64::new(1),
+            _child: child,
+        })
     }
 
     pub(crate) async fn request(&self, method: &str, params: Value) -> Result<Value, AcpError> {
@@ -169,13 +183,29 @@ fn dispatch(
         let method = method.to_owned();
         let params = msg.get("params").cloned().unwrap_or(Value::Null);
         on_incoming(match id {
-            Some(id) => Incoming::Request { method, params, responder: Responder { id, out: out.clone() } },
+            Some(id) => Incoming::Request {
+                method,
+                params,
+                responder: Responder {
+                    id,
+                    out: out.clone(),
+                },
+            },
             None => Incoming::Notification { method, params },
         });
         return;
     }
-    let Some(id) = id.as_ref().and_then(Value::as_u64) else { return };
-    let Some(tx) = pending.lock().expect("pending lock").as_mut().and_then(|w| w.remove(&id)) else { return };
+    let Some(id) = id.as_ref().and_then(Value::as_u64) else {
+        return;
+    };
+    let Some(tx) = pending
+        .lock()
+        .expect("pending lock")
+        .as_mut()
+        .and_then(|w| w.remove(&id))
+    else {
+        return;
+    };
     let outcome = match msg.get("error") {
         Some(err) => Err(AcpError::Rpc {
             code: err["code"].as_i64().unwrap_or(0),

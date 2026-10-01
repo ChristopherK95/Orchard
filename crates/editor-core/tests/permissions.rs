@@ -3,7 +3,8 @@
 mod support;
 
 use editor_core::{
-    DiffLine, DiffLineKind, PermissionMode, PermissionOptionKind, PermissionOutcome, SessionState, TranscriptItem,
+    DiffLine, DiffLineKind, PermissionMode, PermissionOptionKind, PermissionOutcome, SessionState,
+    TranscriptItem,
 };
 use serde_json::json;
 use support::*;
@@ -22,7 +23,12 @@ fn edit_turn() -> serde_json::Value {
 
 async fn session_waiting_for_permission(
     fake: &FakeAgent,
-) -> (tempfile::TempDir, editor_core::Core, editor_core::SessionId, tokio::sync::broadcast::Receiver<editor_core::CoreEvent>) {
+) -> (
+    tempfile::TempDir,
+    editor_core::Core,
+    editor_core::SessionId,
+    tokio::sync::broadcast::Receiver<editor_core::CoreEvent>,
+) {
     let repo = git_repo();
     let core = core_with(fake);
     core.open_workspace(repo.path()).await.unwrap();
@@ -68,17 +74,33 @@ async fn a_permission_request_shows_a_card_with_the_tool_target_diff_and_options
         request.diff.as_deref(),
         Some(
             &[
-                DiffLine { kind: DiffLineKind::Hunk, text: "@@ -1,2 +1,2 @@".into() },
-                DiffLine { kind: DiffLineKind::Context, text: "a".into() },
-                DiffLine { kind: DiffLineKind::Removed, text: "b".into() },
-                DiffLine { kind: DiffLineKind::Added, text: "c".into() },
+                DiffLine {
+                    kind: DiffLineKind::Hunk,
+                    text: "@@ -1,2 +1,2 @@".into()
+                },
+                DiffLine {
+                    kind: DiffLineKind::Context,
+                    text: "a".into()
+                },
+                DiffLine {
+                    kind: DiffLineKind::Removed,
+                    text: "b".into()
+                },
+                DiffLine {
+                    kind: DiffLineKind::Added,
+                    text: "c".into()
+                },
             ][..]
         )
     );
     let kinds: Vec<_> = request.options.iter().map(|o| o.kind).collect();
     assert_eq!(
         kinds,
-        [PermissionOptionKind::AllowOnce, PermissionOptionKind::AllowAlways, PermissionOptionKind::RejectOnce]
+        [
+            PermissionOptionKind::AllowOnce,
+            PermissionOptionKind::AllowAlways,
+            PermissionOptionKind::RejectOnce
+        ]
     );
     assert_eq!(outcome(&items), None, "not answered yet");
 }
@@ -100,50 +122,86 @@ async fn a_target_inside_the_worktree_is_shown_relative_to_it() {
     states_until(&mut events, session, SessionState::NeedsYou).await;
 
     let items = core.transcript(session).unwrap();
-    let expected = std::path::Path::new("src").join("lib.rs").display().to_string();
-    assert_eq!(permission_item(&items).target.as_deref(), Some(expected.as_str()));
+    let expected = std::path::Path::new("src")
+        .join("lib.rs")
+        .display()
+        .to_string();
+    assert_eq!(
+        permission_item(&items).target.as_deref(),
+        Some(expected.as_str())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn allowing_sends_the_chosen_option_and_the_turn_carries_on() {
     let fake = FakeAgent::new(&json!({ "turns": [edit_turn()] }).to_string());
     let (_repo, core, session, mut events) = session_waiting_for_permission(&fake).await;
-    let allow = permission_item(&core.transcript(session).unwrap()).options[0].id.clone();
+    let allow = permission_item(&core.transcript(session).unwrap()).options[0]
+        .id
+        .clone();
 
-    core.answer_permission(session, "call-1", &allow).await.unwrap();
+    core.answer_permission(session, "call-1", &allow)
+        .await
+        .unwrap();
 
     assert_eq!(
         states_until(&mut events, session, SessionState::Idle).await,
         vec![SessionState::Working, SessionState::Idle]
     );
     let items = core.transcript(session).unwrap();
-    assert_eq!(outcome(&items), Some(PermissionOutcome::Selected { option_id: allow.clone() }));
+    assert_eq!(
+        outcome(&items),
+        Some(PermissionOutcome::Selected {
+            option_id: allow.clone()
+        })
+    );
     // The fake agent echoes the option it received back into the chat.
-    assert_eq!(items.last(), Some(&TranscriptItem::Agent { text: format!("[permission {allow}] done") }));
+    assert_eq!(
+        items.last(),
+        Some(&TranscriptItem::Agent {
+            text: format!("[permission {allow}] done")
+        })
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn always_allow_and_deny_send_their_own_options() {
-    for pick in [PermissionOptionKind::AllowAlways, PermissionOptionKind::RejectOnce] {
+    for pick in [
+        PermissionOptionKind::AllowAlways,
+        PermissionOptionKind::RejectOnce,
+    ] {
         let fake = FakeAgent::new(&json!({ "turns": [edit_turn()] }).to_string());
         let (_repo, core, session, mut events) = session_waiting_for_permission(&fake).await;
         let request = permission_item(&core.transcript(session).unwrap()).clone();
         let option = request.options.iter().find(|o| o.kind == pick).unwrap();
 
-        core.answer_permission(session, &request.tool_call_id, &option.id).await.unwrap();
+        core.answer_permission(session, &request.tool_call_id, &option.id)
+            .await
+            .unwrap();
         states_until(&mut events, session, SessionState::Idle).await;
 
-        let responses: Vec<_> = fake.log().into_iter().filter(|m| m.get("result").is_some() && m["id"] == "perm-1").collect();
+        let responses: Vec<_> = fake
+            .log()
+            .into_iter()
+            .filter(|m| m.get("result").is_some() && m["id"] == "perm-1")
+            .collect();
         assert_eq!(responses.len(), 1);
-        assert_eq!(responses[0]["result"]["outcome"], json!({ "outcome": "selected", "optionId": option.id }));
+        assert_eq!(
+            responses[0]["result"]["outcome"],
+            json!({ "outcome": "selected", "optionId": option.id })
+        );
     }
 }
 
-fn permission_requests(items: &[TranscriptItem]) -> Vec<(editor_core::PermissionRequest, Option<PermissionOutcome>)> {
+fn permission_requests(
+    items: &[TranscriptItem],
+) -> Vec<(editor_core::PermissionRequest, Option<PermissionOutcome>)> {
     items
         .iter()
         .filter_map(|item| match item {
-            TranscriptItem::Permission { request, outcome } => Some((request.clone(), outcome.clone())),
+            TranscriptItem::Permission { request, outcome } => {
+                Some((request.clone(), outcome.clone()))
+            }
             _ => None,
         })
         .collect()
@@ -156,19 +214,35 @@ async fn two_questions_in_one_turn_are_both_shown_and_answered_separately() {
     turn["alsoAsk"] = second;
     let fake = FakeAgent::new(&json!({ "turns": [turn] }).to_string());
     let (_repo, core, session, mut events) = session_waiting_for_permission(&fake).await;
-    eventually("both questions on screen", || permission_requests(&core.transcript(session).unwrap()).len() == 2).await;
+    eventually("both questions on screen", || {
+        permission_requests(&core.transcript(session).unwrap()).len() == 2
+    })
+    .await;
     let cards = permission_requests(&core.transcript(session).unwrap());
 
-    core.answer_permission(session, &cards[0].0.tool_call_id, "allow").await.unwrap();
-    assert_eq!(core.session_info(session).unwrap().state, SessionState::NeedsYou, "one question is still open");
-    core.answer_permission(session, &cards[1].0.tool_call_id, "reject").await.unwrap();
+    core.answer_permission(session, &cards[0].0.tool_call_id, "allow")
+        .await
+        .unwrap();
+    assert_eq!(
+        core.session_info(session).unwrap().state,
+        SessionState::NeedsYou,
+        "one question is still open"
+    );
+    core.answer_permission(session, &cards[1].0.tool_call_id, "reject")
+        .await
+        .unwrap();
 
     assert_eq!(
         states_until(&mut events, session, SessionState::Idle).await,
         vec![SessionState::Working, SessionState::Idle]
     );
     let items = core.transcript(session).unwrap();
-    assert_eq!(items.last(), Some(&TranscriptItem::Agent { text: "[permission allow][permission reject] done".into() }));
+    assert_eq!(
+        items.last(),
+        Some(&TranscriptItem::Agent {
+            text: "[permission allow][permission reject] done".into()
+        })
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -185,13 +259,21 @@ async fn a_question_still_open_when_the_turn_ends_is_cancelled() {
     core.send_prompt(session, "fix it").await.unwrap();
 
     assert_eq!(
-        states_until(&mut events, session, SessionState::Idle).await.last(),
+        states_until(&mut events, session, SessionState::Idle)
+            .await
+            .last(),
         Some(&SessionState::Idle)
     );
     let cards = permission_requests(&core.transcript(session).unwrap());
     assert_eq!(cards[0].1, Some(PermissionOutcome::Cancelled));
-    assert!(core.answer_permission(session, &cards[0].0.tool_call_id, "allow").await.is_err());
-    assert_eq!(core.session_info(session).unwrap().state, SessionState::Idle);
+    assert!(core
+        .answer_permission(session, &cards[0].0.tool_call_id, "allow")
+        .await
+        .is_err());
+    assert_eq!(
+        core.session_info(session).unwrap().state,
+        SessionState::Idle
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -210,8 +292,14 @@ async fn a_session_whose_agent_dies_while_asking_stays_exited() {
 
     let cards = permission_requests(&core.transcript(session).unwrap());
     assert_eq!(cards[0].1, Some(PermissionOutcome::Cancelled));
-    assert!(core.answer_permission(session, &cards[0].0.tool_call_id, "allow").await.is_err());
-    assert_eq!(core.session_info(session).unwrap().state, SessionState::Exited);
+    assert!(core
+        .answer_permission(session, &cards[0].0.tool_call_id, "allow")
+        .await
+        .is_err());
+    assert_eq!(
+        core.session_info(session).unwrap().state,
+        SessionState::Exited
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -222,7 +310,10 @@ async fn answering_when_nothing_is_pending_fails() {
     core.open_workspace(repo.path()).await.unwrap();
     let session = core.new_session().await.unwrap();
 
-    assert!(core.answer_permission(session, "call-1", "allow").await.is_err());
+    assert!(core
+        .answer_permission(session, "call-1", "allow")
+        .await
+        .is_err());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -234,7 +325,10 @@ async fn a_new_session_starts_in_ask_for_edits_even_if_the_agent_defaults_elsewh
 
     let session = core.new_session().await.unwrap();
 
-    assert_eq!(core.session_info(session).unwrap().permission_mode, PermissionMode::AskForEdits);
+    assert_eq!(
+        core.session_info(session).unwrap().permission_mode,
+        PermissionMode::AskForEdits
+    );
     let set_mode = fake.received("session/set_mode");
     assert_eq!(set_mode.len(), 1);
     assert_eq!(set_mode[0]["params"]["modeId"], "default");
@@ -247,12 +341,20 @@ async fn changing_the_permission_mode_is_applied_to_the_session() {
     let core = core_with(&fake);
     core.open_workspace(repo.path()).await.unwrap();
     let session = core.new_session().await.unwrap();
-    assert!(fake.received("session/set_mode").is_empty(), "already in Ask for edits");
+    assert!(
+        fake.received("session/set_mode").is_empty(),
+        "already in Ask for edits"
+    );
 
-    core.set_permission_mode(session, PermissionMode::Plan).await.unwrap();
+    core.set_permission_mode(session, PermissionMode::Plan)
+        .await
+        .unwrap();
 
     let set_mode = fake.received("session/set_mode");
     assert_eq!(set_mode.len(), 1);
     assert_eq!(set_mode[0]["params"]["modeId"], "plan");
-    assert_eq!(core.session_info(session).unwrap().permission_mode, PermissionMode::Plan);
+    assert_eq!(
+        core.session_info(session).unwrap().permission_mode,
+        PermissionMode::Plan
+    );
 }

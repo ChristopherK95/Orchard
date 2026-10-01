@@ -53,7 +53,7 @@ The coding-agent program driving an Agent session. Claude Code first; others may
 The Agent is mid-turn.
 
 **Needs you**:
-The Agent is blocked on the user: a permission prompt or a question is waiting. The only state that always notifies.
+The Agent is blocked on the user: a permission prompt or a question is waiting. The only state that always notifies when you're not looking at the session.
 _Avoid_: Blocked, waiting
 
 **Idle**:

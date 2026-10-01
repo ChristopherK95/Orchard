@@ -101,11 +101,24 @@ fn main() {
             let text = std::fs::read_to_string(path).expect("read FAKE_ACP_SCRIPT");
             serde_json::from_str(&text).expect("FAKE_ACP_SCRIPT is valid JSON")
         })
-        .unwrap_or(Script { turns: VecDeque::new(), initial_mode: default_mode() });
-    let log = std::env::var("FAKE_ACP_LOG")
-        .ok()
-        .map(|path| OpenOptions::new().create(true).append(true).open(path).expect("open FAKE_ACP_LOG"));
-    let mut agent = Agent { script, log, stdin: std::io::stdin().lines(), sessions: 0, requests: 0 };
+        .unwrap_or(Script {
+            turns: VecDeque::new(),
+            initial_mode: default_mode(),
+        });
+    let log = std::env::var("FAKE_ACP_LOG").ok().map(|path| {
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .expect("open FAKE_ACP_LOG")
+    });
+    let mut agent = Agent {
+        script,
+        log,
+        stdin: std::io::stdin().lines(),
+        sessions: 0,
+        requests: 0,
+    };
     agent.record(&json!({ "started": std::process::id() }));
     agent.run();
 }
@@ -113,11 +126,15 @@ fn main() {
 impl Agent {
     fn run(&mut self) {
         while let Some(msg) = self.read() {
-            let Some(method) = msg["method"].as_str().map(str::to_owned) else { continue };
+            let Some(method) = msg["method"].as_str().map(str::to_owned) else {
+                continue;
+            };
             let id = msg.get("id").cloned();
             let params = msg.get("params").cloned().unwrap_or(Value::Null);
             let result = match method.as_str() {
-                "initialize" => json!({ "protocolVersion": 1, "agentCapabilities": {}, "authMethods": [] }),
+                "initialize" => {
+                    json!({ "protocolVersion": 1, "agentCapabilities": {}, "authMethods": [] })
+                }
                 "session/new" => {
                     self.sessions += 1;
                     json!({
@@ -137,7 +154,9 @@ impl Agent {
                 "session/prompt" => self.prompt(&params),
                 _ => {
                     if let Some(id) = id {
-                        send(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": "method not found" } }));
+                        send(
+                            json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": "method not found" } }),
+                        );
                     }
                     continue;
                 }
@@ -151,24 +170,42 @@ impl Agent {
     fn prompt(&mut self, params: &Value) -> Value {
         let session_id = params["sessionId"].clone();
         let turn = self.script.turns.pop_front().unwrap_or_else(|| Turn {
-            chunks: vec!["Echo: ".into(), params["prompt"][0]["text"].as_str().unwrap_or_default().into()],
+            chunks: vec![
+                "Echo: ".into(),
+                params["prompt"][0]["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .into(),
+            ],
             ..Turn::default()
         });
         let mut chunks = turn.chunks;
         let questions: Vec<Permission> = turn.permission.into_iter().chain(turn.also_ask).collect();
         if !questions.is_empty() {
-            let request_ids: Vec<String> = questions.into_iter().map(|q| self.ask_permission(&session_id, q)).collect();
+            let request_ids: Vec<String> = questions
+                .into_iter()
+                .map(|q| self.ask_permission(&session_id, q))
+                .collect();
             if turn.exit_while_asking {
                 std::process::exit(1);
             }
             if !turn.abandon {
                 let answers = self.await_answers(&request_ids);
-                chunks.insert(0, answers.iter().map(|a| format!("[permission {a}]")).collect());
+                chunks.insert(
+                    0,
+                    answers
+                        .iter()
+                        .map(|a| format!("[permission {a}]"))
+                        .collect(),
+                );
             }
         }
         for chunk in &chunks {
             std::thread::sleep(Duration::from_millis(turn.delay_ms));
-            notify_update(&session_id, json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": chunk } }));
+            notify_update(
+                &session_id,
+                json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": chunk } }),
+            );
         }
         for (i, message) in turn.messages.iter().enumerate() {
             notify_update(
@@ -188,7 +225,11 @@ impl Agent {
         self.requests += 1;
         let tool_call_id = format!("call-{}", self.requests);
         let content: Vec<Value> = permission.diff.iter().map(|d| json!({ "type": "diff", "path": d["path"], "oldText": d["oldText"], "newText": d["newText"] })).collect();
-        let locations: Vec<Value> = permission.diff.iter().map(|d| json!({ "path": d["path"] })).collect();
+        let locations: Vec<Value> = permission
+            .diff
+            .iter()
+            .map(|d| json!({ "path": d["path"] }))
+            .collect();
         notify_update(
             session_id,
             json!({
@@ -218,13 +259,20 @@ impl Agent {
     fn await_answers(&mut self, request_ids: &[String]) -> Vec<String> {
         let mut answers: Vec<Option<String>> = vec![None; request_ids.len()];
         while answers.iter().any(Option::is_none) {
-            let Some(msg) = self.read() else { std::process::exit(0) }; // the client went away
+            let Some(msg) = self.read() else {
+                std::process::exit(0)
+            }; // the client went away
             if msg.get("method").is_some() {
                 continue;
             }
             if let Some(i) = request_ids.iter().position(|id| msg["id"] == json!(id)) {
                 let outcome = &msg["result"]["outcome"];
-                answers[i] = Some(outcome["optionId"].as_str().unwrap_or("cancelled").to_owned());
+                answers[i] = Some(
+                    outcome["optionId"]
+                        .as_str()
+                        .unwrap_or("cancelled")
+                        .to_owned(),
+                );
             }
         }
         answers.into_iter().flatten().collect()
@@ -250,7 +298,9 @@ impl Agent {
 }
 
 fn notify_update(session_id: &Value, update: Value) {
-    send(json!({ "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": session_id, "update": update } }));
+    send(
+        json!({ "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": session_id, "update": update } }),
+    );
 }
 
 fn send(value: Value) {

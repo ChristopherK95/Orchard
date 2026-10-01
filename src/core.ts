@@ -57,6 +57,12 @@ export type TranscriptItem =
   | { kind: "notice"; text: string }
   | { kind: "permission"; request: PermissionRequest; outcome: PermissionOutcome | null };
 
+/** A run of transcript items starting at absolute index `start`. */
+export interface TranscriptPage {
+  start: number;
+  items: TranscriptItem[];
+}
+
 export type TranscriptDelta =
   /** The latest page: items `start..`. Indexes in the other deltas are absolute. */
   | { kind: "reset"; start: number; items: TranscriptItem[] }
@@ -86,8 +92,9 @@ export const core = {
     channel.onmessage = onBatch;
     return invoke<void>("show_session", { sessionId, onBatch: channel });
   },
-  transcriptPage: (sessionId: SessionId, start: number, end: number) =>
-    invoke<TranscriptItem[]>("transcript_page", { sessionId, start, end }),
+  /** Up to a page of items just before index `before` (for scrolling back). */
+  transcriptPageBefore: (sessionId: SessionId, before: number) =>
+    invoke<TranscriptPage>("transcript_page_before", { sessionId, before }),
   onEvent: (handler: (event: CoreEvent) => void): Promise<UnlistenFn> =>
     listen<CoreEvent>("core-event", (e) => handler(e.payload)),
 };

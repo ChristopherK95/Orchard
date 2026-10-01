@@ -7,7 +7,8 @@ use serde_json::{json, Value};
 use similar::{ChangeTag, TextDiff};
 
 use crate::session::{
-    DiffLine, DiffLineKind, PermissionOption, PermissionOptionKind, PermissionOutcome, PermissionRequest,
+    DiffLine, DiffLineKind, PermissionOption, PermissionOptionKind, PermissionOutcome,
+    PermissionRequest,
 };
 
 /// Diffs longer than this are cut short on the card; the full change is still what gets applied.
@@ -15,7 +16,11 @@ const MAX_DIFF_LINES: usize = 400;
 
 /// `tool_call` is the tool call as announced so far, merged with the request's `toolCall`. Paths
 /// inside `worktree` are shown relative to it.
-pub(crate) fn request_from(tool_call: &Value, options: &Value, worktree: &Path) -> PermissionRequest {
+pub(crate) fn request_from(
+    tool_call: &Value,
+    options: &Value,
+    worktree: &Path,
+) -> PermissionRequest {
     let diffs: Vec<&Value> = tool_call["content"]
         .as_array()
         .map(|content| content.iter().filter(|c| c["type"] == "diff").collect())
@@ -33,12 +38,23 @@ pub(crate) fn request_from(tool_call: &Value, options: &Value, worktree: &Path) 
     let diff = (!diffs.is_empty()).then(|| {
         diffs
             .iter()
-            .flat_map(|d| unified_diff(d["oldText"].as_str().unwrap_or_default(), d["newText"].as_str().unwrap_or_default()))
+            .flat_map(|d| {
+                unified_diff(
+                    d["oldText"].as_str().unwrap_or_default(),
+                    d["newText"].as_str().unwrap_or_default(),
+                )
+            })
             .collect()
     });
     PermissionRequest {
-        tool_call_id: tool_call["toolCallId"].as_str().unwrap_or_default().to_owned(),
-        title: tool_call["title"].as_str().unwrap_or("A tool call").to_owned(),
+        tool_call_id: tool_call["toolCallId"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+        title: tool_call["title"]
+            .as_str()
+            .unwrap_or("A tool call")
+            .to_owned(),
         kind: tool_call["kind"].as_str().map(str::to_owned),
         target,
         diff,
@@ -60,14 +76,18 @@ pub(crate) fn request_from(tool_call: &Value, options: &Value, worktree: &Path) 
 /// The `RequestPermissionResponse` for an answer.
 pub(crate) fn acp_outcome(outcome: &PermissionOutcome) -> Value {
     match outcome {
-        PermissionOutcome::Selected { option_id } => json!({ "outcome": { "outcome": "selected", "optionId": option_id } }),
+        PermissionOutcome::Selected { option_id } => {
+            json!({ "outcome": { "outcome": "selected", "optionId": option_id } })
+        }
         PermissionOutcome::Cancelled => json!({ "outcome": { "outcome": "cancelled" } }),
     }
 }
 
 /// Shallow-merges an ACP tool call update into what's known about the tool call so far.
 pub(crate) fn merge_tool_call(known: &mut Value, update: &Value) {
-    let (Some(known), Some(update)) = (known.as_object_mut(), update.as_object()) else { return };
+    let (Some(known), Some(update)) = (known.as_object_mut(), update.as_object()) else {
+        return;
+    };
     for (key, value) in update {
         if key != "sessionUpdate" && !value.is_null() {
             known.insert(key.clone(), value.clone());
@@ -79,20 +99,29 @@ fn unified_diff(old: &str, new: &str) -> Vec<DiffLine> {
     let diff = TextDiff::from_lines(old, new);
     let mut lines = vec![];
     for hunk in diff.unified_diff().context_radius(3).iter_hunks() {
-        lines.push(DiffLine { kind: DiffLineKind::Hunk, text: hunk.header().to_string().trim_end().to_owned() });
+        lines.push(DiffLine {
+            kind: DiffLineKind::Hunk,
+            text: hunk.header().to_string().trim_end().to_owned(),
+        });
         for change in hunk.iter_changes() {
             let kind = match change.tag() {
                 ChangeTag::Equal => DiffLineKind::Context,
                 ChangeTag::Delete => DiffLineKind::Removed,
                 ChangeTag::Insert => DiffLineKind::Added,
             };
-            lines.push(DiffLine { kind, text: change.value().trim_end_matches(['\n', '\r']).to_owned() });
+            lines.push(DiffLine {
+                kind,
+                text: change.value().trim_end_matches(['\n', '\r']).to_owned(),
+            });
         }
     }
     if lines.len() > MAX_DIFF_LINES {
         let hidden = lines.len() - MAX_DIFF_LINES;
         lines.truncate(MAX_DIFF_LINES);
-        lines.push(DiffLine { kind: DiffLineKind::Hunk, text: format!("… {hidden} more lines") });
+        lines.push(DiffLine {
+            kind: DiffLineKind::Hunk,
+            text: format!("… {hidden} more lines"),
+        });
     }
     lines
 }

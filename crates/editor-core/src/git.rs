@@ -13,7 +13,11 @@ fn git(cwd: &Path) -> Command {
 
 /// The root of the checkout containing `path`, or `None` if it isn't inside a git repository.
 pub(crate) async fn toplevel(path: &Path) -> Option<PathBuf> {
-    let out = git(path).args(["rev-parse", "--show-toplevel"]).output().await.ok()?;
+    let out = git(path)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .await
+        .ok()?;
     if !out.status.success() {
         return None;
     }
