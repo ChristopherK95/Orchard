@@ -9,6 +9,8 @@ mod permissions;
 mod prerequisites;
 mod process;
 mod session;
+mod settings;
+mod setup;
 mod worktrees;
 
 pub use crate::acp::{AcpError, AdapterCommand, PROTOCOL_VERSION};
@@ -20,4 +22,6 @@ pub use crate::session::{
     PermissionOutcome, PermissionRequest, SessionId, SessionInfo, SessionState, ToolCallStatus,
     TranscriptDelta, TranscriptItem, TranscriptPage, TRANSCRIPT_PAGE,
 };
+pub use crate::settings::{LoadedSettings, Notifications, RepoSettings, Settings, WindowsShell};
+pub use crate::setup::{SetupInfo, SetupStatus};
 pub use crate::worktrees::WorktreeInfo;

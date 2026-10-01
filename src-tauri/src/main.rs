@@ -6,11 +6,12 @@ use std::path::PathBuf;
 
 use editor_core::{
     check_prerequisites, AdapterCommand, BranchList, Core, CoreConfig, CreatedWorktree,
-    MissingPrerequisite, NewWorktree, PermissionMode, SessionId, Tools, TranscriptDelta,
-    TranscriptPage, WorkspaceInfo, WorktreeInfo,
+    LoadedSettings, MissingPrerequisite, NewWorktree, PermissionMode, SessionId, SetupInfo, Tools,
+    TranscriptDelta, TranscriptPage, WorkspaceInfo, WorktreeInfo,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 
 mod notifications;
 
@@ -95,6 +96,42 @@ async fn suggest_branch_name(core: State<'_, Core>) -> CommandResult<String> {
 async fn default_start_point(core: State<'_, Core>) -> CommandResult<String> {
     core.default_start_point().await.map_err(|e| e.to_string())
 }
+#[tauri::command]
+fn settings(core: State<'_, Core>) -> LoadedSettings {
+    core.settings()
+}
+
+/// Adds this repo's section to the settings file if need be, then opens the file in the OS's
+/// editor for TOML (the Manual editor takes this over in ticket 14). With no app for `.toml`
+/// files, it shows the file in its folder instead.
+#[tauri::command]
+async fn open_repo_settings(app: AppHandle, core: State<'_, Core>) -> CommandResult<()> {
+    let path = core.open_repo_settings().await.map_err(|e| e.to_string())?;
+    let opener = app.opener();
+    opener
+        .open_path(path.display().to_string(), None::<&str>)
+        .or_else(|_| opener.reveal_item_in_dir(&path))
+        .map_err(|e| format!("couldn't open {}: {e}", path.display()))
+}
+
+#[tauri::command]
+fn setups(core: State<'_, Core>) -> Vec<SetupInfo> {
+    core.setups()
+}
+
+#[tauri::command]
+async fn retry_setup(core: State<'_, Core>, worktree: String) -> CommandResult<()> {
+    core.retry_setup(worktree.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn start_anyway(core: State<'_, Core>, worktree: String) -> CommandResult<()> {
+    core.start_anyway(worktree.as_ref())
+        .map_err(|e| e.to_string())
+}
+
 /// Called when the window regains focus, in case Worktrees changed while the editor was away.
 #[tauri::command]
 async fn refresh_worktrees(core: State<'_, Core>) -> CommandResult<()> {
@@ -204,12 +241,25 @@ fn main() {
         .setup(|app| {
             let core = Core::new(CoreConfig {
                 adapter: adapter_command(),
+                settings_path: app
+                    .path()
+                    .app_config_dir()
+                    .ok()
+                    .map(|dir| dir.join("settings.toml")),
             });
             let mut events = core.subscribe();
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                while let Ok(event) = events.recv().await {
-                    let _ = handle.emit("core-event", event);
+                use tokio::sync::broadcast::error::RecvError;
+                loop {
+                    match events.recv().await {
+                        Ok(event) => {
+                            let _ = handle.emit("core-event", event);
+                        }
+                        // Fell behind (e.g. a noisy setup): skip what was missed, keep relaying.
+                        Err(RecvError::Lagged(_)) => continue,
+                        Err(RecvError::Closed) => break,
+                    }
                 }
             });
             app.manage(core);
@@ -227,6 +277,11 @@ fn main() {
             branches,
             suggest_branch_name,
             default_start_point,
+            settings,
+            open_repo_settings,
+            setups,
+            retry_setup,
+            start_anyway,
             send_prompt,
             answer_permission,
             set_permission_mode,

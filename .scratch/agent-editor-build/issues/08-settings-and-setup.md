@@ -12,4 +12,6 @@
 - [ ] Setup commands run in order in the new Worktree and stop at the first failure.
 - [ ] Output streams into the Tab; Retry reruns from the failed command; Start anyway starts the session.
 - [ ] The per-OS override replaces the shared list on that OS.
-- [ ] Core tests: a succeeding and a failing setup list against a temp repo on both OSes.
+- [ ] Core tests: a succeeding and a failing setup list against a temp repo on both OSes. (Windows passes; Arch pending.)
+
+Notes: "Open repo settings" opens the file in the OS's app for `.toml` (or shows it in its folder) until the Manual editor (ticket 14) can open it. Unknown keys are errors, so typos show up.

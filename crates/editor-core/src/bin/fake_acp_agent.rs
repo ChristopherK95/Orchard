@@ -25,7 +25,8 @@
 //! `{"started": <pid>}` line, so tests can assert on what the core sent.
 //!
 //! It also answers `--print <text>` by printing `<text>` and exiting, so tests can stand it in for
-//! `git --version` / `node --version`.
+//! `git --version` / `node --version`. With `--until <file>` after that, it waits for `<file>` to exist
+//! before exiting (a setup command that's still running for as long as a test needs).
 
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
@@ -108,6 +109,11 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("--print") {
         println!("{}", args.get(2).cloned().unwrap_or_default());
+        if let (Some("--until"), Some(file)) = (args.get(3).map(String::as_str), args.get(4)) {
+            while !std::path::Path::new(file).exists() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
         return;
     }
 

@@ -4,9 +4,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { SessionId } from "./core";
 
-/** Spec story 26's optional notification; off until the settings file (ticket 08) can switch it on. */
-export const NOTIFY_WHEN_BACKGROUND_TURN_FINISHES = false;
-
 export function notify(sessionId: SessionId, title: string, body: string) {
   return invoke<void>("notify_session", { sessionId, title, body });
 }

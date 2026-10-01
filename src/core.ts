@@ -51,6 +51,35 @@ export interface CreatedWorktree {
   worktree: WorktreeInfo;
   /** E.g. the fetch failed, so it started from what was fetched last. */
   warning: string | null;
+  /** The repo's Worktree setup, now running; the core starts the first session after it. Null when
+   *  the repo has none, so the caller starts the session. */
+  setup: SetupInfo | null;
+}
+
+export type SetupStatus =
+  | { kind: "running"; step: number }
+  | { kind: "startingSession" }
+  | { kind: "failed"; step: number; message: string }
+  /** The commands ran (or were skipped), but the Agent session didn't start. */
+  | { kind: "sessionFailed"; message: string }
+  | { kind: "done"; sessionId: SessionId };
+
+export interface SetupInfo {
+  worktree: string;
+  commands: string[];
+  status: SetupStatus;
+  /** What the commands printed so far (the latest 256 KB). */
+  output: string;
+}
+
+export interface Settings {
+  notifications: { turnFinished: boolean };
+}
+
+export interface LoadedSettings {
+  settings: Settings;
+  /** Why the settings file was rejected; the settings above are the last good ones. */
+  error: string | null;
 }
 
 export interface BranchList {
@@ -122,7 +151,10 @@ export type CoreEvent =
   | { kind: "sessionStateChanged"; sessionId: SessionId; state: SessionState }
   | { kind: "permissionModeChanged"; sessionId: SessionId; mode: PermissionMode }
   | { kind: "sessionUnreadChanged"; sessionId: SessionId; unread: number }
-  | { kind: "worktreesChanged"; worktrees: WorktreeInfo[] };
+  | { kind: "worktreesChanged"; worktrees: WorktreeInfo[] }
+  | { kind: "settingsChanged"; settings: LoadedSettings }
+  | { kind: "setupChanged"; worktree: string; commands: string[]; status: SetupStatus }
+  | { kind: "setupOutput"; worktree: string; text: string };
 
 export const core = {
   prerequisites: () => invoke<MissingPrerequisite[]>("prerequisites"),
@@ -137,6 +169,15 @@ export const core = {
   branches: () => invoke<BranchList>("branches"),
   suggestBranchName: () => invoke<string>("suggest_branch_name"),
   defaultStartPoint: () => invoke<string>("default_start_point"),
+  settings: () => invoke<LoadedSettings>("settings"),
+  /** Adds this repo's section to the settings file if need be, and opens the file. */
+  openRepoSettings: () => invoke<void>("open_repo_settings"),
+  /** Setups this editor ran or is running, for a view that opened after they started. */
+  setups: () => invoke<SetupInfo[]>("setups"),
+  /** Reruns a failed setup from the command that failed, as the settings file has it now. */
+  retrySetup: (worktree: string) => invoke<void>("retry_setup", { worktree }),
+  /** Skips the rest of a failed setup and starts the session. */
+  startAnyway: (worktree: string) => invoke<void>("start_anyway", { worktree }),
   sendPrompt: (sessionId: SessionId, text: string) => invoke<void>("send_prompt", { sessionId, text }),
   answerPermission: (sessionId: SessionId, toolCallId: string, optionId: string) =>
     invoke<void>("answer_permission", { sessionId, toolCallId, optionId }),

@@ -11,4 +11,5 @@
 - [ ] "Delete branch too" is pre-ticked only when the branch is merged into its base.
 - [ ] The main checkout offers no remove action.
 - [ ] Running sessions are stopped before removal.
+- [ ] A running Worktree setup is stopped with its whole process tree (a Job object on Windows, a process group on Linux). Today, aborting a setup kills only the shell, so `node`/`pnpm` under it keep running, and the folder stays locked on Windows. (Deferred from ticket 08's review.)
 - [ ] Core tests with real `git`: clean, dirty, unpushed and merged cases.

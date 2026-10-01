@@ -152,6 +152,10 @@ impl FakeAgent {
         }
     }
 
+    pub fn settings_path(&self) -> PathBuf {
+        self.dir.path().join("settings.toml")
+    }
+
     pub fn log_path(&self) -> PathBuf {
         self.dir.path().join("log.jsonl")
     }
@@ -176,6 +180,16 @@ impl FakeAgent {
 pub fn core_with(agent: &FakeAgent) -> Core {
     Core::new(CoreConfig {
         adapter: agent.command(),
+        settings_path: None,
+    })
+}
+
+/// A core reading its settings from `settings.toml` in the fake agent's temp folder, written first.
+pub fn core_with_settings(agent: &FakeAgent, settings: &str) -> Core {
+    std::fs::write(agent.settings_path(), settings).expect("write settings");
+    Core::new(CoreConfig {
+        adapter: agent.command(),
+        settings_path: Some(agent.settings_path()),
     })
 }
 
@@ -188,6 +202,43 @@ pub async fn eventually(what: &str, mut check: impl FnMut() -> bool) {
     })
     .await
     .unwrap_or_else(|_| panic!("timed out waiting for {what}"));
+}
+
+/// Waits for the first event `pick` accepts, returning what it made of it.
+pub async fn next_event<T>(
+    events: &mut broadcast::Receiver<CoreEvent>,
+    what: &str,
+    mut pick: impl FnMut(CoreEvent) -> Option<T>,
+) -> T {
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            if let Some(found) = pick(events.recv().await.expect("event")) {
+                return found;
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
+}
+
+/// A TOML literal string (no escapes, so Windows paths can go in as they are).
+pub fn toml_literal(text: &str) -> String {
+    assert!(
+        !text.contains('\''),
+        "{text} can't be a TOML literal string"
+    );
+    format!("'{text}'")
+}
+
+/// `origin`'s URL as git reports it, which is how a repo's settings section is keyed.
+pub fn origin_url(repo: &Path) -> String {
+    let out = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(repo)
+        .output()
+        .expect("run git");
+    assert!(out.status.success(), "git remote get-url failed");
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
 
 /// Waits for state changes of `session`, returning them in order, until `last` is seen.

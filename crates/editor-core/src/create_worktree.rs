@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::CoreError;
 use crate::git;
+use crate::setup::SetupInfo;
 use crate::worktrees::{self, WorktreeInfo};
 
 /// What to create.
@@ -32,6 +33,9 @@ pub struct CreatedWorktree {
     pub worktree: WorktreeInfo,
     /// E.g. the fetch failed, so the Worktree started from what was fetched last.
     pub warning: Option<String>,
+    /// The repo's Worktree setup, now running; its first session starts when it's done. `None`
+    /// when the repo has no setup, so the caller starts the session.
+    pub setup: Option<SetupInfo>,
 }
 
 /// A branch, as the "existing branch" picker shows it.

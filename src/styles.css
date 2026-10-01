@@ -57,6 +57,20 @@ input, textarea { background: var(--bg3); border: 1px solid var(--line); border-
 .empty-worktree { flex: 1; flex-direction: column; gap: 8px; height: auto; }
 .add-worktree { align-self: center; margin: 0 0 4px 4px; font-size: 12px; white-space: nowrap; }
 
+/* Worktree setup, in place of the first Tab */
+.setup { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 22px; }
+.setup-head { display: flex; align-items: center; gap: 10px; }
+.setup-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
+.setup-steps li { display: flex; gap: 8px; align-items: baseline; color: var(--fg2); }
+.setup-steps li.done .setup-icon { color: var(--idle); }
+.setup-steps li.running { color: var(--fg); }
+.setup-steps li.running .setup-icon { color: var(--working); animation: pulse 1.2s infinite; }
+.setup-steps li.failed { color: var(--fg); }
+.setup-steps li.failed .setup-icon { color: var(--exited); }
+.setup-icon { width: 12px; text-align: center; }
+.setup-output { flex: 1; min-height: 80px; margin: 0; overflow: auto; padding: 8px 10px; background: var(--bg2); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.setup-actions { display: flex; align-items: center; gap: 8px; }
+
 /* Dialogs */
 .modal-backdrop { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.45); display: flex; justify-content: center; align-items: flex-start; padding-top: 14vh; }
 .modal { width: min(560px, 92vw); background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); overflow: hidden; }

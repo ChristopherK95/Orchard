@@ -4,6 +4,7 @@ import { batch, createEffect, createSignal, For, Match, onCleanup, onMount, Show
 import { createStore, produce, reconcile } from "solid-js/store";
 import {
   core,
+  type LoadedSettings,
   type MissingPrerequisite,
   type PermissionMode,
   type SessionId,
@@ -19,7 +20,8 @@ import { answerByKey } from "./PermissionCard";
 import { NewWorktreeDialog } from "./NewWorktreeDialog";
 import { Transcript } from "./Transcript";
 import { ContextBar, removedWorktree, worktreeColour, WorktreeRow, type WorktreeTab } from "./Worktrees";
-import { notify, NOTIFY_WHEN_BACKGROUND_TURN_FINISHES, onNotificationClicked } from "./notify";
+import { notify, onNotificationClicked } from "./notify";
+import { keepOutput, Setup, type SetupView } from "./Setup";
 
 const STATE_LABEL: Record<SessionState, string> = {
   working: "Working",
@@ -125,6 +127,21 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   const [activeWorktree, setActiveWorktree] = createSignal(props.workspace.root);
   const lastSessionIn = new Map<string, SessionId>();
   const [creatingWorktree, setCreatingWorktree] = createSignal(false);
+  /** Worktree setups this editor started, by Worktree path; shown until the first session opens. */
+  const [setups, setSetups] = createStore<Record<string, SetupView>>({});
+  const updateSetup = (worktree: string, change: (setup: SetupView) => void) =>
+    setSetups(
+      produce((all) => {
+        all[worktree] ??= { commands: [], status: { kind: "running", step: 0 }, output: "" };
+        change(all[worktree]);
+      }),
+    );
+  /** The active Worktree's first session comes from its setup (or Start anyway), not "＋ session". */
+  const settingUp = () => {
+    const setup = setups[activeWorktree()];
+    return !!setup && setup.status.kind !== "done";
+  };
+  const [settings, setSettings] = createSignal<LoadedSettings | null>(null);
   /** Something to know that isn't an error (e.g. a fetch failed, so a Worktree started from stale refs). */
   const [notice, setNotice] = createSignal("");
   const sessionsIn = (path: string) => order().map((id) => sessions[id]).filter((s) => s.worktree === path);
@@ -260,11 +277,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     const unseen = id !== activeId() || !document.hasFocus();
     if (!unseen) return;
     if (state === "needsYou") void notify(id, `${name} needs you`, "The Agent is waiting for your answer.");
-    else if (NOTIFY_WHEN_BACKGROUND_TURN_FINISHES && previous === "working" && state === "idle")
+    else if (settings()?.settings.notifications.turnFinished && previous === "working" && state === "idle")
       void notify(id, `${name} finished`, "The Agent's turn is done.");
   };
 
   let sawWorktreesEvent = false;
+  let sawSettingsEvent = false;
   onMount(async () => {
     const unlisten = await core.onEvent((event) => {
       if (event.kind === "worktreesChanged") {
@@ -273,6 +291,17 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         // The active Worktree was removed: fall back to the main checkout.
         const active = activeWorktree();
         if (!event.worktrees.some((w) => w.path === active) && sessionsIn(active).length === 0) selectWorktree(props.workspace.root);
+      } else if (event.kind === "settingsChanged") {
+        sawSettingsEvent = true;
+        setSettings(event.settings);
+      } else if (event.kind === "setupChanged") {
+        const { worktree, commands, status } = event;
+        updateSetup(worktree, (s) => Object.assign(s, { commands, status }));
+        // Setup finished while you watched it: on to its session.
+        if (status.kind === "done" && activeWorktree() === worktree && activeId() === null) void show(status.sessionId);
+      } else if (event.kind === "setupOutput") {
+        const { text } = event;
+        updateSetup(event.worktree, (s) => (s.output = keepOutput(s.output, text)));
       } else if (event.kind === "sessionCreated") {
         setSessions(event.session.id, event.session);
         setOrder((ids) => [...ids, event.session.id]);
@@ -296,6 +325,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     const onFocus = () => void core.refreshWorktrees();
     window.addEventListener("focus", onFocus);
     onCleanup(() => window.removeEventListener("focus", onFocus));
+    const loaded = await core.settings();
+    if (!sawSettingsEvent) setSettings(loaded);
+    // Setups started before this view (e.g. the webview reloaded); events since then win.
+    for (const setup of await core.setups()) if (!setups[setup.worktree]) setSetups(setup.worktree, setup);
     const snapshot = await core.worktrees();
     if (!sawWorktreesEvent) setWorktrees(snapshot);
     const first = await newSession();
@@ -312,6 +345,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       <header class="titlebar">
         <b>{props.workspace.name}</b>
         <span class="muted mono">{props.workspace.root}</span>
+        <span class="grow" />
+        <button class="ghost" onClick={() => core.openRepoSettings().catch((err) => setError(String(err)))} title="Settings for this repo, e.g. its Worktree setup commands">
+          Repo settings
+        </button>
       </header>
       <WorktreeRow worktrees={rowWorktrees()} active={activeWorktree()} sessionsIn={sessionsIn} onSelect={selectWorktree} onNewSession={(path) => void newSession(path)} onNewWorktree={() => setCreatingWorktree(true)} />
       <Show when={creatingWorktree()}>
@@ -319,10 +356,15 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           activeBranch={worktree()?.branch ?? null}
           onCreated={(created) => {
             // The Worktree exists now: close, and start its session in the main view, where a
-            // failure leaves the (empty) Worktree selected with "＋ session" to retry.
+            // failure leaves the (empty) Worktree selected with "＋ session" to retry. With a
+            // setup, show it running; the core starts the session once it's done.
             setCreatingWorktree(false);
             setNotice(created.warning ?? "");
-            void newSession(created.worktree.path);
+            const setup = created.setup;
+            if (!setup) return void newSession(created.worktree.path);
+            // Events may have got here first: keep their status and output.
+            updateSetup(setup.worktree, (s) => (s.commands = setup.commands));
+            selectWorktree(setup.worktree);
           }}
           onGoToWorktree={(path) => {
             setCreatingWorktree(false);
@@ -344,7 +386,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
             </button>
           )}
         </For>
-        <button class="ghost add-tab" onClick={() => void newSession()} title="New Agent session in this Worktree" disabled={worktree()?.removed}>
+        <button class="ghost add-tab" onClick={() => void newSession()} title="New Agent session in this Worktree" disabled={worktree()?.removed || settingUp()}>
           ＋ session
         </button>
       </nav>
@@ -359,6 +401,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           {notice()}
         </p>
       </Show>
+      <Show when={settings()?.error}>
+        {(e) => <p class="error banner">Settings not applied: {e()}</p>}
+      </Show>
       <Show when={error()}>
         <p class="error banner">{error()}</p>
       </Show>
@@ -366,12 +411,19 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         when={session()}
         keyed
         fallback={
-          <div class="center muted empty-worktree">
-            <p>No Agent sessions in this Worktree yet.</p>
-            <button class="primary" onClick={() => void newSession()}>
-              ＋ session
-            </button>
-          </div>
+          <Show
+            when={setups[activeWorktree()]?.status.kind !== "done" && setups[activeWorktree()]}
+            fallback={
+              <div class="center muted empty-worktree">
+                <p>No Agent sessions in this Worktree yet.</p>
+                <button class="primary" onClick={() => void newSession()}>
+                  ＋ session
+                </button>
+              </div>
+            }
+          >
+            {(setup) => <Setup worktree={activeWorktree()} setup={setup()} onError={setError} />}
+          </Show>
         }
       >
         {(s) => (

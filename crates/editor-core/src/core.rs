@@ -18,6 +18,8 @@ use crate::session::{
     PermissionMode, PermissionOutcome, SessionId, SessionInfo, SessionState, Transcript,
     TranscriptDelta, TranscriptItem, TranscriptPage,
 };
+use crate::settings::{self, LoadedSettings, WindowsShell};
+use crate::setup::{self, SetupInfo, SetupStatus};
 use crate::worktrees::{self, Discovery, WorktreeInfo};
 
 /// How long streamed transcript changes are gathered before being flushed to the visible Tab.
@@ -25,6 +27,8 @@ const FLUSH_INTERVAL: Duration = Duration::from_millis(16);
 
 pub struct CoreConfig {
     pub adapter: AdapterCommand,
+    /// The settings file (ticket 08); `None` runs on the defaults, with nothing read or watched.
+    pub settings_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -57,6 +61,16 @@ pub enum CoreError {
     NoPendingPermission,
     #[error("`{0}` isn't one of the options the Agent offered")]
     UnknownPermissionOption(String),
+    #[error("the editor has no settings file")]
+    NoSettingsFile,
+    #[error("couldn't write the settings file: {0}")]
+    SettingsWrite(String),
+    #[error("this Worktree's setup is still running")]
+    SetupRunning,
+    #[error("this Worktree's setup failed; Retry it or Start anyway")]
+    SetupFailed,
+    #[error("this Worktree has no failed setup to retry or skip")]
+    NoFailedSetup,
     #[error(transparent)]
     Acp(#[from] AcpError),
 }
@@ -95,6 +109,22 @@ pub enum CoreEvent {
     WorktreesChanged {
         worktrees: Vec<WorktreeInfo>,
     },
+    /// The settings file was saved: the settings now in force, or why the file was rejected.
+    SettingsChanged {
+        settings: LoadedSettings,
+    },
+    /// A Worktree's setup moved on (to a command, a failure, or its first session).
+    SetupChanged {
+        worktree: PathBuf,
+        /// As the settings file had them when the setup started (or was last retried).
+        commands: Vec<String>,
+        status: SetupStatus,
+    },
+    /// Output from the running setup command.
+    SetupOutput {
+        worktree: PathBuf,
+        text: String,
+    },
 }
 
 /// Batches of transcript changes for one session, flushed about once per frame.
@@ -125,15 +155,51 @@ struct Inner {
     discovery: Mutex<Option<Arc<Discovery>>>,
     /// Serialises Worktree refreshes.
     refresh_lock: tokio::sync::Mutex<()>,
+    settings: Mutex<LoadedSettings>,
+    /// Reloads the settings file when it's saved; dropping it stops the watch.
+    settings_watch: Mutex<Option<notify::RecommendedWatcher>>,
+    /// Serialises the editor's own writes to the settings file.
+    settings_write: tokio::sync::Mutex<()>,
 }
 
 #[derive(Default)]
 struct State {
     workspace: Option<WorkspaceInfo>,
     worktrees: Vec<WorktreeInfo>,
+    /// Worktree setups started by this editor, by Worktree path.
+    setups: HashMap<PathBuf, SetupRun>,
     sessions: HashMap<SessionId, Arc<Session>>,
     by_acp_id: HashMap<String, SessionId>,
     next_session: u64,
+}
+
+struct SetupRun {
+    info: SetupInfo,
+    shell: WindowsShell,
+    /// The task running it, aborted (killing its command) if the Worktree goes away.
+    task: Option<tokio::task::AbortHandle>,
+}
+
+impl SetupRun {
+    fn changed(&self) -> CoreEvent {
+        CoreEvent::SetupChanged {
+            worktree: self.info.worktree.clone(),
+            commands: self.info.commands.clone(),
+            status: self.info.status.clone(),
+        }
+    }
+
+    fn stop(&self) {
+        if let Some(task) = &self.task {
+            task.abort(); // its command is killed when the task drops it
+        }
+    }
+}
+
+/// Where a claimed setup carries on from.
+enum Resume {
+    Command(usize),
+    Session,
 }
 
 struct Session {
@@ -192,19 +258,216 @@ struct OpenQuestion {
 impl Core {
     pub fn new(config: CoreConfig) -> Self {
         let (events, _) = broadcast::channel(1024);
-        Self {
-            inner: Arc::new(Inner {
-                config,
-                events,
-                state: Mutex::default(),
-                adapter: tokio::sync::Mutex::new(None),
-                visible_tab: Mutex::new(None),
-                discovery: Mutex::new(None),
-                refresh_lock: tokio::sync::Mutex::new(()),
-            }),
+        let loaded = match &config.settings_path {
+            Some(path) => settings::apply(&LoadedSettings::default(), settings::read(path)),
+            None => LoadedSettings::default(),
+        };
+        let inner = Arc::new(Inner {
+            config,
+            events,
+            state: Mutex::default(),
+            adapter: tokio::sync::Mutex::new(None),
+            visible_tab: Mutex::new(None),
+            discovery: Mutex::new(None),
+            refresh_lock: tokio::sync::Mutex::new(()),
+            settings: Mutex::new(loaded),
+            settings_watch: Mutex::new(None),
+            settings_write: tokio::sync::Mutex::new(()),
+        });
+        if let Some(path) = &inner.config.settings_path {
+            let weak = Arc::downgrade(&inner);
+            let watch = settings::watch(path, move || match weak.upgrade() {
+                Some(inner) => {
+                    inner.reload_settings();
+                    true
+                }
+                None => false,
+            });
+            if watch.is_none() {
+                eprintln!(
+                    "can't watch {}: settings changes apply after a restart",
+                    path.display()
+                );
+            }
+            *inner.settings_watch.lock().expect("settings watch lock") = watch;
+            // A save between the first read and the watch starting would otherwise be missed.
+            inner.reload_settings();
+        }
+        Self { inner }
+    }
+
+    /// The settings in force, and the settings file's error if it doesn't parse.
+    pub fn settings(&self) -> LoadedSettings {
+        self.inner.settings.lock().expect("settings lock").clone()
+    }
+
+    /// Makes sure the settings file has a section for this repo (adding a template keyed by its
+    /// `origin` URL, else its path) and returns the file's path, for the user to edit.
+    pub async fn open_repo_settings(&self) -> Result<PathBuf, CoreError> {
+        let path = self
+            .inner
+            .config
+            .settings_path
+            .clone()
+            .ok_or(CoreError::NoSettingsFile)?;
+        let workspace = self.workspace()?;
+        let origin = git::origin_url(&workspace.root).await;
+        // One at a time, or two quick clicks could both add the section (a duplicate table).
+        let _one_at_a_time = self.inner.settings_write.lock().await;
+        // Read it now: a section saved a moment ago may not have been reloaded yet.
+        self.inner.reload_settings();
+        let needs_section = {
+            let loaded = self.inner.settings.lock().expect("settings lock");
+            // A file that doesn't parse is left for the user to fix (it may have the section already).
+            loaded.error.is_none()
+                && loaded
+                    .settings
+                    .repo(origin.as_deref(), &workspace.root)
+                    .is_none()
+        };
+        if needs_section {
+            let key = origin.unwrap_or_else(|| workspace.root.display().to_string());
+            settings::add_repo_section(&path, &key, &workspace.name)
+                .map_err(|e| CoreError::SettingsWrite(e.to_string()))?;
+            self.inner.reload_settings();
+        }
+        Ok(path)
+    }
+
+    /// The setup this editor ran (or is running) in `worktree`, if any.
+    pub fn setup(&self, worktree: &Path) -> Option<SetupInfo> {
+        let worktree = worktrees::normalize(worktree.to_owned());
+        self.inner
+            .state
+            .lock()
+            .expect("state lock")
+            .setups
+            .get(&worktree)
+            .map(|run| run.info.clone())
+    }
+
+    /// Every setup this editor ran (or is running) in this Workspace, for a view opening late.
+    pub fn setups(&self) -> Vec<SetupInfo> {
+        self.inner
+            .state
+            .lock()
+            .expect("state lock")
+            .setups
+            .values()
+            .map(|run| run.info.clone())
+            .collect()
+    }
+
+    /// Reruns a failed setup from the command that failed, with the repo's setup commands as the
+    /// settings file has them now (so a command fixed there is the one that reruns).
+    pub async fn retry_setup(&self, worktree: &Path) -> Result<(), CoreError> {
+        let worktree = worktrees::normalize(worktree.to_owned());
+        let root = self.workspace()?.root;
+        let (commands, shell) = self.repo_setup(&root).await.unwrap_or_default();
+        let resume = self.inner.claim_failed_setup(&worktree, |run| {
+            let from = match run.info.status {
+                SetupStatus::Failed { step, .. } => step,
+                _ => commands.len(), // only the session failed
+            };
+            run.info.commands = commands;
+            run.shell = shell;
+            if from < run.info.commands.len() {
+                Resume::Command(from)
+            } else {
+                Resume::Session
+            }
+        })?;
+        self.resume_setup(worktree, resume);
+        Ok(())
+    }
+
+    /// Skips the rest of a failed setup and starts the Worktree's first session.
+    pub fn start_anyway(&self, worktree: &Path) -> Result<(), CoreError> {
+        let worktree = worktrees::normalize(worktree.to_owned());
+        let resume = self
+            .inner
+            .claim_failed_setup(&worktree, |_| Resume::Session)?;
+        self.resume_setup(worktree, resume);
+        Ok(())
+    }
+
+    /// The repo's setup commands for this OS (none if empty) and shell, from freshly read settings.
+    async fn repo_setup(&self, root: &Path) -> Option<(Vec<String>, WindowsShell)> {
+        let origin = git::origin_url(root).await;
+        // A save a moment ago may not have been reloaded yet.
+        self.inner.reload_settings();
+        let loaded = self.inner.settings.lock().expect("settings lock");
+        let repo = loaded.settings.repo(origin.as_deref(), root)?;
+        let commands = repo.setup_commands().to_vec();
+        (!commands.is_empty()).then_some((commands, repo.windows_shell))
+    }
+
+    /// Runs a claimed setup on from `resume` in the background, keeping a handle to stop it.
+    fn resume_setup(&self, worktree: PathBuf, resume: Resume) {
+        let core = self.clone();
+        let path = worktree.clone();
+        let task = tokio::spawn(async move {
+            match resume {
+                Resume::Command(from) => core.run_setup(path, from).await,
+                Resume::Session => core.start_first_session(path).await,
+            }
+        });
+        if let Some(run) = self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .setups
+            .get_mut(&worktree)
+        {
+            run.task = Some(task.abort_handle());
         }
     }
 
+    /// Runs setup commands from `from` on, stopping at the first failure; then starts the session.
+    async fn run_setup(&self, worktree: PathBuf, from: usize) {
+        let Some((commands, shell)) = self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .setups
+            .get(&worktree)
+            .map(|run| (run.info.commands.clone(), run.shell))
+        else {
+            return;
+        };
+        for (step, command) in commands.iter().enumerate().skip(from) {
+            self.inner
+                .set_setup_status(&worktree, SetupStatus::Running { step });
+            self.inner.setup_output(&worktree, format!("> {command}\n"));
+            let result = setup::run(command, &worktree, shell, |text| {
+                self.inner.setup_output(&worktree, text)
+            })
+            .await;
+            if let Err(message) = result {
+                self.inner.setup_output(&worktree, format!("{message}\n"));
+                self.inner
+                    .set_setup_status(&worktree, SetupStatus::Failed { step, message });
+                return;
+            }
+        }
+        self.inner
+            .set_setup_status(&worktree, SetupStatus::StartingSession);
+        self.start_first_session(worktree).await;
+    }
+
+    async fn start_first_session(&self, worktree: PathBuf) {
+        let status = match self.start_session_in(&worktree).await {
+            Ok(session_id) => SetupStatus::Done { session_id },
+            Err(err) => {
+                let message = format!("the Agent session didn't start: {err}");
+                self.inner.setup_output(&worktree, format!("{message}\n"));
+                SetupStatus::SessionFailed { message }
+            }
+        };
+        self.inner.set_setup_status(&worktree, status);
+    }
     pub fn subscribe(&self) -> broadcast::Receiver<CoreEvent> {
         self.inner.events.subscribe()
     }
@@ -233,6 +496,10 @@ impl Core {
             let mut state = self.inner.state.lock().expect("state lock");
             state.workspace = Some(workspace.clone());
             state.worktrees = listed;
+            // Setups belong to the previous Workspace's Worktrees.
+            for (_, run) in state.setups.drain() {
+                run.stop();
+            }
         }
         self.inner.watch_worktrees(&workspace.root).await;
         Ok(workspace)
@@ -266,7 +533,33 @@ impl Core {
             .into_iter()
             .find(|w| w.path == path)
             .ok_or(CoreError::WorktreeNotListed(path))?;
-        Ok(CreatedWorktree { worktree, warning })
+        let setup = self.start_setup(&root, &worktree.path).await;
+        Ok(CreatedWorktree {
+            worktree,
+            warning,
+            setup,
+        })
+    }
+
+    /// Starts the repo's Worktree setup in a new Worktree, if it has one.
+    async fn start_setup(&self, root: &Path, worktree: &Path) -> Option<SetupInfo> {
+        let (commands, shell) = self.repo_setup(root).await?;
+        let info = SetupInfo {
+            worktree: worktree.to_owned(),
+            commands,
+            status: SetupStatus::Running { step: 0 },
+            output: String::new(),
+        };
+        self.inner.state.lock().expect("state lock").setups.insert(
+            worktree.to_owned(),
+            SetupRun {
+                info: info.clone(),
+                shell,
+                task: None,
+            },
+        );
+        self.resume_setup(worktree.to_owned(), Resume::Command(0));
+        Some(info)
     }
 
     /// Local and remote branches, for the "existing branch" picker. Fetches first, so a colleague's
@@ -306,8 +599,30 @@ impl Core {
         self.new_session_in(&root).await
     }
 
-    /// Starts a new Agent session in one of the Workspace's Worktrees.
+    /// Starts a new Agent session in one of the Workspace's Worktrees. A Worktree whose setup hasn't
+    /// finished gets its first session from the setup (or Start anyway), not from here.
     pub async fn new_session_in(&self, worktree: &Path) -> Result<SessionId, CoreError> {
+        let wanted = worktrees::normalize(worktree.to_owned());
+        let status = self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .setups
+            .get(&wanted)
+            .map(|run| run.info.status.clone());
+        match status {
+            Some(SetupStatus::Running { .. } | SetupStatus::StartingSession) => {
+                Err(CoreError::SetupRunning)
+            }
+            Some(SetupStatus::Failed { .. } | SetupStatus::SessionFailed { .. }) => {
+                Err(CoreError::SetupFailed)
+            }
+            Some(SetupStatus::Done { .. }) | None => self.start_session_in(worktree).await,
+        }
+    }
+
+    async fn start_session_in(&self, worktree: &Path) -> Result<SessionId, CoreError> {
         self.workspace()?;
         let wanted = worktrees::normalize(worktree.to_owned());
         let root = self
@@ -606,6 +921,73 @@ impl Core {
 }
 
 impl Inner {
+    /// Re-reads the settings file, publishing the result if it changed anything.
+    fn reload_settings(&self) {
+        let Some(path) = &self.config.settings_path else {
+            return;
+        };
+        // Read under the lock, so an older read can't be applied over a newer one.
+        let mut loaded = self.settings.lock().expect("settings lock");
+        let next = settings::apply(&loaded, settings::read(path));
+        if *loaded != next {
+            *loaded = next.clone();
+            let _ = self
+                .events
+                .send(CoreEvent::SettingsChanged { settings: next });
+        }
+    }
+
+    /// Lets `decide` say where a failed setup carries on from (it may update the run first), and
+    /// marks it so under the lock, so only one Retry or Start anyway takes effect.
+    fn claim_failed_setup(
+        &self,
+        worktree: &Path,
+        decide: impl FnOnce(&mut SetupRun) -> Resume,
+    ) -> Result<Resume, CoreError> {
+        let mut state = self.state.lock().expect("state lock");
+        let run = state
+            .setups
+            .get_mut(worktree)
+            .ok_or(CoreError::NoFailedSetup)?;
+        if !matches!(
+            run.info.status,
+            SetupStatus::Failed { .. } | SetupStatus::SessionFailed { .. }
+        ) {
+            return Err(CoreError::NoFailedSetup);
+        }
+        let resume = decide(run);
+        run.info.status = match resume {
+            Resume::Command(step) => SetupStatus::Running { step },
+            Resume::Session => SetupStatus::StartingSession,
+        };
+        let _ = self.events.send(run.changed());
+        Ok(resume)
+    }
+
+    fn set_setup_status(&self, worktree: &Path, status: SetupStatus) {
+        let mut state = self.state.lock().expect("state lock");
+        let Some(run) = state.setups.get_mut(worktree) else {
+            return;
+        };
+        if run.info.status != status {
+            run.info.status = status;
+            let _ = self.events.send(run.changed());
+        }
+    }
+
+    /// Keeps setup output for late viewers and streams it to current ones.
+    fn setup_output(&self, worktree: &Path, text: String) {
+        let mut state = self.state.lock().expect("state lock");
+        let Some(run) = state.setups.get_mut(worktree) else {
+            return;
+        };
+        setup::keep_output(&mut run.info.output, &text);
+        let _ = self.events.send(CoreEvent::SetupOutput {
+            worktree: worktree.to_owned(),
+            text,
+        });
+    }
+
     /// Re-lists the Worktrees. Refreshes run one at a time (so an older listing can't overwrite a
     /// newer one), and a listing is dropped if another Workspace was opened meanwhile.
     async fn refresh_worktrees(&self) {
@@ -627,6 +1009,14 @@ impl Inner {
             return;
         }
         if state.worktrees != listed {
+            // A removed Worktree's setup is over (and its command can't keep running there).
+            state.setups.retain(|path, run| {
+                let listed = listed.iter().any(|w| &w.path == path);
+                if !listed {
+                    run.stop();
+                }
+                listed
+            });
             state.worktrees = listed.clone();
             let _ = self
                 .events

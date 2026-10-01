@@ -60,6 +60,18 @@ pub(crate) async fn fetch_origin(repo: &Path) -> Result<(), String> {
     }
 }
 
+/// `origin`'s URL, which a repo's settings section can be keyed by.
+pub(crate) async fn origin_url(repo: &Path) -> Option<String> {
+    let url = output(repo, &["remote", "get-url", "origin"]).await?;
+    Some(url.trim().to_owned()).filter(|url| !url.is_empty())
+}
+
+/// Where git's helper programs live (on Windows, inside the Git for Windows install).
+pub(crate) async fn exec_path() -> Option<PathBuf> {
+    let path = output(Path::new("."), &["--exec-path"]).await?;
+    Some(PathBuf::from(path.trim())).filter(|p| p.is_absolute())
+}
+
 /// Where a new branch starts by default: `origin/HEAD`'s target, else origin's copy of the main
 /// checkout's branch (or `origin/main` / `origin/master`), else the main checkout's own branch.
 pub(crate) async fn default_start_point(repo: &Path) -> String {
