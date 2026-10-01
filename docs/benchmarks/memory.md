@@ -7,6 +7,7 @@ webview processes), not the fake ACP agent, Node or `claude`.
 | Date | OS | Build | Scenario | 1 Tab | 5 Tabs | Per extra Tab | Idle CPU | Verdict |
 |---|---|---|---|---|---|---|---|---|
 | 2026-10-01 | Windows 11 (16 logical cores) | release, ticket 05 (first version) | 2,000-message transcript in Tab 1, no virtualisation, **no Manual editor yet** | 80.3 MB | 93.6 MB | 3.3 MB* | 0.78% of one core (10 s) | Pass |
+| 2026-10-01 | Windows 11 (16 logical cores) | release, ticket 05 (three phases) | 5 Tabs each after a short turn, then a 2,000-message transcript in Tab 1; no virtualisation, **no Manual editor yet** | 80.7 MB | 89.4 MB (94.6 MB after the transcript) | 2.2 MB | 0.39% of one core (20 s) | Pass |
 | — | Arch Linux (Wayland) | — | — | — | — | — | — | Pending: needs a Linux run (PSS) |
 
 \* The first version measured per-Tab cost as (5 Tabs − 1 Tab) / 4, with Tab 1's 2,000-message transcript

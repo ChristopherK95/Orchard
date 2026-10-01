@@ -4,7 +4,7 @@
 
 **Blocked by:** 04 (Multiple sessions and Tab states).
 
-**Status:** Windows done 2026-10-01 (93.6 MB / 3.3 MB per Tab / 0.78% idle CPU, all within budget); Arch run pending
+**Status:** Windows done 2026-10-01 (94.6 MB total, 2.2 MB per extra Tab, 0.39% idle CPU: all within budget); Arch run pending
 
 - [x] One command runs the benchmark and prints total memory, per-extra-Tab memory and idle CPU.
 - [x] It fails above ≤ 250 MB total (5 Tabs), ≤ 15 MB per extra Tab, or non-trivial idle CPU.
