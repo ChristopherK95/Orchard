@@ -5,8 +5,9 @@
 use std::path::PathBuf;
 
 use editor_core::{
-    check_prerequisites, AdapterCommand, Core, CoreConfig, MissingPrerequisite, PermissionMode,
-    SessionId, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo, WorktreeInfo,
+    check_prerequisites, AdapterCommand, BranchInfo, Core, CoreConfig, MissingPrerequisite,
+    NewWorktree, PermissionMode, SessionId, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo,
+    WorktreeInfo,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -70,6 +71,26 @@ async fn new_session_in(core: State<'_, Core>, worktree: String) -> CommandResul
 #[tauri::command]
 fn worktrees(core: State<'_, Core>) -> Vec<WorktreeInfo> {
     core.worktrees()
+}
+
+#[tauri::command]
+async fn create_worktree(core: State<'_, Core>, spec: NewWorktree) -> CommandResult<WorktreeInfo> {
+    core.create_worktree(spec).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn branches(core: State<'_, Core>) -> CommandResult<Vec<BranchInfo>> {
+    core.branches().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn suggest_branch_name(core: State<'_, Core>) -> CommandResult<String> {
+    Ok(core.suggest_branch_name().await)
+}
+
+#[tauri::command]
+async fn default_base(core: State<'_, Core>) -> CommandResult<String> {
+    core.default_base().await.map_err(|e| e.to_string())
 }
 
 /// Called when the window regains focus, in case Worktrees changed while the editor was away.
@@ -200,6 +221,10 @@ fn main() {
             new_session_in,
             worktrees,
             refresh_worktrees,
+            create_worktree,
+            branches,
+            suggest_branch_name,
+            default_base,
             send_prompt,
             answer_permission,
             set_permission_mode,

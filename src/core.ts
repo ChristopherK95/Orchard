@@ -34,6 +34,19 @@ export interface WorktreeInfo {
   changed: number;
 }
 
+/** What "＋ worktree" creates: a new branch from a base, or an existing (local or remote) branch. */
+export type NewWorktree =
+  | { kind: "newBranch"; name: string; base: string | null }
+  | { kind: "existingBranch"; name: string };
+
+export interface BranchInfo {
+  /** `feat/x` for a local branch, `origin/feat/x` for a remote one. */
+  name: string;
+  remote: boolean;
+  /** Where a local branch is checked out; such a branch can't be checked out again. */
+  checkedOutIn: string | null;
+}
+
 export interface MissingPrerequisite {
   tool: string;
   found: string | null;
@@ -107,6 +120,11 @@ export const core = {
   newSessionIn: (worktree: string) => invoke<SessionId>("new_session_in", { worktree }),
   worktrees: () => invoke<WorktreeInfo[]>("worktrees"),
   refreshWorktrees: () => invoke<void>("refresh_worktrees"),
+  createWorktree: (spec: NewWorktree) => invoke<WorktreeInfo>("create_worktree", { spec }),
+  /** Fetches first, so remote branches are current. */
+  branches: () => invoke<BranchInfo[]>("branches"),
+  suggestBranchName: () => invoke<string>("suggest_branch_name"),
+  defaultBase: () => invoke<string>("default_base"),
   sendPrompt: (sessionId: SessionId, text: string) => invoke<void>("send_prompt", { sessionId, text }),
   answerPermission: (sessionId: SessionId, toolCallId: string, optionId: string) =>
     invoke<void>("answer_permission", { sessionId, toolCallId, optionId }),

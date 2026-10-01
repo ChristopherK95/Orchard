@@ -16,6 +16,7 @@ import {
 } from "./core";
 import { type BenchDriver, runBenchmark } from "./benchmark";
 import { answerByKey } from "./PermissionCard";
+import { NewWorktreeDialog } from "./NewWorktreeDialog";
 import { Transcript } from "./Transcript";
 import { ContextBar, removedWorktree, worktreeColour, WorktreeRow, type WorktreeTab } from "./Worktrees";
 import { notify, NOTIFY_WHEN_BACKGROUND_TURN_FINISHES, onNotificationClicked } from "./notify";
@@ -123,6 +124,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   const [worktrees, setWorktrees] = createSignal<WorktreeInfo[]>([]);
   const [activeWorktree, setActiveWorktree] = createSignal(props.workspace.root);
   const lastSessionIn = new Map<string, SessionId>();
+  const [creatingWorktree, setCreatingWorktree] = createSignal(false);
   const sessionsIn = (path: string) => order().map((id) => sessions[id]).filter((s) => s.worktree === path);
   const rowWorktrees = (): WorktreeTab[] => {
     const listed = worktrees();
@@ -309,7 +311,21 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         <b>{props.workspace.name}</b>
         <span class="muted mono">{props.workspace.root}</span>
       </header>
-      <WorktreeRow worktrees={rowWorktrees()} active={activeWorktree()} sessionsIn={sessionsIn} onSelect={selectWorktree} onNewSession={(path) => void newSession(path)} />
+      <WorktreeRow worktrees={rowWorktrees()} active={activeWorktree()} sessionsIn={sessionsIn} onSelect={selectWorktree} onNewSession={(path) => void newSession(path)} onNewWorktree={() => setCreatingWorktree(true)} />
+      <Show when={creatingWorktree()}>
+        <NewWorktreeDialog
+          activeBranch={worktree()?.branch ?? null}
+          onCreated={async (w) => {
+            setWorktrees((list) => (list.some((x) => x.path === w.path) ? list : [...list, w]));
+            await newSession(w.path);
+          }}
+          onGoToWorktree={(path) => {
+            setCreatingWorktree(false);
+            selectWorktree(path);
+          }}
+          onClose={() => setCreatingWorktree(false)}
+        />
+      </Show>
       <nav class="tabs" style={{ "--c": worktreeColour(activeWorktree()) }}>
         <For each={sessionsIn(activeWorktree()).map((s) => s.id)}>
           {(id) => (

@@ -31,6 +31,7 @@ export function WorktreeRow(props: {
   sessionsIn: (path: string) => SessionInfo[];
   onSelect: (path: string) => void;
   onNewSession: (path: string) => void;
+  onNewWorktree: () => void;
 }) {
   return (
     <nav class="worktree-row">
@@ -73,6 +74,9 @@ export function WorktreeRow(props: {
           );
         }}
       </For>
+      <button class="ghost add-worktree" onClick={() => props.onNewWorktree()} title="New Worktree with an Agent session">
+        ＋ worktree
+      </button>
     </nav>
   );
 }

@@ -48,7 +48,10 @@ impl RepoWithOrigin {
             dir.path(),
             &["init", "--quiet", "-b", "main", seed.to_str().unwrap()],
         );
-        git(&seed, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        git(
+            &seed,
+            &["remote", "add", "origin", origin.to_str().unwrap()],
+        );
         commit(&seed, "init");
         git(&seed, &["push", "--quiet", "origin", "main"]);
         git(
