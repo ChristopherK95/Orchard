@@ -8,6 +8,7 @@
     "vite": "vite",
     "build:web": "vite build",
     "typecheck": "tsc --noEmit",
+    "bench:memory": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bench-memory.ps1",
     "tauri": "tauri"
   },
   "dependencies": {

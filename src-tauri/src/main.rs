@@ -94,6 +94,21 @@ async fn set_permission_mode(
         .map_err(|e| e.to_string())
 }
 
+/// Benchmark mode (ticket 05): `AGENT_EDITOR_BENCH` names a file the frontend's scripted scenario
+/// appends phase markers to, so `scripts/bench-memory.ps1` knows when to measure.
+#[tauri::command]
+fn bench_mode() -> bool {
+    std::env::var_os("AGENT_EDITOR_BENCH").is_some()
+}
+
+#[tauri::command]
+fn bench_mark(phase: String) -> CommandResult<()> {
+    use std::io::Write;
+    let Some(path) = std::env::var_os("AGENT_EDITOR_BENCH") else { return Ok(()) };
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(|e| e.to_string())?;
+    writeln!(file, "{phase}").map_err(|e| e.to_string())
+}
+
 /// Shows an OS notification about a session; clicking it opens that session's Tab.
 #[tauri::command]
 fn notify_session(app: AppHandle, session_id: SessionId, title: String, body: String) {
@@ -155,6 +170,8 @@ fn main() {
             set_permission_mode,
             transcript_page_before,
             notify_session,
+            bench_mode,
+            bench_mark,
             show_session
         ])
         .run(tauri::generate_context!())
