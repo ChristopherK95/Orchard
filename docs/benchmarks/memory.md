@@ -6,8 +6,15 @@ webview processes), not the fake ACP agent, Node or `claude`.
 
 | Date | OS | Build | Scenario | 1 Tab | 5 Tabs | Per extra Tab | Idle CPU | Verdict |
 |---|---|---|---|---|---|---|---|---|
-| 2026-10-01 | Windows 11 (16 logical cores) | release, ticket 05 | 2,000-message transcript in Tab 1, no virtualisation yet | 80.3 MB | 93.6 MB | 3.3 MB | 0.78% of one core | Pass |
+| 2026-10-01 | Windows 11 (16 logical cores) | release, ticket 05 (first version) | 2,000-message transcript in Tab 1, no virtualisation, **no Manual editor yet** | 80.3 MB | 93.6 MB | 3.3 MB* | 0.78% of one core (10 s) | Pass |
 | — | Arch Linux (Wayland) | — | — | — | — | — | — | Pending: needs a Linux run (PSS) |
+
+\* The first version measured per-Tab cost as (5 Tabs − 1 Tab) / 4, with Tab 1's 2,000-message transcript
+streamed in between, so it mixed transcript growth with Tab cost and overstated per-Tab cost. The script now
+measures 5 Tabs (each after a short turn) before the long transcript.
+
+The budget names "5 Tabs and 1 open Manual editor"; the Manual editor arrives with ticket 14, which adds it to
+the scenario.
 
 **Windows metric:** Windows has no PSS, so memory is each process's private working set, the closest Windows
 equivalent. The full working set (346 MB with 1 Tab, 363 MB with 5) is much higher because it includes WebView2

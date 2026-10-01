@@ -95,6 +95,10 @@ export const core = {
   /** Up to a page of items just before index `before` (for scrolling back). */
   transcriptPageBefore: (sessionId: SessionId, before: number) =>
     invoke<TranscriptPage>("transcript_page_before", { sessionId, before }),
+  /** True when launched by the memory benchmark (ticket 05). */
+  benchMode: () => invoke<boolean>("bench_mode"),
+  /** Records that the benchmark scenario reached `phase`. */
+  benchMark: (phase: string) => invoke<void>("bench_mark", { phase }),
   onEvent: (handler: (event: CoreEvent) => void): Promise<UnlistenFn> =>
     listen<CoreEvent>("core-event", (e) => handler(e.payload)),
 };

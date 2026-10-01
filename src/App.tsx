@@ -13,7 +13,7 @@ import {
   type TranscriptItem,
   type WorkspaceInfo,
 } from "./core";
-import { benchMode, type BenchDriver, runBenchmark } from "./benchmark";
+import { type BenchDriver, runBenchmark } from "./benchmark";
 import { answerByKey, PermissionCard } from "./PermissionCard";
 import { notify, NOTIFY_WHEN_BACKGROUND_TURN_FINISHES, onNotificationClicked } from "./notify";
 
@@ -66,7 +66,13 @@ function OpenWorkspace(props: { onOpened: (w: WorkspaceInfo) => void }) {
   onMount(async () => {
     setPath((await core.defaultWorkspacePath()) ?? "");
     // The benchmark (ticket 05) opens its repository without anyone clicking.
-    if (path() && (await benchMode())) props.onOpened(await core.openWorkspace(path()));
+    if (path() && (await core.benchMode())) {
+      try {
+        props.onOpened(await core.openWorkspace(path()));
+      } catch (err) {
+        setError(String(err));
+      }
+    }
   });
 
   const open = async (e: Event) => {
@@ -155,8 +161,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     }
   };
 
-  // Turns the benchmark is waiting on: resolved when that session next becomes Idle.
-  const turnWaiters = new Map<SessionId, () => void>();
+  // Benchmark turns in flight: finished once that session has been Working and is Idle again.
+  const turnWaiters = new Map<SessionId, { sawWorking: boolean; resolve: () => void; reject: (e: Error) => void }>();
   const benchDriver: BenchDriver = {
     newSession: async () => {
       const id = await newSession();
@@ -164,12 +170,23 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       return id;
     },
     show,
-    send: (id, text) =>
+    turn: (id, text) =>
       new Promise((resolve, reject) => {
-        turnWaiters.set(id, resolve);
-        core.sendPrompt(id, text).catch(reject);
+        turnWaiters.set(id, { sawWorking: false, resolve, reject });
+        core.sendPrompt(id, text).catch((err) => {
+          turnWaiters.delete(id);
+          reject(err);
+        });
       }),
-    state: (id) => sessions[id]?.state,
+  };
+  const onBenchState = (id: SessionId, state: SessionState) => {
+    const waiter = turnWaiters.get(id);
+    if (!waiter) return;
+    if (state === "working") waiter.sawWorking = true;
+    else if (state === "exited") waiter.reject(new Error("the Agent exited mid-turn"));
+    else if (state === "idle" && waiter.sawWorking) waiter.resolve();
+    else return;
+    if (state !== "working") turnWaiters.delete(id);
   };
 
   let loadingEarlier = false;
@@ -197,10 +214,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   const onStateChanged = (id: SessionId, state: SessionState) => {
     const { name, state: previous } = sessions[id]; // read before the store updates
     setSessions(id, "state", state);
-    if (state === "idle") {
-      turnWaiters.get(id)?.();
-      turnWaiters.delete(id);
-    }
+    onBenchState(id, state);
     const unseen = id !== activeId() || !document.hasFocus();
     if (!unseen) return;
     if (state === "needsYou") void notify(id, `${name} needs you`, "The Agent is waiting for your answer.");
@@ -230,7 +244,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     window.addEventListener("keydown", onKey);
     onCleanup(() => window.removeEventListener("keydown", onKey));
     const first = await newSession();
-    if (first !== undefined && (await benchMode())) void runBenchmark(benchDriver, first);
+    if (first !== undefined && (await core.benchMode())) void runBenchmark(benchDriver, first).catch((err) => setError(`Benchmark failed: ${err}`));
   });
 
   const sharing = () => {
