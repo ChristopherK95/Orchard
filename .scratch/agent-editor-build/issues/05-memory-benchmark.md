@@ -4,9 +4,9 @@
 
 **Blocked by:** 04 (Multiple sessions and Tab states).
 
-**Status:** ready-for-agent
+**Status:** Windows done 2026-10-01 (93.6 MB / 3.3 MB per Tab / 0.78% idle CPU, all within budget); Arch run pending
 
-- [ ] One command runs the benchmark and prints total memory, per-extra-Tab memory and idle CPU.
-- [ ] It fails above ≤ 250 MB total (5 Tabs), ≤ 15 MB per extra Tab, or non-trivial idle CPU.
-- [ ] Measurement excludes the fake agent and adapter processes and includes all webview processes.
-- [ ] Results are recorded for both OSes. A miss is reported against ADR 0002.
+- [x] One command runs the benchmark and prints total memory, per-extra-Tab memory and idle CPU.
+- [x] It fails above ≤ 250 MB total (5 Tabs), ≤ 15 MB per extra Tab, or non-trivial idle CPU.
+- [x] Measurement excludes the fake agent and adapter processes and includes all webview processes.
+- [ ] Results are recorded for both OSes. A miss is reported against ADR 0002. _Windows recorded and passing (`docs/benchmarks/memory.md`); Arch pending._
