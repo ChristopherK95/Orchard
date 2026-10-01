@@ -17,6 +17,8 @@ export interface SessionInfo {
   worktree: string;
   state: SessionState;
   permissionMode: PermissionMode;
+  /** New transcript items since the Tab was last shown. */
+  unread: number;
 }
 
 export interface MissingPrerequisite {
@@ -56,7 +58,8 @@ export type TranscriptItem =
   | { kind: "permission"; request: PermissionRequest; outcome: PermissionOutcome | null };
 
 export type TranscriptDelta =
-  | { kind: "reset"; items: TranscriptItem[] }
+  /** The latest page: items `start..`. Indexes in the other deltas are absolute. */
+  | { kind: "reset"; start: number; items: TranscriptItem[] }
   | { kind: "itemAdded"; index: number; item: TranscriptItem }
   | { kind: "textAppended"; index: number; text: string }
   | { kind: "itemUpdated"; index: number; item: TranscriptItem };
@@ -64,7 +67,8 @@ export type TranscriptDelta =
 export type CoreEvent =
   | { kind: "sessionCreated"; session: SessionInfo }
   | { kind: "sessionStateChanged"; sessionId: SessionId; state: SessionState }
-  | { kind: "permissionModeChanged"; sessionId: SessionId; mode: PermissionMode };
+  | { kind: "permissionModeChanged"; sessionId: SessionId; mode: PermissionMode }
+  | { kind: "sessionUnreadChanged"; sessionId: SessionId; unread: number };
 
 export const core = {
   prerequisites: () => invoke<MissingPrerequisite[]>("prerequisites"),
@@ -76,11 +80,14 @@ export const core = {
     invoke<void>("answer_permission", { sessionId, toolCallId, optionId }),
   setPermissionMode: (sessionId: SessionId, mode: PermissionMode) =>
     invoke<void>("set_permission_mode", { sessionId, mode }),
-  watchSession: (sessionId: SessionId, onBatch: (batch: TranscriptDelta[]) => void) => {
+  /** Makes the session the visible Tab; its transcript streams to `onBatch` until another is shown. */
+  showSession: (sessionId: SessionId, onBatch: (batch: TranscriptDelta[]) => void) => {
     const channel = new Channel<TranscriptDelta[]>();
     channel.onmessage = onBatch;
-    return invoke<void>("watch_session", { sessionId, onBatch: channel });
+    return invoke<void>("show_session", { sessionId, onBatch: channel });
   },
+  transcriptPage: (sessionId: SessionId, start: number, end: number) =>
+    invoke<TranscriptItem[]>("transcript_page", { sessionId, start, end }),
   onEvent: (handler: (event: CoreEvent) => void): Promise<UnlistenFn> =>
     listen<CoreEvent>("core-event", (e) => handler(e.payload)),
 };

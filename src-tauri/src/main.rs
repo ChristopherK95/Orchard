@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use editor_core::{
     check_prerequisites, AdapterCommand, Core, CoreConfig, MissingPrerequisite, PermissionMode, SessionId, Tools,
-    TranscriptDelta, WorkspaceInfo,
+    TranscriptDelta, TranscriptItem, WorkspaceInfo,
 };
 use tauri::ipc::Channel;
 use tauri::{Emitter, Manager, State};
@@ -66,15 +66,25 @@ async fn set_permission_mode(core: State<'_, Core>, session_id: SessionId, mode:
     core.set_permission_mode(session_id, mode).await.map_err(|e| e.to_string())
 }
 
-/// Streams a session's transcript to the visible Tab over a dedicated channel.
-/// Async so it runs on Tauri's runtime: the core spawns the streaming task there.
 #[tauri::command]
-async fn watch_session(
+async fn transcript_page(
+    core: State<'_, Core>,
+    session_id: SessionId,
+    start: usize,
+    end: usize,
+) -> CommandResult<Vec<TranscriptItem>> {
+    core.transcript_page(session_id, start, end).map_err(|e| e.to_string())
+}
+
+/// Makes a session the visible Tab and streams its transcript over a dedicated channel; the
+/// previously visible Tab's stream ends. Async so the core's streaming task runs on Tauri's runtime.
+#[tauri::command]
+async fn show_session(
     core: State<'_, Core>,
     session_id: SessionId,
     on_batch: Channel<Vec<TranscriptDelta>>,
 ) -> CommandResult<()> {
-    let mut stream = core.watch_session(session_id).map_err(|e| e.to_string())?;
+    let mut stream = core.show_session(session_id).map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn(async move {
         while let Some(batch) = stream.next().await {
             if on_batch.send(batch).is_err() {
@@ -87,6 +97,7 @@ async fn watch_session(
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let core = Core::new(CoreConfig { adapter: adapter_command() });
             let mut events = core.subscribe();
@@ -107,7 +118,8 @@ fn main() {
             send_prompt,
             answer_permission,
             set_permission_mode,
-            watch_session
+            transcript_page,
+            show_session
         ])
         .run(tauri::generate_context!())
         .expect("error while running the editor");

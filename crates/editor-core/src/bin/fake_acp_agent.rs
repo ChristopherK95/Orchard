@@ -53,6 +53,9 @@ fn default_mode() -> String {
 struct Turn {
     #[serde(default)]
     chunks: Vec<String>,
+    /// Separate Agent messages (each with its own message id), sent after `chunks`.
+    #[serde(default)]
+    messages: Vec<String>,
     #[serde(default)]
     delay_ms: u64,
     /// Ask for permission before sending `chunks`.
@@ -166,6 +169,13 @@ impl Agent {
         for chunk in &chunks {
             std::thread::sleep(Duration::from_millis(turn.delay_ms));
             notify_update(&session_id, json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": chunk } }));
+        }
+        for (i, message) in turn.messages.iter().enumerate() {
+            notify_update(
+                &session_id,
+                json!({ "sessionUpdate": "agent_message_chunk", "messageId": format!("msg-{i}"),
+                        "content": { "type": "text", "text": message } }),
+            );
         }
         if turn.exit {
             std::process::exit(1);

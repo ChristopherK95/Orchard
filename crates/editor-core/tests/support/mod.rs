@@ -115,37 +115,46 @@ pub async fn states_until(
     seen
 }
 
-/// Applies streamed deltas the way the frontend does, until the rebuilt transcript equals `expected`.
-/// Returns how many batches it took.
+/// Applies streamed deltas the way the frontend does, until the rebuilt transcript (from the start
+/// of the first page sent) equals `expected`. Returns how many batches it took.
 pub async fn stream_until(stream: &mut TranscriptStream, expected: &[TranscriptItem]) -> usize {
-    let mut rebuilt: Vec<TranscriptItem> = vec![];
+    let mut rebuilt = Rebuilt::default();
     let mut batches = 0;
     tokio::time::timeout(TIMEOUT, async {
-        while rebuilt != expected {
+        while rebuilt.items != expected {
             let batch = stream.next().await.expect("stream open");
             batches += 1;
             for delta in batch {
-                apply(&mut rebuilt, delta);
+                rebuilt.apply(delta);
             }
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("timed out; rebuilt {rebuilt:?}, expected {expected:?}"));
+    .unwrap_or_else(|_| panic!("timed out; rebuilt {:?}, expected {expected:?}", rebuilt.items));
     batches
 }
 
-fn apply(items: &mut Vec<TranscriptItem>, delta: TranscriptDelta) {
-    match delta {
-        TranscriptDelta::Reset { items: all } => *items = all,
-        TranscriptDelta::ItemAdded { index, item } => {
-            assert_eq!(index, items.len(), "items are appended in order");
-            items.push(item);
+/// The frontend's view of a transcript: the items from `start` on (indexes in deltas are absolute).
+#[derive(Default)]
+struct Rebuilt {
+    start: usize,
+    items: Vec<TranscriptItem>,
+}
+
+impl Rebuilt {
+    fn apply(&mut self, delta: TranscriptDelta) {
+        match delta {
+            TranscriptDelta::Reset { start, items } => (self.start, self.items) = (start, items),
+            TranscriptDelta::ItemAdded { index, item } => {
+                assert_eq!(index, self.start + self.items.len(), "items are appended in order");
+                self.items.push(item);
+            }
+            TranscriptDelta::ItemUpdated { index, item } => self.items[index - self.start] = item,
+            TranscriptDelta::TextAppended { index, text } => match &mut self.items[index - self.start] {
+                TranscriptItem::Agent { text: t } => t.push_str(&text),
+                other => panic!("text appended to non-agent item {other:?}"),
+            },
         }
-        TranscriptDelta::ItemUpdated { index, item } => items[index] = item,
-        TranscriptDelta::TextAppended { index, text } => match &mut items[index] {
-            TranscriptItem::Agent { text: t } => t.push_str(&text),
-            other => panic!("text appended to non-agent item {other:?}"),
-        },
     }
 }
 

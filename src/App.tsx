@@ -14,6 +14,10 @@ import {
   type WorkspaceInfo,
 } from "./core";
 import { answerByKey, PermissionCard } from "./PermissionCard";
+import { notify, NOTIFY_WHEN_BACKGROUND_TURN_FINISHES } from "./notify";
+
+/** Mirrors editor-core's page size for transcripts. */
+const TRANSCRIPT_PAGE = 200;
 
 const STATE_LABEL: Record<SessionState, string> = {
   working: "Working",
@@ -90,36 +94,88 @@ function OpenWorkspace(props: { onOpened: (w: WorkspaceInfo) => void }) {
 }
 
 function WorkspaceView(props: { workspace: WorkspaceInfo }) {
-  // Sessions as the core reports them; the Tab shows the one this view created.
+  // Sessions as the core reports them; one of them is the visible Tab.
   const [sessions, setSessions] = createStore<Record<SessionId, SessionInfo>>({});
+  const [order, setOrder] = createSignal<SessionId[]>([]);
   const [activeId, setActiveId] = createSignal<SessionId | null>(null);
   const session = () => {
     const id = activeId();
     return id === null ? undefined : sessions[id];
   };
+  // The visible Tab's transcript from `start` on (the core sends the latest page first).
   const [items, setItems] = createStore<TranscriptItem[]>([]);
+  const [start, setStart] = createSignal(0);
   const [error, setError] = createSignal("");
 
-  const apply = (batch: TranscriptDelta[]) => {
+  const applyFor = (id: SessionId) => (batch: TranscriptDelta[]) => {
+    if (activeId() !== id) return; // a batch from a Tab that's no longer visible
     for (const delta of batch) {
-      if (delta.kind === "reset") setItems(reconcile(delta.items));
-      else if (delta.kind === "itemAdded" || delta.kind === "itemUpdated") setItems(delta.index, delta.item);
-      else
+      if (delta.kind === "reset") {
+        setStart(delta.start);
+        setItems(reconcile(delta.items));
+      } else if (delta.kind === "itemAdded" || delta.kind === "itemUpdated") {
+        setItems(delta.index - start(), delta.item);
+      } else {
         setItems(
           produce((all) => {
-            const item = all[delta.index];
+            const item = all[delta.index - start()];
             if (item.kind === "agent") item.text += delta.text;
           }),
         );
+      }
     }
+  };
+
+  const show = async (id: SessionId) => {
+    setActiveId(id);
+    setItems([]);
+    setStart(0);
+    try {
+      await core.showSession(id, applyFor(id));
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const newSession = async () => {
+    setError("");
+    try {
+      await show(await core.newSession());
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const loadEarlier = async () => {
+    const id = activeId();
+    if (id === null || start() === 0) return;
+    const from = Math.max(0, start() - TRANSCRIPT_PAGE);
+    const older = await core.transcriptPage(id, from, start());
+    if (activeId() !== id) return;
+    setItems((current) => [...older, ...current]);
+    setStart(from);
+  };
+
+  // Tabs that see their state change while you're not looking get an OS notification.
+  const onStateChanged = (id: SessionId, state: SessionState) => {
+    const { name, state: previous } = sessions[id]; // read before the store updates
+    setSessions(id, "state", state);
+    const unseen = id !== activeId() || !document.hasFocus();
+    if (!unseen) return;
+    if (state === "needsYou") void notify(`${name} needs you`, "The Agent is asking for permission.");
+    else if (NOTIFY_WHEN_BACKGROUND_TURN_FINISHES && previous === "working" && state === "idle")
+      void notify(`${name} finished`, "The Agent's turn is done.");
   };
 
   onMount(async () => {
     const unlisten = await core.onEvent((event) => {
-      if (event.kind === "sessionCreated") setSessions(event.session.id, event.session);
-      else if (!sessions[event.sessionId]) return;
-      else if (event.kind === "sessionStateChanged") setSessions(event.sessionId, "state", event.state);
-      else setSessions(event.sessionId, "permissionMode", event.mode);
+      if (event.kind === "sessionCreated") {
+        setSessions(event.session.id, event.session);
+        setOrder((ids) => [...ids, event.session.id]);
+      } else if (!sessions[event.sessionId]) return;
+      else if (event.kind === "sessionStateChanged") onStateChanged(event.sessionId, event.state);
+      else if (event.kind === "permissionModeChanged") setSessions(event.sessionId, "permissionMode", event.mode);
+      else setSessions(event.sessionId, "unread", event.unread);
     });
     onCleanup(unlisten);
     // Y/N answer the oldest open permission card anywhere in the Tab (outside text fields).
@@ -129,14 +185,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     };
     window.addEventListener("keydown", onKey);
     onCleanup(() => window.removeEventListener("keydown", onKey));
-    try {
-      const id = await core.newSession();
-      setActiveId(id);
-      await core.watchSession(id, apply);
-    } catch (err) {
-      setError(String(err));
-    }
+    await newSession();
   });
+
+  const sharing = () => {
+    const s = session();
+    return s ? order().filter((id) => sessions[id].worktree === s.worktree).length : 0;
+  };
 
   return (
     <div class="workspace">
@@ -145,24 +200,34 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         <span class="muted mono">{props.workspace.root}</span>
       </header>
       <nav class="tabs">
-        <Show when={session()}>
-          {(s) => (
-            <div class="tab active">
-              <span class={`dot ${s().state}`} title={STATE_LABEL[s().state]} />
-              {s().name}
-              <span class="muted">{STATE_LABEL[s().state]}</span>
-            </div>
+        <For each={order()}>
+          {(id) => (
+            <button class={`tab ${id === activeId() ? "active" : ""}`} onClick={() => id !== activeId() && void show(id)}>
+              <span class={`dot ${sessions[id].state}`} title={STATE_LABEL[sessions[id].state]} />
+              {sessions[id].name}
+              <Show when={id === activeId()} fallback={<Show when={sessions[id].unread}>{(n) => <span class="badge">{n()}</span>}</Show>}>
+                <span class="muted">{STATE_LABEL[sessions[id].state]}</span>
+              </Show>
+            </button>
           )}
-        </Show>
+        </For>
+        <button class="ghost add-tab" onClick={() => void newSession()} title="New Agent session in this Worktree">
+          ＋ session
+        </button>
       </nav>
+      <Show when={sharing() > 1}>
+        <p class="warning banner">
+          {sharing()} Agent sessions share this Worktree, so they can edit the same files.
+        </p>
+      </Show>
       <Show when={error()}>
         <p class="error banner">{error()}</p>
       </Show>
-      <Show when={session()}>
+      <Show when={session()} keyed>
         {(s) => (
           <>
-            <Transcript sessionId={s().id} items={items} />
-            <Composer session={s()} />
+            <Transcript sessionId={s.id} items={items} hasEarlier={start() > 0} onLoadEarlier={loadEarlier} />
+            <Composer session={s} />
           </>
         )}
       </Show>
@@ -170,15 +235,27 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   );
 }
 
-function Transcript(props: { sessionId: SessionId; items: TranscriptItem[] }) {
+function Transcript(props: {
+  sessionId: SessionId;
+  items: TranscriptItem[];
+  hasEarlier: boolean;
+  onLoadEarlier: () => void;
+}) {
   let log!: HTMLDivElement;
   // Keep the newest output in view while it streams (virtualisation arrives in ticket 02).
   createEffect(() => {
-    for (const item of props.items) void (item.kind === "permission" ? item.outcome : item.text);
+    const last = props.items[props.items.length - 1];
+    void (last && (last.kind === "permission" ? last.outcome : last.text));
+    void props.items.length;
     requestAnimationFrame(() => (log.scrollTop = log.scrollHeight));
   });
   return (
     <div class="transcript" ref={log}>
+      <Show when={props.hasEarlier}>
+        <button class="ghost load-earlier" onClick={() => props.onLoadEarlier()}>
+          Load earlier messages
+        </button>
+      </Show>
       <For each={props.items}>
         {(item) =>
           item.kind === "permission" ? (

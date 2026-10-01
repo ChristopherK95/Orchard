@@ -2,12 +2,13 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{json, Value};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::acp::{AcpError, AdapterCommand, Connection, Incoming, Responder, PROTOCOL_VERSION};
 use crate::git;
@@ -61,6 +62,8 @@ pub enum CoreEvent {
     SessionStateChanged { session_id: SessionId, state: SessionState },
     #[serde(rename_all = "camelCase")]
     PermissionModeChanged { session_id: SessionId, mode: PermissionMode },
+    #[serde(rename_all = "camelCase")]
+    SessionUnreadChanged { session_id: SessionId, unread: usize },
 }
 
 /// Batches of transcript changes for one session, flushed about once per frame.
@@ -85,6 +88,8 @@ struct Inner {
     state: Mutex<State>,
     /// The single shared ACP adapter; serialised so concurrent callers never start two.
     adapter: tokio::sync::Mutex<Option<Arc<Connection>>>,
+    /// The session whose Tab is visible, and the switch that ends its stream when another is shown.
+    visible: Mutex<Option<(Arc<Session>, oneshot::Sender<()>)>>,
 }
 
 #[derive(Default)]
@@ -103,6 +108,8 @@ struct Session {
     transcript: Mutex<Transcript>,
     deltas: broadcast::Sender<TranscriptDelta>,
     events: broadcast::Sender<CoreEvent>,
+    /// Whether this session's Tab is the visible one (and so isn't collecting unread items).
+    visible: AtomicBool,
     /// Every tool call the Agent announced, merged with its updates, keyed by ACP tool call id.
     tool_calls: Mutex<HashMap<String, Value>>,
     control: Mutex<Control>,
@@ -149,6 +156,7 @@ impl Core {
                 events,
                 state: Mutex::default(),
                 adapter: tokio::sync::Mutex::new(None),
+                visible: Mutex::new(None),
             }),
         }
     }
@@ -195,6 +203,7 @@ impl Core {
             worktree: root,
             state: SessionState::Idle,
             permission_mode: PermissionMode::AskForEdits,
+            unread: 0,
         };
         let (deltas, _) = broadcast::channel(4096);
         let session = Arc::new(Session {
@@ -204,6 +213,7 @@ impl Core {
             transcript: Mutex::default(),
             deltas,
             events: self.inner.events.clone(),
+            visible: AtomicBool::new(false),
             tool_calls: Mutex::default(),
             control: Mutex::default(),
         });
@@ -281,26 +291,49 @@ impl Core {
         Ok(self.session(id)?.info.lock().expect("info lock").clone())
     }
 
+    /// The whole transcript (mostly for tests; the frontend pages through `show_session` and
+    /// `transcript_page`).
     pub fn transcript(&self, id: SessionId) -> Result<Vec<TranscriptItem>, CoreError> {
         Ok(self.session(id)?.transcript.lock().expect("transcript lock").items().to_vec())
     }
 
-    /// Streams a session's transcript: a `Reset` with everything so far, then batched changes.
-    pub fn watch_session(&self, id: SessionId) -> Result<TranscriptStream, CoreError> {
+    /// Transcript items `start..end` (clamped), for scrolling back past the page `show_session` sent.
+    pub fn transcript_page(&self, id: SessionId, start: usize, end: usize) -> Result<Vec<TranscriptItem>, CoreError> {
+        Ok(self.session(id)?.transcript.lock().expect("transcript lock").page(start, end).to_vec())
+    }
+
+    /// Makes `id` the visible Tab: ends the previous visible Tab's stream, marks this session read,
+    /// and streams its transcript: a `Reset` with the latest page, then batched changes.
+    pub fn show_session(&self, id: SessionId) -> Result<TranscriptStream, CoreError> {
         let session = self.session(id)?;
+        let (stop, mut stopped) = oneshot::channel::<()>();
+        {
+            let mut visible = self.inner.visible.lock().expect("visible lock");
+            if let Some((previous, _stop_previous)) = visible.take() {
+                previous.visible.store(false, Ordering::SeqCst);
+            } // dropping `_stop_previous` ends that stream
+            session.visible.store(true, Ordering::SeqCst);
+            *visible = Some((session.clone(), stop));
+        }
+        session.mark_read();
+
         let (tx, rx) = mpsc::channel(64);
         let (initial, mut deltas) = {
             let transcript = session.transcript.lock().expect("transcript lock");
-            (transcript.items().to_vec(), session.deltas.subscribe())
+            (transcript.latest_page(), session.deltas.subscribe())
         };
         tokio::spawn(async move {
-            let mut batch = vec![TranscriptDelta::Reset { items: initial }];
+            let mut batch = vec![initial];
             loop {
                 if tx.send(std::mem::take(&mut batch)).await.is_err() {
                     return; // the watcher went away
                 }
                 // Wait for the next change, then gather whatever else arrives within the flush window.
-                let Some(first) = session.next_delta(&mut deltas).await else { return };
+                let first = tokio::select! {
+                    _ = &mut stopped => return, // another Tab is visible now
+                    delta = session.next_delta(&mut deltas) => delta,
+                };
+                let Some(first) = first else { return };
                 batch.push(first);
                 let deadline = tokio::time::Instant::now() + FLUSH_INTERVAL;
                 while let Ok(Some(delta)) = tokio::time::timeout_at(deadline, session.next_delta(&mut deltas)).await {
@@ -423,11 +456,27 @@ impl Session {
         }
     }
 
-    /// Applies a transcript change and streams its delta, atomically with respect to `watch_session`.
+    /// Applies a transcript change and streams its delta, atomically with respect to `show_session`.
+    /// New items count as unread while the Tab isn't visible.
     fn record(&self, change: impl FnOnce(&mut Transcript) -> TranscriptDelta) {
         let mut transcript = self.transcript.lock().expect("transcript lock");
         let delta = change(&mut transcript);
+        let unseen = matches!(&delta, TranscriptDelta::ItemAdded { item, .. } if !matches!(item, TranscriptItem::User { .. }))
+            && !self.visible.load(Ordering::SeqCst);
         let _ = self.deltas.send(delta);
+        if unseen {
+            let mut info = self.info.lock().expect("info lock");
+            info.unread += 1;
+            let _ = self.events.send(CoreEvent::SessionUnreadChanged { session_id: info.id, unread: info.unread });
+        }
+    }
+
+    fn mark_read(&self) {
+        let mut info = self.info.lock().expect("info lock");
+        if info.unread != 0 {
+            info.unread = 0;
+            let _ = self.events.send(CoreEvent::SessionUnreadChanged { session_id: info.id, unread: 0 });
+        }
     }
 
     fn note_tool_call(&self, update: &Value) {
@@ -474,9 +523,9 @@ impl Session {
     async fn next_delta(&self, deltas: &mut broadcast::Receiver<TranscriptDelta>) -> Option<TranscriptDelta> {
         match deltas.recv().await {
             Ok(delta) => Some(delta),
-            Err(broadcast::error::RecvError::Lagged(_)) => Some(TranscriptDelta::Reset {
-                items: self.transcript.lock().expect("transcript lock").items().to_vec(),
-            }),
+            Err(broadcast::error::RecvError::Lagged(_)) => {
+                Some(self.transcript.lock().expect("transcript lock").latest_page())
+            }
             Err(broadcast::error::RecvError::Closed) => None,
         }
     }

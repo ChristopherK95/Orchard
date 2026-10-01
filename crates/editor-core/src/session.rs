@@ -54,7 +54,12 @@ pub struct SessionInfo {
     pub worktree: PathBuf,
     pub state: SessionState,
     pub permission_mode: PermissionMode,
+    /// New transcript items (Agent messages, cards, notices) since the Tab was last shown.
+    pub unread: usize,
 }
+
+/// How many transcript items a Tab gets when it's shown; older ones come by `transcript_page`.
+pub const TRANSCRIPT_PAGE: usize = 200;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -141,8 +146,9 @@ pub enum DiffLineKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum TranscriptDelta {
-    /// Replace everything: sent first on every stream, and again if the stream fell behind.
-    Reset { items: Vec<TranscriptItem> },
+    /// Replace everything with the latest page: items `start..` of the transcript. Sent first on
+    /// every stream, and again if the stream fell behind. Indexes in other deltas are absolute.
+    Reset { start: usize, items: Vec<TranscriptItem> },
     ItemAdded { index: usize, item: TranscriptItem },
     /// Streamed text appended to the Agent message at `index`.
     TextAppended { index: usize, text: String },
@@ -175,6 +181,18 @@ impl OpenAgentMessage {
 impl Transcript {
     pub(crate) fn items(&self) -> &[TranscriptItem] {
         &self.items
+    }
+
+    /// A `Reset` to the latest page.
+    pub(crate) fn latest_page(&self) -> TranscriptDelta {
+        let start = self.items.len().saturating_sub(TRANSCRIPT_PAGE);
+        TranscriptDelta::Reset { start, items: self.items[start..].to_vec() }
+    }
+
+    /// Items `start..end`, clamped to the transcript.
+    pub(crate) fn page(&self, start: usize, end: usize) -> &[TranscriptItem] {
+        let end = end.min(self.items.len());
+        &self.items[start.min(end)..end]
     }
 
     pub(crate) fn push(&mut self, item: TranscriptItem) -> TranscriptDelta {

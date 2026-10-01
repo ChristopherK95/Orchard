@@ -21,7 +21,7 @@ async fn prompt_streams_the_reply_into_the_tab_and_the_session_returns_to_idle()
     core.open_workspace(repo.path()).await.unwrap();
     let mut events = core.subscribe();
     let session = core.new_session().await.unwrap();
-    let mut stream = core.watch_session(session).unwrap();
+    let mut stream = core.show_session(session).unwrap();
 
     core.send_prompt(session, "hi").await.unwrap();
 
@@ -64,7 +64,7 @@ async fn streamed_chunks_are_batched_rather_than_sent_one_by_one() {
     let core = core_with(&fake);
     core.open_workspace(repo.path()).await.unwrap();
     let session = core.new_session().await.unwrap();
-    let mut stream = core.watch_session(session).unwrap();
+    let mut stream = core.show_session(session).unwrap();
 
     core.send_prompt(session, "count").await.unwrap();
 

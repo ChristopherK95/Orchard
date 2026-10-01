@@ -7,6 +7,7 @@
 **Status:** ready-for-agent
 
 - [ ] Settings load at startup and changes apply without a restart. Invalid TOML shows an error and keeps the last good settings.
+- [ ] A notifications setting switches on the optional "background turn finished" notification (ticket 04 built it, off by default).
 - [ ] The repo section is matched by `origin` URL, falling back to the main checkout path.
 - [ ] Setup commands run in order in the new Worktree and stop at the first failure.
 - [ ] Output streams into the Tab; Retry reruns from the failed command; Start anyway starts the session.
