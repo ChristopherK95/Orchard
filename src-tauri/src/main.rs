@@ -6,9 +6,9 @@ use std::path::PathBuf;
 
 use editor_core::{
     check_prerequisites, AdapterCommand, BranchList, Core, CoreConfig, CreatedWorktree,
-    LoadedSettings, MissingPrerequisite, NewWorktree, PermissionMode, RemovalCheck, RemoveWorktree,
-    RemovedWorktree, SessionId, SetupInfo, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo,
-    WorktreeInfo,
+    LoadedSettings, MissingPrerequisite, NewWorktree, PermissionMode, RecentSession, RemovalCheck,
+    RemoveWorktree, RemovedWorktree, SessionId, SessionInfo, SetupInfo, Tools, TranscriptDelta,
+    TranscriptPage, WorkspaceInfo, WorktreeInfo,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -170,6 +170,42 @@ async fn send_prompt(
         .map_err(|e| e.to_string())
 }
 
+/// The open Tabs, in order (after a restart, the restored ones).
+#[tauri::command]
+fn sessions(core: State<'_, Core>) -> Vec<SessionInfo> {
+    core.sessions()
+}
+
+/// Closes a Tab; its session goes to the Worktree's Recent sessions.
+#[tauri::command]
+async fn close_tab(core: State<'_, Core>, session_id: SessionId) -> CommandResult<()> {
+    core.close_tab(session_id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn recent_sessions(core: State<'_, Core>, worktree: String) -> Vec<RecentSession> {
+    core.recent_sessions(worktree.as_ref())
+}
+
+#[tauri::command]
+async fn reopen_session(core: State<'_, Core>, acp_id: String) -> CommandResult<SessionId> {
+    core.reopen_session(&acp_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// `Ctrl+Shift+T`; `None` when there's nothing to reopen.
+#[tauri::command]
+async fn reopen_last_closed(core: State<'_, Core>) -> CommandResult<Option<SessionId>> {
+    core.reopen_last_closed().await.map_err(|e| e.to_string())
+}
+
+/// The Tab shown last (before the restart, if it's been restored).
+#[tauri::command]
+fn last_active_session(core: State<'_, Core>) -> Option<SessionId> {
+    core.last_active_session()
+}
+
 /// Stops an Idle session's Agent process; the next prompt resumes it.
 #[tauri::command]
 async fn suspend_session(core: State<'_, Core>, session_id: SessionId) -> CommandResult<()> {
@@ -282,6 +318,13 @@ fn main() {
                     .app_config_dir()
                     .ok()
                     .map(|dir| dir.join("settings.toml")),
+                // The benchmark starts from nothing each run (and leaves nothing behind).
+                state_path: app
+                    .path()
+                    .app_data_dir()
+                    .ok()
+                    .filter(|_| !bench_mode())
+                    .map(|dir| dir.join("state.json")),
             });
             let mut events = core.subscribe();
             let handle = app.handle().clone();
@@ -321,6 +364,12 @@ fn main() {
             retry_setup,
             start_anyway,
             send_prompt,
+            sessions,
+            close_tab,
+            recent_sessions,
+            reopen_session,
+            reopen_last_closed,
+            last_active_session,
             suspend_session,
             resume_session,
             answer_permission,

@@ -11,3 +11,5 @@
 - [ ] Restarting the app restores all open Tabs as Suspended, with names, order, Worktree and permission mode.
 - [ ] Closing a Worktree's last Tab only dims the Worktree.
 - [ ] Core tests: the persisted state round-trips; restore yields Suspended sessions.
+
+Notes: no conversation is stored (spec, Persistence): a restored Tab loads its conversation through ACP `session/load` the first time it's shown, then the Agent is closed again so it stays Suspended. The Tab shown at startup does this straight away, so a restart briefly starts the adapter (worth checking in the memory benchmark against the real adapter). The last shown Tab is restored; the last Tab per Worktree and window/pane layout aren't persisted yet (panes arrive with tickets 14/15). Two editors open on the same Workspace at once share the file: the last to save wins.

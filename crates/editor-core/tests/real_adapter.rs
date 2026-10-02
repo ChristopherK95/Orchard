@@ -26,6 +26,7 @@ async fn the_real_adapter_accepts_the_handshake_and_creates_a_session() {
             env: vec![],
         },
         settings_path: None,
+        state_path: None,
     });
     core.open_workspace(repo.path()).await.unwrap();
     let mut events = core.subscribe();

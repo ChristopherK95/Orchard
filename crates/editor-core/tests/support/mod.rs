@@ -148,8 +148,17 @@ impl FakeAgent {
                     self.dir.path().join("script.json").display().to_string(),
                 ),
                 ("FAKE_ACP_LOG".into(), self.log_path().display().to_string()),
+                (
+                    "FAKE_ACP_HISTORY".into(),
+                    self.dir.path().join("history.json").display().to_string(),
+                ),
             ],
         }
+    }
+
+    /// Where a core made with `core_with_state` keeps its app state.
+    pub fn state_path(&self) -> PathBuf {
+        self.dir.path().join("state.json")
     }
 
     pub fn settings_path(&self) -> PathBuf {
@@ -211,6 +220,17 @@ pub fn core_with(agent: &FakeAgent) -> Core {
     Core::new(CoreConfig {
         adapter: agent.command(),
         settings_path: None,
+        state_path: None,
+    })
+}
+
+/// A core persisting its app state in the fake agent's temp folder; a second one made the same way
+/// is the editor after a restart.
+pub fn core_with_state(agent: &FakeAgent) -> Core {
+    Core::new(CoreConfig {
+        adapter: agent.command(),
+        settings_path: None,
+        state_path: Some(agent.state_path()),
     })
 }
 
@@ -220,6 +240,7 @@ pub fn core_with_settings(agent: &FakeAgent, settings: &str) -> Core {
     Core::new(CoreConfig {
         adapter: agent.command(),
         settings_path: Some(agent.settings_path()),
+        state_path: None,
     })
 }
 

@@ -2,6 +2,7 @@
 //! view over its commands and events (ADR 0003). Vocabulary follows `CONTEXT.md`.
 
 mod acp;
+mod app_state;
 mod core;
 mod create_worktree;
 mod git;
@@ -15,7 +16,9 @@ mod setup;
 mod worktrees;
 
 pub use crate::acp::{AcpError, AdapterCommand, PROTOCOL_VERSION};
-pub use crate::core::{Core, CoreConfig, CoreError, CoreEvent, TranscriptStream, WorkspaceInfo};
+pub use crate::core::{
+    Core, CoreConfig, CoreError, CoreEvent, RecentSession, TranscriptStream, WorkspaceInfo,
+};
 pub use crate::create_worktree::{BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};
 pub use crate::remove_worktree::{CommitSummary, RemovalCheck, RemoveWorktree, RemovedWorktree};

@@ -104,6 +104,15 @@ input, textarea { background: var(--bg3); border: 1px solid var(--line); border-
 button.ghost { background: transparent; border-color: transparent; color: var(--fg2); }
 button.ghost:hover { background: var(--bg3); color: var(--fg); }
 .add-tab { align-self: center; margin-bottom: 4px; }
+.tab-wrap { display: flex; align-items: stretch; border-radius: 7px 7px 0 0; background: var(--bg3); }
+.tab-wrap.active { background: var(--bg); box-shadow: inset 0 2px var(--c, var(--accent)); }
+.tab-wrap .tab, .tab-wrap .tab.active { background: transparent; box-shadow: none; }
+.close-tab { border: 0; background: transparent; padding: 0 8px 0 2px; color: var(--fg2); border-radius: 0 7px 0 0; }
+.close-tab:hover { color: var(--fg); background: var(--bg4); }
+.recent-menu { position: relative; align-self: center; margin-bottom: 4px; }
+.recent-menu .recent-list { position: absolute; top: 100%; left: 0; z-index: 20; min-width: 180px; padding: 4px; background: var(--bg2); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
+.recent-list { display: flex; flex-direction: column; gap: 2px; }
+.recent-list button { text-align: left; white-space: nowrap; }
 .warning { color: var(--needs-you); }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot.working { background: var(--working); animation: pulse 1.2s infinite; }

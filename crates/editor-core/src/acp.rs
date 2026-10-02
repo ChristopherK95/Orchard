@@ -191,6 +191,11 @@ impl Connection {
             .is_object()
     }
 
+    /// Whether the adapter can load an earlier conversation (`session/load`, which replays it).
+    pub(crate) fn supports_load(&self) -> bool {
+        self.capabilities.lock().expect("capabilities lock")["loadSession"] == true
+    }
+
     pub(crate) fn is_closed(&self) -> bool {
         self.pending.lock().expect("pending lock").is_none()
     }

@@ -7,6 +7,7 @@ import {
   type LoadedSettings,
   type MissingPrerequisite,
   type PermissionMode,
+  type RecentSession,
   type SessionId,
   type SessionInfo,
   type SessionState,
@@ -129,6 +130,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   const [activeWorktree, setActiveWorktree] = createSignal(props.workspace.root);
   const lastSessionIn = new Map<string, SessionId>();
   const [creatingWorktree, setCreatingWorktree] = createSignal(false);
+  /** Each Worktree's Recent sessions (closed Tabs), as the core last reported them. */
+  const [recent, setRecent] = createStore<Record<string, RecentSession[]>>({});
+  const [recentOpen, setRecentOpen] = createSignal(false);
+  createEffect(() => {
+    const path = activeWorktree();
+    if (!recent[path]) void core.recentSessions(path).then((list) => !recent[path] && setRecent(path, list));
+  });
   /** The Worktree whose removal dialog is open. */
   const [removing, setRemoving] = createSignal<WorktreeTab | null>(null);
   /** Worktree setups this editor started, by Worktree path; shown until the first session opens. */
@@ -198,6 +206,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
 
   /** Shows a Worktree: its last-used session, else its first, else an empty Tab row. */
   const selectWorktree = (path: string) => {
+    setRecentOpen(false);
     const here = sessionsIn(path);
     const last = lastSessionIn.get(path);
     const id = here.some((s) => s.id === last) ? last : here[0]?.id;
@@ -208,6 +217,20 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     setItems([]);
     void core.hideTabs();
   };
+
+  /** Brings a closed session back in a new Tab and shows it. */
+  const reopen = async (opening: Promise<SessionId | null>) => {
+    setError("");
+    setRecentOpen(false);
+    try {
+      const id = await opening;
+      if (id !== null) await show(id); // (nothing to reopen is no error)
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const closeTab = (id: SessionId) => core.closeTab(id).catch((err) => setError(String(err)));
 
   /** A new Agent session in the active Worktree. */
   const newSession = async (path = activeWorktree()): Promise<SessionId | undefined> => {
@@ -296,13 +319,15 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         const active = activeWorktree();
         if (!event.worktrees.some((w) => w.path === active) && sessionsIn(active).length === 0) selectWorktree(props.workspace.root);
       } else if (event.kind === "sessionClosed") {
-        // Stopped by the core (its Worktree is being removed): its Tab goes.
+        // Closed (its × or a middle-click, or its Worktree is being removed): its Tab goes.
         const id = event.sessionId;
         const path = sessions[id]?.worktree;
         setOrder((ids) => ids.filter((other) => other !== id));
         setSessions(produce((all) => void delete all[id]));
         // Back to what's left of its Worktree, or to the main checkout if the Worktree's gone.
         if (activeId() === id && path) selectWorktree(worktrees().some((w) => w.path === path) ? path : props.workspace.root);
+      } else if (event.kind === "recentSessionsChanged") {
+        setRecent(event.worktree, event.sessions);
       } else if (event.kind === "settingsChanged") {
         sawSettingsEvent = true;
         setSettings(event.settings);
@@ -329,11 +354,21 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     // Y/N answer the oldest open permission card anywhere in the Tab (outside text fields).
     const onKey = (e: KeyboardEvent) => {
       if (removing() || creatingWorktree()) return; // a dialog is open over the Tab
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "t") {
+        e.preventDefault();
+        if (!e.repeat) void reopen(core.reopenLastClosed());
+        return;
+      }
+      if (e.key === "Escape") setRecentOpen(false);
       const s = session();
       if (s?.state === "needsYou" && answerByKey(e, s.id, items)) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     onCleanup(() => window.removeEventListener("keydown", onKey));
+    // The Recent menu closes on a click anywhere else.
+    const onClick = (e: MouseEvent) => !(e.target as Element | null)?.closest?.(".recent-menu") && setRecentOpen(false);
+    window.addEventListener("click", onClick);
+    onCleanup(() => window.removeEventListener("click", onClick));
     // Worktrees may have changed while the editor was in the background (the watcher covers the rest).
     const onFocus = () => void core.refreshWorktrees();
     window.addEventListener("focus", onFocus);
@@ -344,6 +379,16 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     for (const setup of await core.setups()) if (!setups[setup.worktree]) setSetups(setup.worktree, setup);
     const snapshot = await core.worktrees();
     if (!sawWorktreesEvent) setWorktrees(snapshot);
+    // The Tabs open when the editor last closed come back (Suspended until used).
+    const restored = (await core.sessions()).filter((s) => !sessions[s.id]);
+    batch(() => {
+      for (const s of restored) setSessions(s.id, s);
+      setOrder((ids) => [...restored.map((s) => s.id), ...ids]);
+    });
+    if (restored.length) {
+      const last = await core.lastActiveSession();
+      return void show(restored.find((s) => s.id === last)?.id ?? restored[0].id);
+    }
     const first = await newSession();
     if (first !== undefined && (await core.benchMode())) void runBenchmark(benchDriver, first).catch((err) => setError(`Benchmark failed: ${err}`));
   });
@@ -389,19 +434,43 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       <nav class="tabs" style={{ "--c": worktreeColour(activeWorktree()) }}>
         <For each={sessionsIn(activeWorktree()).map((s) => s.id)}>
           {(id) => (
-            <button class={`tab ${id === activeId() ? "active" : ""}`} onClick={() => id !== activeId() && void show(id)}>
-              <span class="agent-glyph">✦</span>
-              <span class={`dot ${sessions[id].state}`} title={STATE_LABEL[sessions[id].state]} />
-              {sessions[id].name}
-              <Show when={id === activeId()} fallback={<Show when={sessions[id].unread}>{(n) => <span class="badge">{n()}</span>}</Show>}>
-                <span class="muted">{STATE_LABEL[sessions[id].state]}</span>
-              </Show>
-            </button>
+            <span class={`tab-wrap ${id === activeId() ? "active" : ""}`}>
+              <button
+                class={`tab ${id === activeId() ? "active" : ""}`}
+                onClick={() => id !== activeId() && void show(id)}
+                onAuxClick={(e) => e.button === 1 && void closeTab(id)}
+              >
+                <span class="agent-glyph">✦</span>
+                <span class={`dot ${sessions[id].state}`} title={STATE_LABEL[sessions[id].state]} />
+                {sessions[id].name}
+                <Show when={id === activeId()} fallback={<Show when={sessions[id].unread}>{(n) => <span class="badge">{n()}</span>}</Show>}>
+                  <span class="muted">{STATE_LABEL[sessions[id].state]}</span>
+                </Show>
+              </button>
+              <button
+                class="close-tab"
+                aria-label={`Close ${sessions[id].name}`}
+                title="Close (it stays in Recent sessions; Ctrl+Shift+T reopens)"
+                onClick={() => void closeTab(id)}
+              >
+                ×
+              </button>
+            </span>
           )}
         </For>
         <button class="ghost add-tab" onClick={() => void newSession()} title="New Agent session in this Worktree" disabled={worktree()?.removed || settingUp()}>
           ＋ session
         </button>
+        <Show when={recent[activeWorktree()]?.length}>
+          <span class="recent-menu">
+            <button class="ghost" onClick={() => setRecentOpen((open) => !open)} title="Closed sessions in this Worktree">
+              Recent ▾
+            </button>
+            <Show when={recentOpen()}>
+              <RecentList sessions={recent[activeWorktree()] ?? []} onReopen={(r) => void reopen(core.reopenSession(r.acpId))} />
+            </Show>
+          </span>
+        </Show>
       </nav>
       <ContextBar
         worktree={worktree()}
@@ -452,10 +521,14 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
             when={setups[activeWorktree()]?.status.kind !== "done" && setups[activeWorktree()]}
             fallback={
               <div class="center muted empty-worktree">
-                <p>No Agent sessions in this Worktree yet.</p>
+                <p>No Agent sessions open in this Worktree.</p>
                 <button class="primary" onClick={() => void newSession()}>
                   ＋ session
                 </button>
+                <Show when={recent[activeWorktree()]?.length}>
+                  <p class="small">Or reopen a Recent session:</p>
+                  <RecentList sessions={recent[activeWorktree()] ?? []} onReopen={(r) => void reopen(core.reopenSession(r.acpId))} />
+                </Show>
               </div>
             }
           >
@@ -470,6 +543,20 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           </>
         )}
       </Show>
+    </div>
+  );
+}
+
+function RecentList(props: { sessions: RecentSession[]; onReopen: (session: RecentSession) => void }) {
+  return (
+    <div class="recent-list">
+      <For each={props.sessions}>
+        {(s) => (
+          <button class="ghost" onClick={() => props.onReopen(s)} title="Reopen with its conversation">
+            <span class="agent-glyph">✦</span> {s.name}
+          </button>
+        )}
+      </For>
     </div>
   );
 }

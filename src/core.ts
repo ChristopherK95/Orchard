@@ -21,6 +21,14 @@ export interface SessionInfo {
   unread: number;
 }
 
+/** A closed Tab in a Worktree's Recent sessions. */
+export interface RecentSession {
+  /** The ACP session id, which `reopenSession` takes. */
+  acpId: string;
+  name: string;
+  worktree: string;
+}
+
 export interface WorktreeInfo {
   path: string;
   /** The checked-out branch, or null when HEAD is detached. */
@@ -195,6 +203,7 @@ export type CoreEvent =
   | { kind: "sessionUnreadChanged"; sessionId: SessionId; unread: number }
   | { kind: "worktreesChanged"; worktrees: WorktreeInfo[] }
   | { kind: "sessionClosed"; sessionId: SessionId }
+  | { kind: "recentSessionsChanged"; worktree: string; sessions: RecentSession[] }
   | { kind: "settingsChanged"; settings: LoadedSettings }
   | { kind: "setupChanged"; worktree: string; commands: string[]; status: SetupStatus }
   | { kind: "setupOutput"; worktree: string; text: string };
@@ -205,6 +214,17 @@ export const core = {
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
   newSession: () => invoke<SessionId>("new_session"),
   newSessionIn: (worktree: string) => invoke<SessionId>("new_session_in", { worktree }),
+  /** The open Tabs in order (after a restart, the restored ones, Suspended). */
+  sessions: () => invoke<SessionInfo[]>("sessions"),
+  /** Closes a Tab; its session goes to its Worktree's Recent sessions. */
+  closeTab: (sessionId: SessionId) => invoke<void>("close_tab", { sessionId }),
+  recentSessions: (worktree: string) => invoke<RecentSession[]>("recent_sessions", { worktree }),
+  /** Reopens a Recent session in a new Tab, with its conversation. */
+  reopenSession: (acpId: string) => invoke<SessionId>("reopen_session", { acpId }),
+  /** `Ctrl+Shift+T`: the most recently closed session (null when there's none). */
+  reopenLastClosed: () => invoke<SessionId | null>("reopen_last_closed"),
+  /** The Tab shown last (before the restart, if restored). */
+  lastActiveSession: () => invoke<SessionId | null>("last_active_session"),
   worktrees: () => invoke<WorktreeInfo[]>("worktrees"),
   refreshWorktrees: () => invoke<void>("refresh_worktrees"),
   createWorktree: (spec: NewWorktree) => invoke<CreatedWorktree>("create_worktree", { spec }),

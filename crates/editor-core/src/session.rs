@@ -229,6 +229,8 @@ pub(crate) struct Transcript {
     items: Vec<TranscriptItem>,
     /// The Agent message (the last item) still receiving chunks, if there is one.
     open_agent_message: Option<OpenAgentMessage>,
+    /// The last item is a replayed user message still receiving chunks (with this message id).
+    open_user_message: Option<OpenAgentMessage>,
 }
 
 struct OpenAgentMessage {
@@ -271,6 +273,7 @@ impl Transcript {
 
     pub(crate) fn push(&mut self, item: TranscriptItem) -> TranscriptDelta {
         self.open_agent_message = None;
+        self.open_user_message = None;
         self.items.push(item.clone());
         TranscriptDelta::ItemAdded {
             index: self.items.len() - 1,
@@ -301,6 +304,38 @@ impl Transcript {
             text: text.to_owned(),
         });
         self.open_agent_message = Some(OpenAgentMessage { message_id });
+        delta
+    }
+
+    /// Empties it (before `session/load` replays the conversation into it), as a `Reset`.
+    pub(crate) fn clear(&mut self) -> TranscriptDelta {
+        *self = Self::default();
+        self.latest_page()
+    }
+
+    /// A chunk of a user message, as `session/load` replays them: chunks in a row (of one message,
+    /// when they carry ids) make one message.
+    pub(crate) fn append_user_text(
+        &mut self,
+        text: &str,
+        message_id: Option<String>,
+    ) -> TranscriptDelta {
+        if self
+            .open_user_message
+            .as_ref()
+            .is_some_and(|open| open.continued_by(&message_id))
+        {
+            let index = self.items.len() - 1;
+            if let TranscriptItem::User { text: t } = &mut self.items[index] {
+                t.push_str(text);
+                let item = self.items[index].clone();
+                return TranscriptDelta::ItemUpdated { index, item };
+            }
+        }
+        let delta = self.push(TranscriptItem::User {
+            text: text.to_owned(),
+        });
+        self.open_user_message = Some(OpenAgentMessage { message_id });
         delta
     }
 

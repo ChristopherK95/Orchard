@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::acp::{AcpError, AdapterCommand, Connection, Incoming, Responder, PROTOCOL_VERSION};
+use crate::app_state::{self, AppState, SavedSession, WorkspaceState};
 use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 use crate::git;
 use crate::permissions;
@@ -93,6 +94,18 @@ pub struct CoreConfig {
     pub adapter: AdapterCommand,
     /// The settings file (ticket 08); `None` runs on the defaults, with nothing read or watched.
     pub settings_path: Option<PathBuf>,
+    /// Where open Tabs and Recent sessions are kept between runs (ticket 11); `None` keeps nothing.
+    pub state_path: Option<PathBuf>,
+}
+
+/// A closed Tab in a Worktree's Recent sessions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentSession {
+    /// The ACP session id, which `reopen_session` takes.
+    pub acp_id: String,
+    pub name: String,
+    pub worktree: PathBuf,
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -127,6 +140,10 @@ pub enum CoreError {
     SessionInTransition,
     #[error("the Agent doesn't support {0}")]
     Unsupported(&'static str),
+    #[error("no closed session to reopen")]
+    NothingToReopen,
+    #[error("that session isn't in this Worktree's Recent sessions")]
+    UnknownRecentSession,
     #[error("the Agent session isn't waiting for a permission answer")]
     NoPendingPermission,
     #[error("`{0}` isn't one of the options the Agent offered")]
@@ -196,6 +213,11 @@ pub enum CoreEvent {
     SessionClosed {
         session_id: SessionId,
     },
+    /// A Worktree's Recent sessions changed (a Tab was closed or reopened).
+    RecentSessionsChanged {
+        worktree: PathBuf,
+        sessions: Vec<RecentSession>,
+    },
     /// A Worktree's setup moved on (to a command, a failure, or its first session).
     SetupChanged {
         worktree: PathBuf,
@@ -247,6 +269,12 @@ struct Inner {
     crashes: Mutex<Vec<std::time::Instant>>,
     /// Numbers each adapter process (`Connection::generation`).
     generations: AtomicU64,
+    /// The state saved by the last run, to restore Workspaces from.
+    app_state: Mutex<AppState>,
+    /// Whether this run may save state (not over a file it couldn't read).
+    state_writable: bool,
+    /// Serialises saves, so an older snapshot can't be written over a newer one.
+    persist_lock: Mutex<()>,
 }
 
 #[derive(Default)]
@@ -257,9 +285,30 @@ struct State {
     setups: HashMap<PathBuf, SetupRun>,
     /// Worktrees being removed: no session or setup may start in them.
     removing: std::collections::HashSet<PathBuf>,
+    /// Closed Tabs, most recently closed first (Recent sessions, all Worktrees).
+    recent: Vec<SavedSession>,
+    /// The highest `Session N` name given so far.
+    last_name: u64,
+    /// The ACP id of the Tab last shown.
+    active: Option<String>,
     sessions: HashMap<SessionId, Arc<Session>>,
     by_acp_id: HashMap<String, SessionId>,
     next_session: u64,
+}
+
+impl State {
+    /// The next `Session N` name.
+    fn new_name(&mut self) -> String {
+        self.last_name += 1;
+        format!("Session {}", self.last_name)
+    }
+
+    /// Keeps `new_name` clear of a remembered name.
+    fn note_name(&mut self, name: &str) {
+        if let Some(n) = name.strip_prefix("Session ").and_then(|n| n.parse().ok()) {
+            self.last_name = self.last_name.max(n);
+        }
+    }
 }
 
 struct SetupRun {
@@ -296,12 +345,16 @@ struct Session {
     info: Mutex<SessionInfo>,
     acp_id: String,
     /// The adapter connection it lives on (a new one after it's resumed on a restarted adapter).
-    connection: Mutex<Arc<Connection>>,
+    connection: Mutex<Option<Arc<Connection>>>,
     transcript: Mutex<Transcript>,
     deltas: broadcast::Sender<TranscriptDelta>,
     events: broadcast::Sender<CoreEvent>,
     /// Whether this session's Tab is the visible one (and so isn't collecting unread items).
     visible: AtomicBool,
+    /// `session/load` is replaying its conversation (old news, so not unread).
+    replaying: AtomicBool,
+    /// Woken whenever a suspend, resume or load settles, for whoever waits on that.
+    settled: tokio::sync::Notify,
     /// Every tool call the Agent announced, merged with its updates, keyed by ACP tool call id.
     tool_calls: Mutex<HashMap<String, KnownToolCall>>,
     control: Mutex<Control>,
@@ -328,18 +381,27 @@ struct Control {
     suspending: bool,
     /// Closed for good (its Worktree is being removed); a resume in flight must not revive it.
     closed: bool,
+    /// Its conversation is in the transcript. A Tab restored after a restart starts without it,
+    /// and `session/load` (which replays it) brings it in.
+    loaded: bool,
+    /// A restored Tab's conversation is being loaded to show it (it stays Suspended).
+    loading: bool,
+    /// Loading it to show it failed and the Tab says so (once).
+    load_failed: bool,
     /// Permission questions the Agent is waiting on, oldest first.
     questions: Vec<OpenQuestion>,
 }
 
 impl Control {
-    /// Mid-suspend or mid-resume: nothing else may start until that settles.
+    /// Mid-suspend, mid-resume or loading: nothing else may start until that settles (see
+    /// `Session::settled`).
     fn in_transition(&self) -> bool {
-        self.resuming || self.suspending
+        self.resuming || self.suspending || self.loading
     }
 
     fn state(&self) -> SessionState {
-        if self.in_transition() {
+        // (Loading leaves it Suspended: no Agent is put to work by just looking at a Tab.)
+        if self.resuming || self.suspending {
             SessionState::Working
         } else if self.exited {
             SessionState::Exited
@@ -366,6 +428,16 @@ struct OpenQuestion {
 impl Core {
     pub fn new(config: CoreConfig) -> Self {
         let (events, _) = broadcast::channel(1024);
+        // A state file that's there but can't be read is never saved over (it would lose it).
+        let (saved_state, state_writable) = match config.state_path.as_deref().map(app_state::load)
+        {
+            Some(Ok(saved)) => (saved, true),
+            Some(Err(err)) => {
+                eprintln!("{err}; open Tabs won't be saved this run");
+                (AppState::default(), false)
+            }
+            None => (AppState::default(), false),
+        };
         let loaded = match &config.settings_path {
             Some(path) => settings::apply(&LoadedSettings::default(), settings::read(path)),
             None => LoadedSettings::default(),
@@ -383,6 +455,9 @@ impl Core {
             settings_write: tokio::sync::Mutex::new(()),
             crashes: Mutex::default(),
             generations: AtomicU64::new(1),
+            app_state: Mutex::new(saved_state),
+            state_writable,
+            persist_lock: Mutex::new(()),
         });
         if let Some(path) = &inner.config.settings_path {
             let weak = Arc::downgrade(&inner);
@@ -613,6 +688,7 @@ impl Core {
                 run.stop();
             }
         }
+        self.inner.restore(&workspace.root);
         self.inner.watch_worktrees(&workspace.root).await;
         Ok(workspace)
     }
@@ -702,13 +778,19 @@ impl Core {
             return Err(CoreError::BeingRemoved);
         }
         let removed = self.stop_and_remove(&root, &info, &options).await;
-        self.inner
-            .state
-            .lock()
-            .expect("state lock")
-            .removing
-            .remove(&info.path);
+        {
+            let mut state = self.inner.state.lock().expect("state lock");
+            state.removing.remove(&info.path);
+            if removed.is_ok() {
+                // Nothing to reopen them in now.
+                state.recent.retain(|s| s.worktree != info.path);
+            }
+        }
         self.inner.refresh_worktrees().await;
+        if removed.is_ok() {
+            self.inner.recent_changed(&info.path);
+        }
+        self.inner.persist();
         removed
     }
 
@@ -875,27 +957,34 @@ impl Core {
     /// lands (see `resume_claimed`). If the Agent doesn't confirm in time, the session stays (Exited)
     /// and removal stops, rather than deleting a folder it's still in.
     async fn close_session(&self, session: Arc<Session>) -> Result<(), CoreError> {
-        let resuming = session.update(|control| {
-            session.cancel_questions(control);
-            control.in_turn = false;
-            control.exited = true;
-            control.closed = true;
-            control.resuming
-        });
-        if !resuming {
-            let connection = session.connection();
-            // Stop a turn in progress first (closing does too, but this works on any ACP agent).
-            let _ = connection.notify("session/cancel", json!({ "sessionId": session.acp_id }));
-            let closed = connection.supports_session("close")
-                // An error reply (e.g. the adapter already dropped it, or exited) means it's gone too.
-                && close_acp(&connection, &session.acp_id).await.is_some();
-            if !closed {
-                session.update(|control| control.closed = false);
-                return Err(CoreError::SessionWontStop);
-            }
+        if !self.stop_agent(&session).await {
+            session.update(|control| control.closed = false);
+            return Err(CoreError::SessionWontStop);
         }
         self.forget_session(&session);
         Ok(())
+    }
+
+    /// Stops a session's Agent for good (cancelling a turn or questions first) and marks it closed,
+    /// so nothing revives it. Whether the Agent confirmed (or had nothing running): one mid-resume
+    /// is closed by the resume when it lands (see `resume_claimed`).
+    async fn stop_agent(&self, session: &Session) -> bool {
+        let running = session.update(|control| {
+            session.cancel_questions(control);
+            control.in_turn = false;
+            let running = !control.suspended && !control.exited && !control.resuming;
+            control.exited = true;
+            control.closed = true;
+            running
+        });
+        let Some(connection) = session.connection().filter(|_| running) else {
+            return true;
+        };
+        // Stop a turn in progress first (closing does too, but this works on any ACP agent).
+        let _ = connection.notify("session/cancel", json!({ "sessionId": session.acp_id }));
+        // An error reply (e.g. the adapter already dropped it, or exited) means it's gone too.
+        connection.supports_session("close")
+            && close_acp(&connection, &session.acp_id).await.is_some()
     }
 
     /// Drops a closed session from the editor and ends its Tab's stream.
@@ -1017,31 +1106,16 @@ impl Core {
             if state.removing.contains(&root) {
                 None
             } else {
-                state.next_session += 1;
-                let id = SessionId(state.next_session);
-                let info = SessionInfo {
-                    id,
-                    name: format!("Session {}", id.0),
-                    worktree: root,
-                    state: SessionState::Idle,
-                    permission_mode: PermissionMode::AskForEdits,
-                    unread: 0,
-                };
-                let (deltas, _) = broadcast::channel(4096);
-                let session = Arc::new(Session {
-                    info: Mutex::new(info.clone()),
+                let saved = SavedSession {
                     acp_id: acp_id.clone(),
-                    connection: Mutex::new(connection.clone()),
-                    transcript: Mutex::default(),
-                    deltas,
-                    events: self.inner.events.clone(),
-                    visible: AtomicBool::new(false),
-                    tool_calls: Mutex::default(),
-                    control: Mutex::default(),
-                });
-                state.sessions.insert(id, session);
-                state.by_acp_id.insert(acp_id.clone(), id);
-                Some(info)
+                    name: state.new_name(),
+                    worktree: root,
+                    permission_mode: PermissionMode::AskForEdits,
+                };
+                Some(
+                    self.inner
+                        .register_session(&mut state, saved, Some(connection.clone())),
+                )
             }
         };
         let Some(info) = added else {
@@ -1054,6 +1128,128 @@ impl Core {
             .inner
             .events
             .send(CoreEvent::SessionCreated { session: info });
+        self.inner.persist();
+        Ok(id)
+    }
+
+    /// The open Tabs' sessions, in Tab order (e.g. as restored after a restart).
+    pub fn sessions(&self) -> Vec<SessionInfo> {
+        let state = self.inner.state.lock().expect("state lock");
+        let mut sessions: Vec<_> = state
+            .sessions
+            .values()
+            .map(|s| s.info.lock().expect("info lock").clone())
+            .collect();
+        sessions.sort_by_key(|s| s.id);
+        sessions
+    }
+
+    /// The Tab shown last (before the editor last closed, if it's been restored), to show again.
+    pub fn last_active_session(&self) -> Option<SessionId> {
+        let state = self.inner.state.lock().expect("state lock");
+        state
+            .active
+            .as_ref()
+            .and_then(|acp_id| state.by_acp_id.get(acp_id))
+            .copied()
+    }
+
+    /// A Worktree's Recent sessions (closed Tabs), most recently closed first.
+    pub fn recent_sessions(&self, worktree: &Path) -> Vec<RecentSession> {
+        let worktree = worktrees::normalize(worktree.to_owned());
+        self.inner.recent_in(&worktree)
+    }
+
+    /// Closes a Tab without losing its conversation: the Agent process stops, and the session
+    /// goes to its Worktree's Recent sessions (to reopen later, even after a restart).
+    pub async fn close_tab(&self, id: SessionId) -> Result<(), CoreError> {
+        let session = self.session(id)?;
+        session.wait_settled().await;
+        if session
+            .control
+            .lock()
+            .expect("control lock")
+            .in_transition()
+        {
+            return Err(CoreError::SessionInTransition);
+        }
+        // A slow close only means the process lingers a while; the Tab goes either way.
+        let _ = self.stop_agent(&session).await;
+        let saved = session.saved();
+        self.forget_session(&session);
+        {
+            let mut state = self.inner.state.lock().expect("state lock");
+            app_state::remember_closed(&mut state.recent, saved.clone());
+        }
+        self.inner.recent_changed(&saved.worktree);
+        self.inner.persist();
+        Ok(())
+    }
+
+    /// Reopens one of the Recent sessions in a new Tab, with its conversation.
+    pub async fn reopen_session(&self, acp_id: &str) -> Result<SessionId, CoreError> {
+        let saved = {
+            let mut state = self.inner.state.lock().expect("state lock");
+            let at = state
+                .recent
+                .iter()
+                .position(|s| s.acp_id == acp_id)
+                .ok_or(CoreError::UnknownRecentSession)?;
+            let worktree = state.recent[at].worktree.clone();
+            if !state.worktrees.iter().any(|w| w.path == worktree) {
+                return Err(CoreError::UnknownWorktree(worktree));
+            }
+            if state.removing.contains(&worktree) {
+                return Err(CoreError::BeingRemoved);
+            }
+            state.recent.remove(at)
+        };
+        self.reopen(saved).await
+    }
+
+    /// Reopens the most recently closed session whose Worktree is still there (`Ctrl+Shift+T`);
+    /// `None` if there's nothing to reopen.
+    pub async fn reopen_last_closed(&self) -> Result<Option<SessionId>, CoreError> {
+        let saved = {
+            let mut state = self.inner.state.lock().expect("state lock");
+            let at = state.recent.iter().position(|s| {
+                state.worktrees.iter().any(|w| w.path == s.worktree)
+                    && !state.removing.contains(&s.worktree)
+            });
+            match at {
+                Some(at) => state.recent.remove(at),
+                None => return Ok(None),
+            }
+        };
+        self.reopen(saved).await.map(Some)
+    }
+
+    /// A closed session back in a Tab: registered already resuming (so nothing else can claim it
+    /// first), then its conversation is loaded. If that fails it stays, Suspended, saying why.
+    async fn reopen(&self, saved: SavedSession) -> Result<SessionId, CoreError> {
+        let worktree = saved.worktree.clone();
+        let (info, session) = {
+            let mut state = self.inner.state.lock().expect("state lock");
+            let info = self.inner.register_session(&mut state, saved, None);
+            let session = state.sessions[&info.id].clone();
+            session.update(|control| control.resuming = true);
+            let info = session.info.lock().expect("info lock").clone(); // now showing it resuming
+            (info, session)
+        };
+        let id = info.id;
+        let _ = self
+            .inner
+            .events
+            .send(CoreEvent::SessionCreated { session: info });
+        self.inner.recent_changed(&worktree);
+        self.inner.persist();
+        if let Err(err) = self.inner.resume_claimed(&session, None).await {
+            session.record(|t| {
+                t.push(TranscriptItem::Notice {
+                    text: format!("Couldn't reopen the conversation: {err}"),
+                })
+            });
+        }
         Ok(id)
     }
 
@@ -1061,6 +1257,7 @@ impl Core {
     /// session is resumed first (the same conversation); if that fails, nothing was sent.
     pub async fn send_prompt(&self, id: SessionId, text: &str) -> Result<(), CoreError> {
         let session = self.session(id)?;
+        session.wait_settled().await;
         let resume_first = session.update(|control| {
             if control.in_transition() {
                 return Err(CoreError::SessionInTransition);
@@ -1075,24 +1272,34 @@ impl Core {
                 SessionState::Working | SessionState::NeedsYou => Err(CoreError::SessionBusy),
             }
         })?;
+        let start_turn = |control: &mut Control| {
+            session.record(|t| {
+                t.push(TranscriptItem::User {
+                    text: text.to_owned(),
+                })
+            });
+            control.in_turn = true;
+        };
         if resume_first {
-            self.inner.resume_claimed(&session, None).await?;
+            self.inner
+                .resume_claimed_then(&session, None, start_turn)
+                .await?;
+        } else {
+            session.update(|control| match control.state() {
+                SessionState::Idle => {
+                    start_turn(control);
+                    Ok(())
+                }
+                SessionState::Exited => Err(CoreError::SessionExited),
+                _ => Err(CoreError::SessionBusy),
+            })?;
         }
-        session.update(|control| match control.state() {
-            SessionState::Idle => {
-                session.record(|t| {
-                    t.push(TranscriptItem::User {
-                        text: text.to_owned(),
-                    })
-                });
-                control.in_turn = true;
-                Ok(())
-            }
-            SessionState::Exited => Err(CoreError::SessionExited),
-            _ => Err(CoreError::SessionBusy),
-        })?;
 
-        let connection = session.connection();
+        let Some(connection) = session.connection() else {
+            // Only a restored Tab that was never resumed has none, and it was resumed above.
+            session.update(|control| control.in_turn = false);
+            return Err(CoreError::Acp(AcpError::Closed));
+        };
         let params =
             json!({ "sessionId": session.acp_id, "prompt": [{ "type": "text", "text": text }] });
         let inner = self.inner.clone();
@@ -1104,7 +1311,8 @@ impl Core {
             session.update(|control| {
                 // The adapter crashed and the session has been resumed elsewhere since (or closed):
                 // this turn's ending is old news.
-                if control.closed || !Arc::ptr_eq(&connection, &session.connection()) {
+                let current = session.connection();
+                if control.closed || !current.is_some_and(|c| Arc::ptr_eq(&c, &connection)) {
                     return;
                 }
                 // A question still open when the turn ends will never be answered.
@@ -1160,6 +1368,7 @@ impl Core {
     /// Tab, and the next prompt brings it back. It shows as Working until the Agent confirms.
     pub async fn suspend_session(&self, id: SessionId) -> Result<(), CoreError> {
         let session = self.session(id)?;
+        session.wait_settled().await;
         let stop = session.update(|control| {
             if control.in_transition() {
                 return Err(CoreError::SessionInTransition);
@@ -1177,7 +1386,14 @@ impl Core {
         if !stop {
             return Ok(());
         }
-        let connection = session.connection();
+        let Some(connection) = session.connection() else {
+            // Nothing running to stop.
+            session.update(|control| {
+                control.suspending = false;
+                control.suspended = true;
+            });
+            return Ok(());
+        };
         let stopped = if !connection.supports_session("close") {
             Err(CoreError::Unsupported("suspending sessions"))
         } else {
@@ -1198,6 +1414,7 @@ impl Core {
     /// Brings an Exited (or Suspended) session's conversation back, Idle and ready for a prompt.
     pub async fn resume_session(&self, id: SessionId) -> Result<(), CoreError> {
         let session = self.session(id)?;
+        session.wait_settled().await;
         session.update(|control| {
             if control.in_transition() {
                 return Err(CoreError::SessionInTransition);
@@ -1229,9 +1446,10 @@ impl Core {
             stopped
         });
         if !stopped {
-            apply_mode(&session.connection(), &session.acp_id, mode).await?;
+            apply_mode(&*session.live()?, &session.acp_id, mode).await?;
             session.set_mode(mode);
         }
+        self.inner.persist();
         Ok(())
     }
     pub fn session_info(&self, id: SessionId) -> Result<SessionInfo, CoreError> {
@@ -1283,6 +1501,18 @@ impl Core {
     /// and streams its transcript: a `Reset` with the latest page, then batched changes.
     pub fn show_session(&self, id: SessionId) -> Result<TranscriptStream, CoreError> {
         let session = self.session(id)?;
+        // A restored Tab's conversation comes in when it's first looked at.
+        self.inner.load_for_view(session.clone());
+        let newly_active = {
+            let mut state = self.inner.state.lock().expect("state lock");
+            let active = Some(session.acp_id.clone());
+            let changed = state.active != active;
+            state.active = active;
+            changed
+        };
+        if newly_active {
+            self.inner.persist(); // to show it again after a restart
+        }
         let (stop, mut stopped) = oneshot::channel::<()>();
         let previous = self
             .inner
@@ -1353,6 +1583,146 @@ impl Core {
 }
 
 impl Inner {
+    /// Adds a Tab's session: running on `connection`, or (with none) Suspended until resumed, its
+    /// conversation to be loaded then. Call with the state lock held.
+    fn register_session(
+        &self,
+        state: &mut State,
+        saved: SavedSession,
+        connection: Option<Arc<Connection>>,
+    ) -> SessionInfo {
+        state.next_session += 1;
+        let id = SessionId(state.next_session);
+        let stopped = connection.is_none();
+        let info = SessionInfo {
+            id,
+            name: saved.name,
+            worktree: saved.worktree,
+            state: if stopped {
+                SessionState::Suspended
+            } else {
+                SessionState::Idle
+            },
+            permission_mode: saved.permission_mode,
+            unread: 0,
+        };
+        let (deltas, _) = broadcast::channel(4096);
+        let session = Arc::new(Session {
+            info: Mutex::new(info.clone()),
+            acp_id: saved.acp_id.clone(),
+            connection: Mutex::new(connection),
+            transcript: Mutex::default(),
+            deltas,
+            events: self.events.clone(),
+            visible: AtomicBool::new(false),
+            replaying: AtomicBool::new(false),
+            settled: tokio::sync::Notify::new(),
+            tool_calls: Mutex::default(),
+            control: Mutex::new(Control {
+                suspended: stopped,
+                loaded: !stopped,
+                ..Control::default()
+            }),
+        });
+        state.sessions.insert(id, session);
+        state.by_acp_id.insert(saved.acp_id, id);
+        info
+    }
+
+    fn recent_in(&self, worktree: &Path) -> Vec<RecentSession> {
+        self.state
+            .lock()
+            .expect("state lock")
+            .recent
+            .iter()
+            .filter(|s| s.worktree == worktree)
+            .map(|s| RecentSession {
+                acp_id: s.acp_id.clone(),
+                name: s.name.clone(),
+                worktree: s.worktree.clone(),
+            })
+            .collect()
+    }
+
+    fn recent_changed(&self, worktree: &Path) {
+        let _ = self.events.send(CoreEvent::RecentSessionsChanged {
+            worktree: worktree.to_owned(),
+            sessions: self.recent_in(worktree),
+        });
+    }
+
+    /// Saves this Workspace's open Tabs (in order), Recent sessions and last shown Tab.
+    fn persist(&self) {
+        let Some(path) = self
+            .config
+            .state_path
+            .as_ref()
+            .filter(|_| self.state_writable)
+        else {
+            return;
+        };
+        // Held across the snapshot and the write, so saves land in the order they were taken.
+        let _in_order = self.persist_lock.lock().expect("persist lock");
+        let (root, saved) = {
+            let state = self.state.lock().expect("state lock");
+            let Some(workspace) = &state.workspace else {
+                return;
+            };
+            let mut open: Vec<_> = state.sessions.values().collect();
+            open.sort_by_key(|s| s.info.lock().expect("info lock").id);
+            let saved = WorkspaceState {
+                tabs: open.into_iter().map(|s| s.saved()).collect(),
+                recent: state.recent.clone(),
+                active: state.active.clone(),
+            };
+            (workspace.root.clone(), saved)
+        };
+        if let Err(err) = app_state::save_workspace(path, &root, &saved) {
+            eprintln!("couldn't save the open Tabs: {err}");
+        }
+    }
+
+    /// Brings back the Tabs open when the editor last closed this Workspace, Suspended (no Agent
+    /// starts until one is used), in their Worktrees and order, and its Recent sessions. Ones whose
+    /// Worktree is gone are dropped (but not because listing the Worktrees failed).
+    fn restore(&self, root: &Path) {
+        let saved = self
+            .app_state
+            .lock()
+            .expect("app state lock")
+            .workspaces
+            .get(root)
+            .cloned()
+            .unwrap_or_default();
+        let mut created = vec![];
+        {
+            let mut state = self.state.lock().expect("state lock");
+            let listing_failed = state.worktrees.is_empty();
+            let live = |state: &State, s: &SavedSession| {
+                state.worktrees.iter().any(|w| w.path == s.worktree)
+                    || (listing_failed && s.worktree.exists())
+            };
+            for s in saved.tabs.iter().chain(&saved.recent) {
+                state.note_name(&s.name);
+            }
+            for tab in saved.tabs {
+                if live(&state, &tab) && !state.by_acp_id.contains_key(&tab.acp_id) {
+                    created.push(self.register_session(&mut state, tab, None));
+                }
+            }
+            state.recent = saved
+                .recent
+                .into_iter()
+                .filter(|s| live(&state, s))
+                .collect();
+            state.active = saved.active;
+        }
+        for info in created {
+            let _ = self
+                .events
+                .send(CoreEvent::SessionCreated { session: info });
+        }
+    }
     /// The shared adapter connection, started (and initialised) on first use or after it exited.
     async fn connect(self: &Arc<Self>) -> Result<Arc<Connection>, CoreError> {
         let mut slot = self.adapter.lock().await;
@@ -1397,35 +1767,41 @@ impl Inner {
         session: &Arc<Session>,
         connection: Option<Arc<Connection>>,
     ) -> Result<(), CoreError> {
+        self.resume_claimed_then(session, connection, |_| {}).await
+    }
+
+    /// `resume_claimed`, running `then` in the same state change as a successful resume (so a
+    /// prompt waiting on it starts without the session passing through Idle). Everything that can
+    /// fail happens before that change.
+    async fn resume_claimed_then(
+        self: &Arc<Self>,
+        session: &Arc<Session>,
+        connection: Option<Arc<Connection>>,
+        then: impl FnOnce(&mut Control),
+    ) -> Result<(), CoreError> {
         let reopened = self.reopen(session, connection).await;
         let outcome = session.update(|control| {
             control.resuming = false;
             match reopened {
-                Ok((connection, _)) if control.closed => {
+                Ok(connection) if control.closed => {
                     Err((CoreError::BeingRemoved, Some(connection)))
                 }
                 // It died again while resuming; `adapter_closed` didn't see it, as it wasn't on it yet.
-                Ok((connection, _)) if connection.is_closed() => {
+                Ok(connection) if connection.is_closed() => {
                     Err((CoreError::Acp(AcpError::Closed), None))
                 }
-                Ok((connection, applied)) => {
-                    *session.connection.lock().expect("connection lock") = connection;
+                Ok(connection) => {
+                    *session.connection.lock().expect("connection lock") = Some(connection);
                     control.suspended = false;
                     control.exited = false;
-                    Ok(applied)
+                    then(control);
+                    Ok(())
                 }
                 Err(err) => Err((err, None)),
             }
         });
         match outcome {
-            Ok(applied) => {
-                // The mode may have been changed while it was resuming.
-                let mode = session.info.lock().expect("info lock").permission_mode;
-                if mode != applied {
-                    apply_mode(&session.connection(), &session.acp_id, mode).await?;
-                }
-                Ok(())
-            }
+            Ok(()) => Ok(()),
             Err((err, revived)) => {
                 if let Some(connection) = revived {
                     let _ = close_acp(&connection, &session.acp_id).await;
@@ -1435,13 +1811,15 @@ impl Inner {
         }
     }
 
-    /// `session/resume` (which doesn't replay the conversation: the transcript is already here),
-    /// then the session's permission mode. Returns the connection and the mode it's now in.
+    /// Picks the session's conversation up on `connection` (default: the current adapter):
+    /// `session/resume`, which doesn't replay it (the transcript is already here), or for a
+    /// restored Tab whose transcript isn't, `session/load`, which replays it into an emptied
+    /// transcript. Then puts it in the session's permission mode, as that is by the end.
     async fn reopen(
         self: &Arc<Self>,
         session: &Session,
         connection: Option<Arc<Connection>>,
-    ) -> Result<(Arc<Connection>, PermissionMode), CoreError> {
+    ) -> Result<Arc<Connection>, CoreError> {
         let cwd = session.info.lock().expect("info lock").worktree.clone();
         if self
             .state
@@ -1456,22 +1834,50 @@ impl Inner {
             Some(connection) => connection,
             None => self.connect().await?,
         };
-        if !connection.supports_session("resume") {
-            return Err(CoreError::Unsupported("resuming sessions"));
-        }
-        let resumed = connection
-            .request(
-                "session/resume",
-                json!({ "sessionId": session.acp_id, "cwd": cwd, "mcpServers": [] }),
-            )
-            .await?;
-        let mode = session.info.lock().expect("info lock").permission_mode;
-        if resumed["modes"]["currentModeId"].as_str() != Some(mode.acp_id()) {
+        let loaded = session.control.lock().expect("control lock").loaded;
+        let params = json!({ "sessionId": session.acp_id, "cwd": cwd, "mcpServers": [] });
+        let resumed = if loaded || !connection.supports_load() {
+            if !connection.supports_session("resume") {
+                return Err(CoreError::Unsupported("resuming sessions"));
+            }
+            let resumed = connection.request("session/resume", params).await?;
+            if !loaded {
+                // It carries on where it left off; only the earlier messages can't be shown.
+                session.update(|control| control.loaded = true);
+                session.record(|t| {
+                    t.push(TranscriptItem::Notice {
+                        text: "This Agent can't show the conversation from before the restart."
+                            .into(),
+                    })
+                });
+            }
+            resumed
+        } else {
+            // Start from empty, so a load that failed half way (or ran before) can't double it.
+            // The replay comes as updates before the reply, and isn't news to the user.
+            session.record(|t| t.clear());
+            session.tool_calls.lock().expect("tool calls lock").clear();
+            session.replaying.store(true, Ordering::SeqCst);
+            let replayed = connection.request("session/load", params).await;
+            session.replaying.store(false, Ordering::SeqCst);
+            let replayed = replayed?;
+            session.update(|control| control.loaded = true);
+            replayed
+        };
+        let mut current = resumed["modes"]["currentModeId"]
+            .as_str()
+            .and_then(PermissionMode::from_acp_id);
+        // The mode can change while this runs (it's set locally on a stopped session).
+        for _ in 0..3 {
+            let mode = session.info.lock().expect("info lock").permission_mode;
+            if current == Some(mode) {
+                break;
+            }
             apply_mode(&connection, &session.acp_id, mode).await?;
+            current = Some(mode);
         }
-        Ok((connection, mode))
+        Ok(connection)
     }
-
     /// Adapter process `generation` ended. Its Idle sessions are resumed on one restarted adapter;
     /// ones that were mid-turn (or waiting on you) become Exited, since that turn is lost; Suspended
     /// ones, and ones already mid-suspend or mid-resume, are left to that. Only a crash that had
@@ -1483,7 +1889,7 @@ impl Inner {
             .expect("state lock")
             .sessions
             .values()
-            .filter(|s| s.connection().generation == generation)
+            .filter(|s| s.connection().is_some_and(|c| c.generation == generation))
             .cloned()
             .collect();
         let mut idle = vec![];
@@ -1546,6 +1952,56 @@ impl Inner {
         });
     }
 
+    /// Loads a restored Tab's conversation (`session/load` replays it) and closes the Agent again,
+    /// so looking at a Tab never leaves an Agent running; it stays Suspended throughout. Does
+    /// nothing if it's loaded or busy, or if loading it already failed (the Tab says why).
+    fn load_for_view(self: &Arc<Self>, session: Arc<Session>) {
+        let claimed = session.update(|control| {
+            let wanted = !control.loaded
+                && !control.load_failed
+                && control.suspended
+                && !control.in_transition()
+                && !control.closed;
+            if wanted {
+                control.loading = true;
+            }
+            wanted
+        });
+        if !claimed {
+            return;
+        }
+        let inner = self.clone();
+        tokio::spawn(async move {
+            let reopened = inner.reopen(&session, None).await;
+            let stopped = match &reopened {
+                Ok(connection) => matches!(
+                    close_acp(connection, &session.acp_id).await,
+                    Some(Ok(_)) | Some(Err(AcpError::Closed))
+                ),
+                Err(_) => true,
+            };
+            session.update(|control| {
+                control.loading = false;
+                match reopened {
+                    Ok(connection) => {
+                        *session.connection.lock().expect("connection lock") = Some(connection);
+                        // If the Agent didn't confirm the close, it's running: say so (Idle).
+                        control.suspended = stopped;
+                    }
+                    Err(err) => {
+                        control.load_failed = true;
+                        session.record(|t| {
+                            t.push(TranscriptItem::Notice {
+                                text: format!(
+                                    "Couldn't load the conversation: {err}. Sending a message tries again."
+                                ),
+                            })
+                        });
+                    }
+                }
+            });
+        });
+    }
     /// Whether to restart the adapter after a crash: not after `CRASH_LIMIT` within `CRASH_WINDOW`
     /// (something is wrong, and restarting would only loop).
     fn may_restart(&self) -> bool {
@@ -1655,9 +2111,27 @@ impl Inner {
                 listed
             });
             state.worktrees = listed.clone();
+            // A Worktree that's gone takes its Recent sessions with it (a failed listing doesn't).
+            let mut gone: Vec<PathBuf> = vec![];
+            if !listed.is_empty() {
+                state.recent.retain(|s| {
+                    let live = listed.iter().any(|w| w.path == s.worktree);
+                    if !live && !gone.contains(&s.worktree) {
+                        gone.push(s.worktree.clone());
+                    }
+                    live
+                });
+            }
+            drop(state);
             let _ = self
                 .events
                 .send(CoreEvent::WorktreesChanged { worktrees: listed });
+            if !gone.is_empty() {
+                for worktree in &gone {
+                    self.recent_changed(worktree);
+                }
+                self.persist();
+            }
         }
     }
 
@@ -1698,6 +2172,16 @@ impl Inner {
                 };
                 let update = &params["update"];
                 match update["sessionUpdate"].as_str() {
+                    // Only meaningful while `session/load` replays a conversation: live, the
+                    // user's message is already in the transcript.
+                    Some("user_message_chunk")
+                        if update["content"]["type"] == "text"
+                            && session.replaying.load(Ordering::SeqCst) =>
+                    {
+                        let text = update["content"]["text"].as_str().unwrap_or_default();
+                        let message_id = update["messageId"].as_str().map(str::to_owned);
+                        session.record(|t| t.append_user_text(text, message_id));
+                    }
                     Some("agent_message_chunk") if update["content"]["type"] == "text" => {
                         let text = update["content"]["text"].as_str().unwrap_or_default();
                         let message_id = update["messageId"].as_str().map(str::to_owned);
@@ -1705,12 +2189,14 @@ impl Inner {
                     }
                     Some("tool_call" | "tool_call_update") => session.note_tool_call(update),
                     // The Agent can change mode itself, e.g. when leaving plan mode.
-                    Some("current_mode_update") => {
+                    // (A replayed mode change is history: the Tab's own mode is applied after.)
+                    Some("current_mode_update") if !session.replaying.load(Ordering::SeqCst) => {
                         if let Some(mode) = update["currentModeId"]
                             .as_str()
                             .and_then(PermissionMode::from_acp_id)
                         {
                             session.set_mode(mode);
+                            self.persist();
                         }
                     }
                     _ => {}
@@ -1740,8 +2226,41 @@ impl Inner {
 }
 
 impl Session {
-    fn connection(&self) -> Arc<Connection> {
+    /// Waits (a while, at most) for a suspend, resume or load in progress to settle, so a send or
+    /// close right after one carries on instead of failing.
+    async fn wait_settled(&self) {
+        let deadline = tokio::time::Instant::now() + CLOSE_TIMEOUT * 2;
+        loop {
+            let notified = self.settled.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if !self.control.lock().expect("control lock").in_transition() {
+                return;
+            }
+            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                return; // the caller then reports it's still in transition
+            }
+        }
+    }
+
+    /// How it's remembered between runs.
+    fn saved(&self) -> SavedSession {
+        let info = self.info.lock().expect("info lock");
+        SavedSession {
+            acp_id: self.acp_id.clone(),
+            name: info.name.clone(),
+            worktree: info.worktree.clone(),
+            permission_mode: info.permission_mode,
+        }
+    }
+
+    /// The adapter connection it's on: `None` for a restored Tab that hasn't been resumed yet.
+    fn connection(&self) -> Option<Arc<Connection>> {
         self.connection.lock().expect("connection lock").clone()
+    }
+
+    fn live(&self) -> Result<Arc<Connection>, CoreError> {
+        self.connection().ok_or(CoreError::Acp(AcpError::Closed))
     }
 
     /// Marks it Exited, saying why in its transcript.
@@ -1761,6 +2280,9 @@ impl Session {
     fn update<R>(&self, change: impl FnOnce(&mut Control) -> R) -> R {
         let mut control = self.control.lock().expect("control lock");
         let result = change(&mut control);
+        if !control.in_transition() {
+            self.settled.notify_waiters();
+        }
         let state = control.state();
         let mut info = self.info.lock().expect("info lock");
         if info.state != state {
@@ -1790,7 +2312,8 @@ impl Session {
         let mut transcript = self.transcript.lock().expect("transcript lock");
         let delta = change(&mut transcript);
         let unseen = matches!(&delta, TranscriptDelta::ItemAdded { item, .. } if !matches!(item, TranscriptItem::User { .. } | TranscriptItem::ToolCall { .. }))
-            && !self.visible.load(Ordering::SeqCst);
+            && !self.visible.load(Ordering::SeqCst)
+            && !self.replaying.load(Ordering::SeqCst);
         let _ = self.deltas.send(delta);
         if unseen {
             let mut info = self.info.lock().expect("info lock");

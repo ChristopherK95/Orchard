@@ -23,6 +23,10 @@
 //! `session/request_permission` (id `"perm-1"`, `"perm-2"`, …) and waits for the answer, which it
 //! echoes as a `[permission <optionId>]` chunk before sending `chunks`.
 //!
+//! Each finished turn (the prompt and the Agent's reply) is kept in the JSON file named by
+//! `FAKE_ACP_HISTORY`, like Claude Code's own transcripts, so `session/load` can replay it as
+//! `user_message_chunk` / `agent_message_chunk` updates, even from a later process.
+//!
 //! Every received message is appended to the file named by `FAKE_ACP_LOG`, preceded by a
 //! `{"started": <pid>}` line, so tests can assert on what the core sent. A `session/close` is
 //! followed by `{"closedWhileCwdExists": <bool>}`: whether the session's folder was still there.
@@ -178,7 +182,10 @@ impl Agent {
                 "initialize" => {
                     json!({
                         "protocolVersion": 1,
-                        "agentCapabilities": { "sessionCapabilities": { "close": {}, "resume": {} } },
+                        "agentCapabilities": {
+                            "loadSession": true,
+                            "sessionCapabilities": { "close": {}, "resume": {} }
+                        },
                         "authMethods": []
                     })
                 }
@@ -205,6 +212,25 @@ impl Agent {
                     let session_id = params["sessionId"].as_str().unwrap_or_default().to_owned();
                     let cwd = params["cwd"].as_str().unwrap_or_default().to_owned();
                     self.cwds.insert(session_id, cwd);
+                    self.modes()
+                }
+                // Picks a session back up and replays its conversation first.
+                "session/load" => {
+                    let session_id = params["sessionId"].as_str().unwrap_or_default().to_owned();
+                    let cwd = params["cwd"].as_str().unwrap_or_default().to_owned();
+                    self.cwds.insert(session_id.clone(), cwd);
+                    let history = read_history();
+                    for entry in history[&session_id].as_array().into_iter().flatten() {
+                        let kind = if entry["role"] == "user" {
+                            "user_message_chunk"
+                        } else {
+                            "agent_message_chunk"
+                        };
+                        notify_update(
+                            &json!(session_id),
+                            json!({ "sessionUpdate": kind, "content": { "type": "text", "text": entry["text"] } }),
+                        );
+                    }
                     self.modes()
                 }
                 "session/set_mode" => json!({}),
@@ -311,6 +337,19 @@ impl Agent {
         if turn.exit {
             std::process::exit(1);
         }
+        let reply: String = chunks.iter().chain(&turn.messages).cloned().collect();
+        let prompt = params["prompt"][0]["text"].as_str().unwrap_or_default();
+        let mut history = read_history();
+        let entries = &mut history[session_id.as_str().unwrap_or_default()];
+        if !entries.is_array() {
+            *entries = json!([]);
+        }
+        let entries = entries.as_array_mut().expect("array");
+        entries.push(json!({ "role": "user", "text": prompt }));
+        entries.push(json!({ "role": "agent", "text": reply }));
+        if let Ok(path) = std::env::var("FAKE_ACP_HISTORY") {
+            std::fs::write(path, history.to_string()).expect("write FAKE_ACP_HISTORY");
+        }
         json!({ "stopReason": "end_turn" })
     }
 
@@ -389,6 +428,15 @@ impl Agent {
             writeln!(file, "{value}").expect("write log");
         }
     }
+}
+
+/// The conversations so far, by session id (`{}` without a history file).
+fn read_history() -> Value {
+    std::env::var("FAKE_ACP_HISTORY")
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| json!({}))
 }
 
 fn notify_update(session_id: &Value, update: Value) {
