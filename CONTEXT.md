@@ -37,7 +37,7 @@ _Avoid_: Bootstrap, init script
 The closed Agent sessions of a Worktree whose conversations can still be reopened. Closing a Tab moves its session here; it doesn't delete it.
 
 **Edit note**:
-The record of the user's saved manual changes to a file, attached to the next prompt of each Agent session on that Worktree that has read or edited the file.
+The record of the user's saved manual changes to a file, attached to the next prompt of each Agent session on that Worktree that has read or edited the file. Shown as a removable chip above the composer; a removed one is never sent.
 _Avoid_: File-change notification, sync
 
 **Board**:

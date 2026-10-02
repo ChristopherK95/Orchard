@@ -78,6 +78,9 @@ struct Turn {
     /// Tool calls announced (pending) and then updated to their final status, before anything else.
     #[serde(default)]
     tool_calls: Vec<ToolCallScript>,
+    /// Tool calls announced once any permission is answered (before `write`).
+    #[serde(default)]
+    tool_calls_after: Vec<ToolCallScript>,
     /// Ask for permission before sending `chunks`.
     permission: Option<Permission>,
     /// A second question asked alongside `permission`, before either is answered (parallel tool calls).
@@ -310,20 +313,7 @@ impl Agent {
             ],
             ..Turn::default()
         });
-        for call in turn.tool_calls {
-            self.requests += 1;
-            let tool_call_id = format!("call-{}", self.requests);
-            let locations: Vec<Value> = call.path.iter().map(|p| json!({ "path": p })).collect();
-            notify_update(
-                &session_id,
-                json!({ "sessionUpdate": "tool_call", "toolCallId": tool_call_id, "title": call.title,
-                        "kind": call.kind, "status": "pending", "locations": locations }),
-            );
-            notify_update(
-                &session_id,
-                json!({ "sessionUpdate": "tool_call_update", "toolCallId": tool_call_id, "status": call.status }),
-            );
-        }
+        self.announce(&session_id, turn.tool_calls);
         let mut chunks = turn.chunks;
         let questions: Vec<Permission> = turn.permission.into_iter().chain(turn.also_ask).collect();
         if !questions.is_empty() {
@@ -345,6 +335,7 @@ impl Agent {
                 );
             }
         }
+        self.announce(&session_id, turn.tool_calls_after);
         let cwd = session_id
             .as_str()
             .and_then(|id| self.cwds.get(id))
@@ -389,6 +380,24 @@ impl Agent {
             std::fs::write(path, history.to_string()).expect("write FAKE_ACP_HISTORY");
         }
         json!({ "stopReason": "end_turn" })
+    }
+
+    /// Announces each tool call (pending), then updates it to its final status.
+    fn announce(&mut self, session_id: &Value, calls: Vec<ToolCallScript>) {
+        for call in calls {
+            self.requests += 1;
+            let tool_call_id = format!("call-{}", self.requests);
+            let locations: Vec<Value> = call.path.iter().map(|p| json!({ "path": p })).collect();
+            notify_update(
+                session_id,
+                json!({ "sessionUpdate": "tool_call", "toolCallId": tool_call_id, "title": call.title,
+                        "kind": call.kind, "status": "pending", "locations": locations }),
+            );
+            notify_update(
+                session_id,
+                json!({ "sessionUpdate": "tool_call_update", "toolCallId": tool_call_id, "status": call.status }),
+            );
+        }
     }
 
     /// Announces the tool call and asks permission for it; returns the request id to await.

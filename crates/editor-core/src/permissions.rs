@@ -118,6 +118,42 @@ fn file_of(tool_call: &Value, worktree: &Path) -> Option<std::path::PathBuf> {
     Some(crate::worktrees::normalize(worktree.join(path)))
 }
 
+/// The files a tool call reads or edits (canonical when they exist): its diffs', its locations',
+/// and the `file_path`/`path` it was given. Only for tools that read or change files; a search's
+/// locations are hits, not files the Agent has seen whole.
+pub(crate) fn files_of(tool_call: &Value, worktree: &Path) -> Vec<std::path::PathBuf> {
+    let content = tool_call["content"].as_array();
+    let has_diff = content.is_some_and(|content| content.iter().any(|c| c["type"] == "diff"));
+    let reads_or_changes = matches!(
+        tool_call["kind"].as_str(),
+        Some("read" | "edit" | "delete" | "move")
+    );
+    if !has_diff && !reads_or_changes {
+        return vec![];
+    }
+    let diffs = content
+        .into_iter()
+        .flatten()
+        .filter(|c| c["type"] == "diff")
+        .filter_map(|d| d["path"].as_str());
+    let locations = tool_call["locations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|l| l["path"].as_str());
+    let given = [
+        &tool_call["rawInput"]["file_path"],
+        &tool_call["rawInput"]["path"],
+    ]
+    .into_iter()
+    .filter_map(|p| p.as_str());
+    diffs
+        .chain(locations)
+        .chain(given)
+        .map(|p| crate::worktrees::normalize(worktree.join(p)))
+        .collect()
+}
+
 /// The `RequestPermissionResponse` for an answer.
 pub(crate) fn acp_outcome(outcome: &PermissionOutcome) -> Value {
     match outcome {

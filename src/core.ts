@@ -228,6 +228,17 @@ export interface PermissionRequest {
   options: PermissionOption[];
 }
 
+/** A hand edit to a file the session read or edited, waiting for its next prompt. */
+export interface EditNote {
+  path: string;
+  /** Relative to the session's Worktree. */
+  name: string;
+  added: number;
+  removed: number;
+  /** Null when it's too big: the note just says the file changed substantially. */
+  diff: DiffLine[] | null;
+}
+
 /** A file open in a Manual editor, in some window. */
 export interface OpenDocument {
   path: string;
@@ -239,7 +250,8 @@ export interface OpenDocument {
 export type PermissionOutcome = { kind: "selected"; optionId: string } | { kind: "cancelled" };
 
 export type TranscriptItem =
-  | { kind: "user"; text: string }
+  /** `editNotes`: the Edit notes sent with it ("a.rs (+1 −1)"). */
+  | { kind: "user"; text: string; editNotes?: string[] }
   | { kind: "agent"; text: string }
   | { kind: "notice"; text: string }
   | { kind: "permission"; request: PermissionRequest; outcome: PermissionOutcome | null }
@@ -288,6 +300,7 @@ export type CoreEvent =
   /** A file `window` was told changed is back as the editor has it: nothing to ask. */
   | { kind: "documentBackOnDisk"; window: string; path: string }
   | { kind: "documentsChanged"; documents: OpenDocument[] }
+  | { kind: "editNotesChanged"; sessionId: SessionId; notes: EditNote[] }
   | { kind: "filesChanged"; worktree: string }
   | { kind: "fileWatchFallback"; worktree: string; message: string }
   | { kind: "autoSuspended"; suspended: { session: SessionInfo; reason: AutoSuspendReason }[] }
@@ -367,6 +380,10 @@ export const core = {
   suspendSession: (sessionId: SessionId) => invoke<void>("suspend_session", { sessionId }),
   /** Brings a Suspended or Exited session back. */
   resumeSession: (sessionId: SessionId) => invoke<void>("resume_session", { sessionId }),
+  /** The session's Edit notes (sent with its next prompt). */
+  editNotes: (sessionId: SessionId) => invoke<EditNote[]>("edit_notes", { sessionId }),
+  /** Don't tell the Agent about this hand edit. */
+  removeEditNote: (sessionId: SessionId, path: string) => invoke<void>("remove_edit_note", { sessionId, path }),
   answerPermission: (sessionId: SessionId, toolCallId: string, optionId: string) =>
     invoke<void>("answer_permission", { sessionId, toolCallId, optionId }),
   setPermissionMode: (sessionId: SessionId, mode: PermissionMode) =>

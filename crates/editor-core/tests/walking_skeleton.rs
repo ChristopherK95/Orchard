@@ -6,7 +6,10 @@ use editor_core::{SessionState, TranscriptItem};
 use support::*;
 
 fn user(text: &str) -> TranscriptItem {
-    TranscriptItem::User { text: text.into() }
+    TranscriptItem::User {
+        text: text.into(),
+        edit_notes: vec![],
+    }
 }
 fn agent(text: &str) -> TranscriptItem {
     TranscriptItem::Agent { text: text.into() }

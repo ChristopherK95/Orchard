@@ -22,6 +22,7 @@ import { answerByKey } from "./PermissionCard";
 import { NewWorktreeDialog } from "./NewWorktreeDialog";
 import { RemoveWorktreeDialog } from "./RemoveWorktreeDialog";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
+import { EditNotes } from "./EditNotes";
 import { FilesDrawer } from "./FilesDrawer";
 import type { OpenRequest } from "./ManualEditor";
 // CodeMirror loads with the first file opened, not at startup.
@@ -399,9 +400,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         event.kind === "documentChangedOnDisk" ||
         event.kind === "documentConflicted" ||
         event.kind === "documentBackOnDisk" ||
-        event.kind === "documentsChanged"
+        event.kind === "documentsChanged" ||
+        event.kind === "editNotesChanged"
       ) {
-        return; // (the Manual editors' and the permission cards' business)
+        return; // (the Manual editors', permission cards' and Edit note chips' business)
       } else if (!sessions[event.sessionId]) return;
       else if (event.kind === "sessionStateChanged") onStateChanged(event.sessionId, event.state);
       else if (event.kind === "permissionModeChanged") setSessions(event.sessionId, "permissionMode", event.mode);
@@ -742,6 +744,7 @@ function Composer(props: { session: SessionInfo }) {
 
   return (
     <div class="composer">
+      <EditNotes sessionId={props.session.id} />
       <Show when={error()}>
         <p class="error">{error()}</p>
       </Show>

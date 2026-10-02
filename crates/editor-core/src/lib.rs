@@ -8,6 +8,7 @@ mod core;
 mod create_worktree;
 mod diff;
 mod documents;
+mod edit_notes;
 mod files;
 mod git;
 mod permissions;
@@ -27,6 +28,7 @@ pub use crate::core::{
 };
 pub use crate::create_worktree::{BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 pub use crate::documents::{FileContent, OpenDocument, OpenedFile, PoppedOutFile, SaveOver};
+pub use crate::edit_notes::EditNote;
 pub use crate::files::{DirEntry, FileMatch, FileWatchConfig, IndexStats, WatchStatus};
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};
 pub use crate::remove_worktree::{CommitSummary, RemovalCheck, RemoveWorktree, RemovedWorktree};

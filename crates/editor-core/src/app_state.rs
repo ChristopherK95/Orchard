@@ -40,6 +40,9 @@ pub(crate) struct SavedSession {
     pub(crate) name: String,
     pub(crate) worktree: PathBuf,
     pub(crate) permission_mode: PermissionMode,
+    /// The files it read or edited (for Edit notes, before its conversation is loaded again).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) files: Vec<PathBuf>,
 }
 
 /// How many Recent sessions are kept per Worktree.
@@ -111,6 +114,7 @@ mod tests {
             name: format!("Session {acp_id}"),
             worktree: worktree.into(),
             permission_mode: PermissionMode::Plan,
+            files: vec![],
         }
     }
 

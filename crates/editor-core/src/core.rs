@@ -19,6 +19,7 @@ use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewW
 use crate::documents::{
     self, CheckTicket, DocumentTracker, OpenDocument, OpenedFile, PoppedOutFile, SaveOver,
 };
+use crate::edit_notes::{EditNote, EditNotes};
 use crate::files::{
     ActorNews, DirEntry, FileMatch, FileWatchConfig, IndexStats, WatchStatus, WorktreeActor,
 };
@@ -317,6 +318,13 @@ pub enum CoreEvent {
         window: String,
         path: PathBuf,
     },
+    /// A session's Edit notes changed: a file it read or edited was saved by hand, a note was
+    /// removed, or the notes went with a prompt (none left).
+    #[serde(rename_all = "camelCase")]
+    EditNotesChanged {
+        session_id: SessionId,
+        notes: Vec<EditNote>,
+    },
     /// The files open in Manual editors changed: one opened or closed, or got (or lost) unsaved
     /// changes. For permission cards warning about an edit to a file with unsaved changes.
     DocumentsChanged {
@@ -486,6 +494,10 @@ struct Session {
     clock: Arc<dyn Clock>,
     /// Every tool call the Agent announced, merged with its updates, keyed by ACP tool call id.
     tool_calls: Mutex<HashMap<String, KnownToolCall>>,
+    /// The files (canonical) its tool calls read or edited: whose hand edits it's told about.
+    files: Mutex<HashSet<PathBuf>>,
+    /// Hand edits to those files waiting for its next prompt (kept while it's Suspended).
+    edit_notes: Mutex<EditNotes>,
     control: Mutex<Control>,
 }
 
@@ -1402,6 +1414,7 @@ impl Core {
                     name: state.new_name(),
                     worktree: root,
                     permission_mode: PermissionMode::AskForEdits,
+                    files: vec![],
                 };
                 Some(
                     self.inner
@@ -1507,19 +1520,32 @@ impl Core {
             false => None,
         };
         let target = path.clone();
+        let after = text.to_owned();
         let text = text.to_owned();
         let line_ending = line_ending.to_owned();
         // (While it writes, the file watcher's news of it isn't an Agent's change.)
         self.inner.documents().save_started(&path);
         let saved = tokio::task::spawn_blocking(move || {
-            documents::save(&target, &text, &line_ending, &over).map_err(|err| match err {
-                documents::SaveError::Changed => CoreError::FileChangedOnDisk(target.clone()),
-                documents::SaveError::Io(message) => CoreError::File(message),
-            })
+            // What it was, for the Edit notes (`\n` line endings, like the editor's text).
+            let before = std::fs::read(&target)
+                .ok()
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .map(|text| text.replace("\r\n", "\n"));
+            documents::save(&target, &text, &line_ending, &over)
+                .map(|version| (version, before))
+                .map_err(|err| match err {
+                    documents::SaveError::Changed => CoreError::FileChangedOnDisk(target.clone()),
+                    documents::SaveError::Io(message) => CoreError::File(message),
+                })
         })
         .await
         .map_err(|e| CoreError::File(e.to_string()))
-        .and_then(|saved| saved);
+        .and_then(|saved| saved)
+        .map(|(version, before)| {
+            self.inner
+                .note_edit(&path, before.as_deref().unwrap_or_default(), &after);
+            version
+        });
         {
             let mut docs = self.inner.documents();
             if let Ok(version) = &saved {
@@ -1535,6 +1561,30 @@ impl Core {
             self.inner.reload_settings();
         }
         saved
+    }
+
+    /// The session's Edit notes waiting for its next prompt.
+    pub fn edit_notes(&self, id: SessionId) -> Result<Vec<EditNote>, CoreError> {
+        Ok(self
+            .session(id)?
+            .edit_notes
+            .lock()
+            .expect("edit notes lock")
+            .notes())
+    }
+
+    /// The user removed an Edit note: the session isn't told about those changes.
+    pub fn remove_edit_note(&self, id: SessionId, path: &Path) -> Result<(), CoreError> {
+        let session = self.session(id)?;
+        let mut notes = session.edit_notes.lock().expect("edit notes lock");
+        if notes.remove(path) {
+            let notes = notes.notes();
+            let _ = self.inner.events.send(CoreEvent::EditNotesChanged {
+                session_id: id,
+                notes,
+            });
+        }
+        Ok(())
     }
 
     /// The files open in Manual editors, wherever they are.
@@ -1855,6 +1905,7 @@ impl Core {
             session.record(|t| {
                 t.push(TranscriptItem::User {
                     text: text.to_owned(),
+                    edit_notes: vec![],
                 })
             });
             control.in_turn = true;
@@ -1879,11 +1930,32 @@ impl Core {
             session.update(|control| control.in_turn = false);
             return Err(CoreError::Acp(AcpError::Closed));
         };
-        let params =
-            json!({ "sessionId": session.acp_id, "prompt": [{ "type": "text", "text": text }] });
+        // Hand edits since the Agent last looked go first (and are delivered, shown under the
+        // message they went with).
+        let delivery = session.edit_notes.lock().expect("edit notes lock").take();
+        let mut prompt = vec![];
+        if let Some(delivery) = &delivery {
+            prompt.push(json!({ "type": "text", "text": delivery.text }));
+            session.tag_last_message(delivery.tags.clone());
+            let _ = self.inner.events.send(CoreEvent::EditNotesChanged {
+                session_id: id,
+                notes: vec![],
+            });
+        }
+        prompt.push(json!({ "type": "text", "text": text }));
+        let params = json!({ "sessionId": session.acp_id, "prompt": prompt });
         let inner = self.inner.clone();
         tokio::spawn(async move {
             let result = connection.request("session/prompt", params).await;
+            if let (Err(_), Some(delivery)) = (&result, delivery) {
+                // It never got them (the adapter crashed, say): they wait for the next prompt.
+                let mut notes = session.edit_notes.lock().expect("edit notes lock");
+                notes.put_back(delivery);
+                let _ = inner.events.send(CoreEvent::EditNotesChanged {
+                    session_id: id,
+                    notes: notes.notes(),
+                });
+            }
             // The Agent may have committed or changed files: refresh ahead/changed counts.
             let refresh = inner.clone();
             tokio::spawn(async move { refresh.refresh_worktrees().await });
@@ -2334,6 +2406,49 @@ impl Inner {
         });
     }
 
+    /// The user saved `path` by hand (it was `before`, it's now `after`): an Edit note for each
+    /// session on its Worktree that read or edited it. None is woken; each gets it with its next
+    /// prompt (a Suspended one after it resumes).
+    fn note_edit(&self, path: &Path, before: &str, after: &str) {
+        let (sessions, owner): (Vec<Arc<Session>>, Option<PathBuf>) = {
+            let state = self.state.lock().expect("state lock");
+            // (A linked Worktree may sit inside the main one: the deepest that holds it.)
+            let owner = state
+                .worktrees
+                .iter()
+                .map(|w| &w.path)
+                .filter(|w| path.starts_with(w))
+                .max_by_key(|w| w.components().count())
+                .cloned();
+            (state.sessions.values().cloned().collect(), owner)
+        };
+        let Some(owner) = owner else {
+            return; // (the settings file, say)
+        };
+        for session in sessions {
+            let worktree = session.info.lock().expect("info lock").worktree.clone();
+            if worktree != owner {
+                continue;
+            }
+            let Ok(relative) = path.strip_prefix(&worktree) else {
+                continue;
+            };
+            if session.control.lock().expect("control lock").closed
+                || !session.files.lock().expect("files lock").contains(path)
+            {
+                continue;
+            }
+            let name = relative.to_string_lossy().replace('\\', "/");
+            let mut notes = session.edit_notes.lock().expect("edit notes lock");
+            if notes.saved(path.to_owned(), name, before, after) {
+                let _ = self.events.send(CoreEvent::EditNotesChanged {
+                    session_id: session.id(),
+                    notes: notes.notes(),
+                });
+            }
+        }
+    }
+
     /// Tells the frontend the open files after a change to them.
     fn documents_changed(&self) {
         let documents = self.documents().all();
@@ -2405,6 +2520,8 @@ impl Inner {
             idle_since: Mutex::new((!stopped).then(|| self.clock.now())),
             clock: self.clock.clone(),
             tool_calls: Mutex::default(),
+            files: Mutex::new(saved.files.iter().cloned().collect()),
+            edit_notes: Mutex::default(),
             control: Mutex::new(Control {
                 suspended: stopped,
                 loaded: !stopped,
@@ -2998,7 +3115,14 @@ impl Inner {
                         let message_id = update["messageId"].as_str().map(str::to_owned);
                         session.record(|t| t.append_agent_text(text, message_id));
                     }
-                    Some("tool_call" | "tool_call_update") => session.note_tool_call(update),
+                    Some("tool_call" | "tool_call_update") => {
+                        // (Its files, for Edit notes after a restart; a replay's go with the next save.)
+                        if session.note_tool_call(update)
+                            && !session.replaying.load(Ordering::SeqCst)
+                        {
+                            self.persist();
+                        }
+                    }
                     // The Agent can change mode itself, e.g. when leaving plan mode.
                     // (A replayed mode change is history: the Tab's own mode is applied after.)
                     Some("current_mode_update") if !session.replaying.load(Ordering::SeqCst) => {
@@ -3062,6 +3186,17 @@ impl Session {
             name: info.name.clone(),
             worktree: info.worktree.clone(),
             permission_mode: info.permission_mode,
+            files: {
+                let mut files: Vec<PathBuf> = self
+                    .files
+                    .lock()
+                    .expect("files lock")
+                    .iter()
+                    .cloned()
+                    .collect();
+                files.sort();
+                files
+            },
         }
     }
 
@@ -3161,9 +3296,10 @@ impl Session {
     }
 
     /// Merges a tool call (or its update) into what's known, and adds or updates its transcript row.
-    fn note_tool_call(&self, update: &Value) {
+    /// Whether it named a file the session hadn't read or edited before.
+    fn note_tool_call(&self, update: &Value) -> bool {
         let Some(id) = update["toolCallId"].as_str() else {
-            return;
+            return false;
         };
         let worktree = self.info.lock().expect("info lock").worktree.clone();
         let mut tool_calls = self.tool_calls.lock().expect("tool calls lock");
@@ -3174,6 +3310,7 @@ impl Session {
                 row: None,
             });
         permissions::merge_tool_call(&mut known.call, update);
+        let new_files = self.remember_files(&known.call, &worktree);
         let row = permissions::tool_call_row(&known.call, &worktree);
         match known.row {
             Some(index) => self.record(|t| t.replace(index, row)),
@@ -3182,6 +3319,65 @@ impl Session {
                 t.push(row)
             }),
         }
+        new_files
+    }
+
+    /// Remembers the files a tool call reads or edits (for Edit notes); whether any was new. The
+    /// session sees such a file as it is, so a note on it waiting for the next prompt is dropped
+    /// (not for a replayed tool call: that's old news).
+    fn remember_files(&self, call: &Value, worktree: &Path) -> bool {
+        let files = permissions::files_of(call, worktree);
+        if files.is_empty() {
+            return false;
+        }
+        if !self.replaying.load(Ordering::SeqCst) {
+            let mut notes = self.edit_notes.lock().expect("edit notes lock");
+            let mut dropped = false;
+            for file in &files {
+                dropped |= notes.remove(file);
+            }
+            if dropped {
+                let _ = self.events.send(CoreEvent::EditNotesChanged {
+                    session_id: self.id(),
+                    notes: notes.notes(),
+                });
+            }
+        }
+        let mut known = self.files.lock().expect("files lock");
+        let mut new = false;
+        for file in files {
+            new |= known.insert(file);
+        }
+        new
+    }
+
+    /// Shows `tags` (the Edit notes sent with it) under the user's latest message.
+    fn tag_last_message(&self, tags: Vec<String>) {
+        let transcript = self.transcript.lock().expect("transcript lock");
+        let Some(index) = transcript
+            .items()
+            .iter()
+            .rposition(|item| matches!(item, TranscriptItem::User { .. }))
+        else {
+            return;
+        };
+        let TranscriptItem::User { text, .. } = transcript.items()[index].clone() else {
+            return;
+        };
+        drop(transcript);
+        self.record(|t| {
+            t.replace(
+                index,
+                TranscriptItem::User {
+                    text,
+                    edit_notes: tags,
+                },
+            )
+        });
+    }
+
+    fn id(&self) -> SessionId {
+        self.info.lock().expect("info lock").id
     }
 
     /// Puts a permission card in the transcript and holds the question until it's answered. The

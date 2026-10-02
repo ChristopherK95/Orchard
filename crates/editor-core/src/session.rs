@@ -79,8 +79,12 @@ pub struct TranscriptPage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum TranscriptItem {
+    #[serde(rename_all = "camelCase")]
     User {
         text: String,
+        /// The Edit notes that went with it ("a.rs (+1 −1)"), shown under it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        edit_notes: Vec<String>,
     },
     Agent {
         text: String,
@@ -329,15 +333,24 @@ impl Transcript {
             .is_some_and(|open| open.continued_by(&message_id))
         {
             let index = self.items.len() - 1;
-            if let TranscriptItem::User { text: t } = &mut self.items[index] {
+            if let TranscriptItem::User {
+                text: t,
+                edit_notes,
+            } = &mut self.items[index]
+            {
                 t.push_str(text);
+                // (The Edit notes sent with it come back as its first part.)
+                if let Some((tags, rest)) = crate::edit_notes::split_sent(t) {
+                    *t = rest;
+                    *edit_notes = tags;
+                }
                 let item = self.items[index].clone();
                 return TranscriptDelta::ItemUpdated { index, item };
             }
         }
-        let delta = self.push(TranscriptItem::User {
-            text: text.to_owned(),
-        });
+        let (edit_notes, text) =
+            crate::edit_notes::split_sent(text).unwrap_or_else(|| (vec![], text.to_owned()));
+        let delta = self.push(TranscriptItem::User { text, edit_notes });
         self.open_user_message = Some(OpenAgentMessage { message_id });
         delta
     }

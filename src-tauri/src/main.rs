@@ -420,6 +420,26 @@ async fn resume_session(core: State<'_, Core>, session_id: SessionId) -> Command
         .map_err(|e| e.to_string())
 }
 
+/// The session's Edit notes waiting for its next prompt.
+#[tauri::command]
+fn edit_notes(
+    core: State<'_, Core>,
+    session_id: SessionId,
+) -> CommandResult<Vec<editor_core::EditNote>> {
+    core.edit_notes(session_id).map_err(|e| e.to_string())
+}
+
+/// The user removed an Edit note: the Agent isn't told about that change.
+#[tauri::command]
+fn remove_edit_note(
+    core: State<'_, Core>,
+    session_id: SessionId,
+    path: String,
+) -> CommandResult<()> {
+    core.remove_edit_note(session_id, path.as_ref())
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn answer_permission(
     core: State<'_, Core>,
@@ -597,6 +617,8 @@ fn main() {
             suspend_session,
             resume_session,
             answer_permission,
+            edit_notes,
+            remove_edit_note,
             set_permission_mode,
             transcript_page_before,
             notify_session,

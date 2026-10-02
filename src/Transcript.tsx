@@ -3,7 +3,7 @@
 // earlier pages from the core when you scroll near the top, keeping your place.
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { createVirtualizer } from "@tanstack/solid-virtual";
-import { createEffect, createMemo, For, type JSX, on } from "solid-js";
+import { createEffect, createMemo, For, type JSX, on, Show } from "solid-js";
 import type { SessionId, TranscriptItem } from "./core";
 import { handleTranscriptClick, renderMarkdown } from "./markdown";
 import { PermissionCard } from "./PermissionCard";
@@ -133,6 +133,17 @@ function renderItem(sessionId: SessionId, item: TranscriptItem | undefined): JSX
       return <PermissionCard sessionId={sessionId} request={item.request} outcome={item.outcome} />;
     case "toolCall":
       return <ToolCallRow item={item} />;
+    case "user":
+      return (
+        <div class="msg user">
+          {item.text}
+          <Show when={item.editNotes?.length}>
+            <div class="sent-notes" title="Your hand edits that went with this message">
+              <For each={item.editNotes}>{(tag) => <span class="sent-note">📝 {tag}</span>}</For>
+            </div>
+          </Show>
+        </div>
+      );
     default:
       return <div class={`msg ${item.kind}`}>{item.text}</div>;
   }
