@@ -9,7 +9,8 @@ export const PHASES = {
   oneTab: "one-tab",
   /** Five Tabs, each after a short turn, idle: the per-Tab cost. */
   fiveTabs: "five-tabs",
-  /** Then a long transcript streamed into Tab 1 and a visit to every Tab, idle: the total and idle CPU. */
+  /** Then a long transcript streamed into Tab 1, a visit to every Tab and a file open in the Manual
+   *  editor, idle: the total and idle CPU. */
   longTranscript: "long-transcript",
   /** The script may stop the app. */
   done: "done",
@@ -20,6 +21,8 @@ export interface BenchDriver {
   show(id: SessionId): Promise<void>;
   /** Sends a prompt and resolves when that turn has finished. */
   turn(id: SessionId, text: string): Promise<void>;
+  /** Opens a file of the Workspace in the Manual editor. */
+  openFile(): Promise<void>;
 }
 
 /** How long each measured phase holds still, so the script can sample it (incl. a 20 s CPU window). */
@@ -53,6 +56,7 @@ export async function runBenchmark(driver: BenchDriver, first: SessionId) {
     await sleep(300);
   }
   await driver.show(first);
+  await driver.openFile();
   await phase(PHASES.longTranscript);
   await core.benchMark(PHASES.done);
 }

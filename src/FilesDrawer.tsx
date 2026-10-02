@@ -10,6 +10,8 @@ export function FilesDrawer(props: {
   revision: number;
   /** A file to reveal (opening its folders) and mark; `n` changes each time it's asked for. */
   reveal: { path: string; n: number } | null;
+  /** A file was clicked (its path relative to the Worktree). */
+  onOpenFile: (path: string) => void;
   onClose: () => void;
 }) {
   const [open, setOpen] = createSignal<Set<string>>(new Set());
@@ -47,7 +49,7 @@ export function FilesDrawer(props: {
         </button>
       </div>
       <div class="drawer-tree">
-        <Folder worktree={props.worktree} dir="" depth={0} open={open()} revision={props.revision} reveal={props.reveal?.path ?? null} onToggle={toggle} />
+        <Folder worktree={props.worktree} dir="" depth={0} open={open()} revision={props.revision} reveal={props.reveal?.path ?? null} onToggle={toggle} onOpenFile={props.onOpenFile} />
       </div>
     </aside>
   );
@@ -61,6 +63,7 @@ function Folder(props: {
   revision: number;
   reveal: string | null;
   onToggle: (path: string) => void;
+  onOpenFile: (path: string) => void;
 }) {
   const [entries] = createResource(
     () => [props.worktree, props.dir, props.revision] as const,
@@ -76,7 +79,7 @@ function Folder(props: {
             class="tree-row"
             classList={{ revealed: entry().path === props.reveal, changed: !!entry().change || entry().hasChanges }}
             style={{ "padding-left": `${8 + props.depth * 14}px` }}
-            onClick={() => entry().isDir && props.onToggle(entry().path)}
+            onClick={() => (entry().isDir ? props.onToggle(entry().path) : props.onOpenFile(entry().path))}
             ref={(row) => createEffect(() => entry().path === props.reveal && row.scrollIntoView({ block: "nearest" }))}
             title={entry().path}
           >

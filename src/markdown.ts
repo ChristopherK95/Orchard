@@ -1,7 +1,7 @@
 // Agent messages as markdown (ticket 02). Raw HTML in messages is shown as text, never rendered,
 // and images are off: an Agent-written image URL would load (and leak data) without any click.
-// Code fences become static highlighted blocks with line numbers, a language label and Copy
-// (wired up by delegation in the transcript; see `handleTranscriptClick`).
+// Code fences become static highlighted blocks with line numbers, a language label, Copy and Open
+// in editor (wired up by delegation in the transcript; see `handleTranscriptClick`).
 import MarkdownIt from "markdown-it";
 import { highlightCode, languageOf } from "./highlight";
 import { escapeHtml } from "./html";
@@ -21,8 +21,9 @@ function codeBlock(code: string, label: string): string {
     .map((line) => `<span class="l">${line || " "}</span>`)
     .join("");
   return (
-    `<div class="cb" data-code="${escapeHtml(code)}"><div class="cb-head"><span>${escapeHtml(label || "text")}</span>` +
-    `<span class="grow"></span><button type="button" class="ghost" data-copy>Copy</button></div>` +
+    `<div class="cb" data-code="${escapeHtml(code)}" data-label="${escapeHtml(label)}"><div class="cb-head"><span>${escapeHtml(label || "text")}</span>` +
+    `<span class="grow"></span><button type="button" class="ghost" data-open>Open in editor</button>` +
+    `<button type="button" class="ghost" data-copy>Copy</button></div>` +
     `<pre class="numbered"><code>${lines}</code></pre></div>`
   );
 }
@@ -35,16 +36,23 @@ export function renderMarkdown(text: string): string {
 const SAFE_LINK = /^(https?:|mailto:)/i;
 
 /**
- * Handles clicks inside rendered chat: Copy buttons copy their block; links open in the system
- * browser (never inside the app). Failures are reported to `onError`.
+ * Handles clicks inside rendered chat: Copy buttons copy their block, Open in editor opens it in
+ * the Manual editor; links open in the system browser (never inside the app). Failures are
+ * reported to `onError`.
  */
 export async function handleTranscriptClick(
   event: MouseEvent,
   openUrl: (url: string) => Promise<void>,
+  openSnippet: (code: string, label: string) => void,
   onError: (message: string) => void,
 ) {
   const target = event.target as HTMLElement | null;
   try {
+    const open = target?.closest<HTMLButtonElement>("[data-open]");
+    if (open) {
+      const block = open.closest<HTMLElement>(".cb");
+      return openSnippet(block?.dataset.code ?? "", block?.dataset.label ?? "");
+    }
     const copy = target?.closest<HTMLButtonElement>("[data-copy]");
     if (copy) {
       await navigator.clipboard.writeText(copy.closest<HTMLElement>(".cb")?.dataset.code ?? "");

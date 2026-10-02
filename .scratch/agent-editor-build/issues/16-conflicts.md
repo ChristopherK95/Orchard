@@ -11,3 +11,5 @@
 - [ ] The diff view renders unified by default and can toggle to side-by-side.
 - [ ] Edit permission cards warn about unsaved changes in the target file.
 - [ ] Core tests: the fake agent edits an open clean file vs an open dirty file, and the correct event is emitted in each case.
+
+Note from ticket 14: open Manual editor documents (tabs, dirty state, versions) live only in the frontend so far. The spec's core document tracker belongs here: the core should learn which files are open and dirty (so it can choose silent reload vs banner, and tabs survive a window reload, per ADR 0003).

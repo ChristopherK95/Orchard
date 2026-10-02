@@ -224,3 +224,24 @@ button.ghost.on { color: var(--fg); background: var(--bg3); }
 .palette-item.on { background: var(--bg3); }
 .palette-item .hit { color: var(--accent); font-weight: 700; }
 .palette-empty { padding: 6px 10px; margin: 0; }
+
+/* Manual editor pane (ticket 14) */
+.manual-editor { flex: 1 1 0; min-width: 320px; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bg); }
+.editor-tabs { display: flex; align-items: center; gap: 2px; padding: 4px 6px 0; background: var(--bg2); border-bottom: 1px solid var(--line); overflow-x: auto; }
+.editor-tab { display: flex; align-items: stretch; border-radius: 6px 6px 0 0; background: var(--bg3); }
+.editor-tab.on { background: var(--bg); box-shadow: inset 0 2px var(--accent); }
+.editor-tab-name { border: 0; background: transparent; padding: 4px 4px 4px 10px; font-size: 12.5px; white-space: nowrap; }
+.editor-tab .dirty { margin-left: 5px; color: var(--needs-you); font-size: 10px; }
+.editor-tabs > button { font-size: 12px; padding: 1px 8px; }
+.editor-banner { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.editor-host { flex: 1; min-height: 0; overflow: hidden; }
+.editor-host.hidden { display: none; }
+.editor-host .cm-editor { height: 100%; font-size: 13px; }
+.editor-host .cm-scroller { font-family: var(--mono); }
+.editor-host .cm-gutters { background: var(--bg2); border-right: 1px solid var(--line); color: var(--fg2); }
+.editor-host .cm-activeLine, .editor-host .cm-activeLineGutter { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.editor-host .cm-cursor { border-left-color: var(--fg); }
+.editor-host .cm-selectionBackground, .editor-host .cm-focused .cm-selectionBackground { background: color-mix(in srgb, var(--accent) 30%, transparent) !important; }
+.editor-host .cm-panels { background: var(--bg2); color: var(--fg); border-color: var(--line); }
+.editor-host .cm-matchingBracket { outline: 1px solid var(--accent); background: transparent; }
+.editor-placeholder { flex: 1; }

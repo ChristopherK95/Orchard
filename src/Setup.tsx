@@ -33,7 +33,13 @@ function stepState(status: SetupStatus, step: number): StepState {
 
 const STEP_ICON: Record<StepState, string> = { done: "✓", running: "…", failed: "✗", pending: "·" };
 
-export function Setup(props: { worktree: string; setup: SetupView; onError: (message: string) => void }) {
+export function Setup(props: {
+  worktree: string;
+  setup: SetupView;
+  onError: (message: string) => void;
+  /** Opens the repo's settings (to fix its setup commands). */
+  onOpenSettings: () => void;
+}) {
   let output!: HTMLPreElement;
   // Follow the output while it streams, unless the user scrolled up to read.
   let following = true;
@@ -75,7 +81,7 @@ export function Setup(props: { worktree: string; setup: SetupView; onError: (mes
       <div class="setup-head">
         <b classList={{ error: !!failed() }}>{heading()}</b>
         <span class="grow" />
-        <button class="ghost" onClick={act(core.openRepoSettings)} title="Edit this repo's setup commands">
+        <button class="ghost" onClick={() => props.onOpenSettings()} title="Edit this repo's setup commands">
           Repo settings
         </button>
       </div>

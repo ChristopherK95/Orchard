@@ -29,6 +29,8 @@ export function Transcript(props: {
   start: number;
   onLoadEarlier: () => Promise<number>;
   onError: (message: string) => void;
+  /** "Open in editor" on a code block. */
+  onOpenSnippet: (code: string, label: string) => void;
 }) {
   let scroller!: HTMLDivElement;
   let following = true;
@@ -99,7 +101,7 @@ export function Transcript(props: {
       class="transcript"
       ref={scroller}
       onScroll={onScroll}
-      onClick={(e) => void handleTranscriptClick(e, openUrl, props.onError)}
+      onClick={(e) => void handleTranscriptClick(e, openUrl, props.onOpenSnippet, props.onError)}
     >
       <div class="transcript-inner" style={{ height: `${virtualizer.getTotalSize()}px` }}>
         <For each={rowKeys()}>

@@ -16,6 +16,7 @@ use crate::auto_suspend::{
     self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, SystemClock, SystemProbe,
 };
 use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewWorktree};
+use crate::documents::{self, OpenedFile, SaveOver};
 use crate::files::{
     ActorNews, DirEntry, FileMatch, FileWatchConfig, IndexStats, WatchStatus, WorktreeActor,
 };
@@ -191,6 +192,12 @@ pub enum CoreError {
     NothingToReopen,
     #[error("`{0}` isn't shown or in use, so its files aren't indexed")]
     NotWatched(PathBuf),
+    #[error("`{}` isn't in this Workspace, so it can't be edited here", .0.display())]
+    NotEditable(PathBuf),
+    #[error("`{}` changed on disk since it was opened", .0.display())]
+    FileChangedOnDisk(PathBuf),
+    #[error("{0}")]
+    File(String),
     #[error("that session isn't in this Worktree's Recent sessions")]
     UnknownRecentSession,
     #[error("the Agent session isn't waiting for a permission answer")]
@@ -1426,6 +1433,93 @@ impl Core {
         self.actor(worktree).await.ok().map(|actor| actor.status())
     }
 
+    /// Opens a file for the Manual editor: one of the Workspace's Worktrees', or the settings file.
+    pub async fn read_file(&self, path: &Path) -> Result<OpenedFile, CoreError> {
+        let path = self.editable(path)?;
+        tokio::task::spawn_blocking(move || documents::read(&path))
+            .await
+            .map_err(|e| CoreError::File(e.to_string()))?
+            .map_err(CoreError::File)
+    }
+
+    /// Saves a Manual editor's text (`\n` line endings, written as `line_ending`) if `over`
+    /// allows: only over the version it read, or over anything once the user said so. Refused
+    /// with `FileChangedOnDisk` if the file changed since. The file's new version.
+    pub async fn save_file(
+        &self,
+        path: &Path,
+        text: &str,
+        line_ending: &str,
+        over: SaveOver,
+    ) -> Result<String, CoreError> {
+        let path = self.editable(path)?;
+        let is_settings = self
+            .inner
+            .config
+            .settings_path
+            .as_ref()
+            .is_some_and(|s| worktrees::normalize(s.clone()) == path);
+        // The editor's own writes to the settings file (a new repo section) wait for this one.
+        let _settings_write = match is_settings {
+            true => Some(self.inner.settings_write.lock().await),
+            false => None,
+        };
+        let target = path.clone();
+        let text = text.to_owned();
+        let line_ending = line_ending.to_owned();
+        let saved = tokio::task::spawn_blocking(move || {
+            documents::save(&target, &text, &line_ending, &over).map_err(|err| match err {
+                documents::SaveError::Changed => CoreError::FileChangedOnDisk(target.clone()),
+                documents::SaveError::Io(message) => CoreError::File(message),
+            })
+        })
+        .await
+        .map_err(|e| CoreError::File(e.to_string()))?;
+        // The settings apply as soon as they're saved (the file watch would catch it a moment later).
+        if saved.is_ok() && is_settings {
+            self.inner.reload_settings();
+        }
+        saved
+    }
+
+    /// `path`, canonical, if it's a file the Manual editor may open: inside one of the Workspace's
+    /// Worktrees (not their `.git`; no `..` escapes, no symlinks out, none dangling), or the
+    /// settings file. Anything that can't be resolved is refused.
+    fn editable(&self, path: &Path) -> Result<PathBuf, CoreError> {
+        let refused = || CoreError::NotEditable(path.to_owned());
+        let canonical = match path.canonicalize() {
+            Ok(canonical) => worktrees::normalize(canonical),
+            // Not there (deleted meanwhile, say), and not a dangling link: its folder, resolved.
+            Err(_) if std::fs::symlink_metadata(path).is_err() => {
+                let parent = path
+                    .parent()
+                    .ok_or_else(refused)?
+                    .canonicalize()
+                    .map_err(|_| refused())?;
+                worktrees::normalize(parent).join(path.file_name().ok_or_else(refused)?)
+            }
+            Err(_) => return Err(refused()),
+        };
+        let settings = self
+            .inner
+            .config
+            .settings_path
+            .as_ref()
+            .map(|s| worktrees::normalize(s.clone()));
+        if settings.as_ref() == Some(&canonical) {
+            return Ok(canonical);
+        }
+        let in_worktree = self.worktrees().into_iter().find_map(|w| {
+            canonical
+                .strip_prefix(&w.path)
+                .ok()
+                .map(|rel| rel.components().all(|c| c.as_os_str() != ".git"))
+        });
+        match in_worktree {
+            Some(true) => Ok(canonical),
+            _ => Err(refused()),
+        }
+    }
     /// The Worktree's index: how many files, and how often it's been re-read in full.
     pub async fn file_index_stats(&self, worktree: &Path) -> Option<IndexStats> {
         self.actor(worktree).await.ok().map(|actor| actor.stats())

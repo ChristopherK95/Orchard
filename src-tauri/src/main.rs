@@ -5,14 +5,14 @@
 use std::path::PathBuf;
 
 use editor_core::{
-    check_prerequisites, AdapterCommand, BranchList, Core, CoreConfig, CreatedWorktree, DirEntry,
-    FileMatch, LoadedSettings, MissingPrerequisite, NewWorktree, PermissionMode, RecentSession,
-    RemovalCheck, RemoveWorktree, RemovedWorktree, SessionId, SessionInfo, SetupInfo, Tools,
-    TranscriptDelta, TranscriptPage, WorkspaceInfo, WorktreeInfo,
+    check_prerequisites, AdapterCommand, BranchList, Core, CoreConfig, CoreError, CreatedWorktree,
+    DirEntry, FileMatch, LoadedSettings, MissingPrerequisite, NewWorktree, OpenedFile,
+    PermissionMode, RecentSession, RemovalCheck, RemoveWorktree, RemovedWorktree, SaveOver,
+    SessionId, SessionInfo, SetupInfo, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo,
+    WorktreeInfo,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_plugin_opener::OpenerExt;
 
 mod notifications;
 
@@ -121,19 +121,51 @@ fn settings(core: State<'_, Core>) -> LoadedSettings {
     core.settings()
 }
 
-/// Adds this repo's section to the settings file if need be, then opens the file in the OS's
-/// editor for TOML (the Manual editor takes this over in ticket 14). With no app for `.toml`
-/// files, it shows the file in its folder instead.
+/// Adds this repo's section to the settings file if need be; the file's path, to open in the
+/// Manual editor.
 #[tauri::command]
-async fn open_repo_settings(app: AppHandle, core: State<'_, Core>) -> CommandResult<()> {
-    let path = core.open_repo_settings().await.map_err(|e| e.to_string())?;
-    let opener = app.opener();
-    opener
-        .open_path(path.display().to_string(), None::<&str>)
-        .or_else(|_| opener.reveal_item_in_dir(&path))
-        .map_err(|e| format!("couldn't open {}: {e}", path.display()))
+async fn open_repo_settings(core: State<'_, Core>) -> CommandResult<String> {
+    core.open_repo_settings()
+        .await
+        .map(|path| path.display().to_string())
+        .map_err(|e| e.to_string())
 }
 
+/// Opens a file for the Manual editor.
+#[tauri::command]
+async fn read_file(core: State<'_, Core>, path: String) -> CommandResult<OpenedFile> {
+    core.read_file(path.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// What a save came to: saved (the file's new version), or refused because the file changed on
+/// disk since it was read (the editor then asks before overwriting).
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum SaveOutcome {
+    Saved { version: String },
+    ChangedOnDisk,
+}
+
+/// Saves a Manual editor's text (`\n` line endings, written as `line_ending`) over `over`.
+#[tauri::command]
+async fn save_file(
+    core: State<'_, Core>,
+    path: String,
+    text: String,
+    line_ending: String,
+    over: SaveOver,
+) -> CommandResult<SaveOutcome> {
+    match core
+        .save_file(path.as_ref(), &text, &line_ending, over)
+        .await
+    {
+        Ok(version) => Ok(SaveOutcome::Saved { version }),
+        Err(CoreError::FileChangedOnDisk(_)) => Ok(SaveOutcome::ChangedOnDisk),
+        Err(err) => Err(err.to_string()),
+    }
+}
 #[tauri::command]
 fn setups(core: State<'_, Core>) -> Vec<SetupInfo> {
     core.setups()
@@ -393,6 +425,8 @@ fn main() {
             default_start_point,
             settings,
             open_repo_settings,
+            read_file,
+            save_file,
             setups,
             retry_setup,
             start_anyway,

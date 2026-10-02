@@ -1,0 +1,408 @@
+// The Manual editor pane (ticket 14): CodeMirror 6 to the right of the chat, with its own file tabs.
+// Lezer highlighting loads per language on first use. Find/replace (Ctrl+F), go to line (Ctrl+G),
+// soft-wrap, bracket matching, auto-indent (Enter keeps the line's indentation), multiple cursors
+// (Ctrl+click, Alt+drag, Ctrl+D); vim with `editor.vim`, where `:w` saves and `:q` closes the file
+// tab. One editor view is shared by the tabs (each keeps its own state, undo history included),
+// which keeps the pane light.
+//
+// Every save says what it may write over: the version the file was read at. If it changed on disk
+// since, the core refuses and the pane asks before overwriting. The editor works in "\n" text; the
+// core puts the file's own line endings back. Files over ~5 MB are read-only and unhighlighted,
+// binaries and non-UTF-8 text are a placeholder, minified files soft-wrap.
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { bracketMatching, defineLanguageFacet, indentOnInput, Language, syntaxHighlighting } from "@codemirror/language";
+import { gotoLine, highlightSelectionMatches, searchKeymap } from "@codemirror/search";
+import { Compartment, EditorState, type Extension, type Text } from "@codemirror/state";
+import {
+  crosshairCursor,
+  drawSelection,
+  dropCursor,
+  EditorView,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  keymap,
+  lineNumbers,
+  rectangularSelection,
+} from "@codemirror/view";
+import { classHighlighter } from "@lezer/highlight";
+import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
+import { createStore, produce } from "solid-js/store";
+import { core, type OpenedFile } from "./core";
+import { languageOf, languageOfPath, parserFor } from "./highlight";
+
+/** What to open: a file (absolute path), or a chat code block as an unsaved snippet. */
+export type OpenRequest = { kind: "file"; path: string } | { kind: "snippet"; code: string; label: string };
+
+interface Tab {
+  id: number;
+  title: string;
+  /** Absolute and canonical (as the core gave it); none for a snippet, which isn't saved. */
+  path: string | null;
+  /** The version read (or last saved), sent with the next save. */
+  version: string | null;
+  /** The file's line ending, put back on save. */
+  lineEnding: string;
+  /** Text tabs have a state; binaries and too-big files a placeholder. */
+  placeholder: string | null;
+  /** Something to know about the file (shown while its tab is active). */
+  note: string | null;
+  readOnly: boolean;
+  wrap: boolean;
+  /** The text as saved, to tell whether there are unsaved changes. */
+  saved: Text | null;
+  dirty: boolean;
+}
+
+const vimMode = new Compartment();
+const wrapping = new Compartment();
+const language = new Compartment();
+
+// The vim keymap is loaded only once vim is switched on.
+let vimExtension: Promise<{ ext: () => Extension; defineEx: (name: string, prefix: string, run: () => void) => void }> | undefined;
+function loadVim() {
+  vimExtension ??= import("@replit/codemirror-vim").then((m) => ({
+    ext: () => m.vim(),
+    defineEx: (name, prefix, run) => m.Vim.defineEx(name, prefix, run),
+  }));
+  return vimExtension;
+}
+
+const megabytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+
+export function ManualEditor(props: {
+  /** Open requests in order; each has a fresh `n`, so the same file can be asked for twice. */
+  requests: { open: OpenRequest; n: number }[];
+  vim: boolean;
+  onEmpty: () => void;
+  onError: (message: string) => void;
+}) {
+  const [tabs, setTabs] = createStore<Tab[]>([]);
+  const [activeId, setActiveId] = createSignal<number | null>(null);
+  /** The tab whose save the core refused (the file changed on disk). */
+  const [conflict, setConflict] = createSignal<number | null>(null);
+  const [closing, setClosing] = createSignal<number | null>(null);
+  const [notice, setNotice] = createSignal("");
+  const states = new Map<number, EditorState>();
+  /** Saves in flight, one per tab (a second Ctrl+S waits for the first rather than racing it). */
+  const saving = new Map<number, Promise<boolean>>();
+  /** Files being opened (by the path asked for), so a double-click opens one tab. */
+  const opening = new Set<string>();
+  let handled = 0;
+  let nextId = 1;
+  let host!: HTMLDivElement;
+  let view: EditorView | undefined;
+  let alive = true;
+
+  const active = () => tabs.find((t) => t.id === activeId());
+  const tab = (id: number) => tabs.find((t) => t.id === id);
+  const currentState = (id: number) => (activeId() === id && view ? view.state : states.get(id));
+
+  const markDirty = (tabId: number, doc: Text) =>
+    setTabs(
+      (t) => t.id === tabId,
+      produce((t) => (t.dirty = !!t.saved && !t.saved.eq(doc))),
+    );
+
+  const extensions = (tabId: number, readOnly: boolean, wrap: boolean): Extension[] => [
+    vimMode.of([]),
+    lineNumbers(),
+    highlightActiveLineGutter(),
+    history(),
+    drawSelection(),
+    dropCursor(),
+    EditorState.allowMultipleSelections.of(true),
+    indentOnInput(),
+    bracketMatching(),
+    rectangularSelection(),
+    crosshairCursor(),
+    highlightActiveLine(),
+    highlightSelectionMatches(),
+    keymap.of([
+      { key: "Mod-s", run: () => (void save(tabId), true), preventDefault: true },
+      { key: "Mod-g", run: gotoLine, preventDefault: true },
+      ...defaultKeymap,
+      ...searchKeymap,
+      ...historyKeymap,
+      indentWithTab,
+    ]),
+    wrapping.of(wrap ? EditorView.lineWrapping : []),
+    language.of([]),
+    syntaxHighlighting(classHighlighter),
+    EditorState.readOnly.of(readOnly),
+    EditorView.editable.of(!readOnly),
+    EditorView.updateListener.of((update) => update.docChanged && markDirty(tabId, update.state.doc)),
+  ];
+
+  /** Highlighting for the tab, once its language's grammar has loaded (not for big files). */
+  const highlight = async (tabId: number, lang: string | undefined) => {
+    if (!lang) return;
+    const parser = await parserFor(lang);
+    const state = states.get(tabId);
+    if (!parser || !state || !alive) return;
+    // (A plain Language, as not every grammar is an LR one: markdown's isn't.)
+    const effect = language.reconfigure(new Language(defineLanguageFacet(), parser, [], lang));
+    if (activeId() === tabId && view) view.dispatch({ effects: effect });
+    else states.set(tabId, state.update({ effects: effect }).state);
+  };
+
+  const addTab = (fields: Omit<Tab, "id" | "saved" | "dirty">, text: string | null, lang?: string) => {
+    const id = nextId++;
+    const full: Tab = { ...fields, id, saved: null, dirty: false };
+    if (text !== null) {
+      const state = EditorState.create({ doc: text, extensions: extensions(id, fields.readOnly, fields.wrap) });
+      full.saved = state.doc;
+      states.set(id, state);
+      if (!fields.readOnly) void highlight(id, lang);
+    }
+    setTabs(tabs.length, full);
+    show(id);
+  };
+
+  const openFile = async (asked: string) => {
+    const existing = tabs.find((t) => t.path === asked);
+    if (existing) return show(existing.id);
+    if (opening.has(asked)) return;
+    opening.add(asked);
+    let opened: OpenedFile;
+    try {
+      opened = await core.readFile(asked);
+    } catch (err) {
+      props.onError(String(err));
+      return;
+    } finally {
+      opening.delete(asked);
+      if (!alive) return;
+    }
+    // The same file asked for by another spelling of its path: one tab.
+    const same = tabs.find((t) => t.path === opened.path);
+    if (same) return show(same.id);
+    const path = opened.path;
+    const title = path.split(/[\\/]/).pop() ?? path;
+    const content = opened.content;
+    const base = { title, path, version: opened.version, lineEnding: "\n", note: null, wrap: false };
+    if (content.kind !== "text") {
+      const placeholder =
+        content.kind === "binary"
+          ? `A binary file (${megabytes(content.bytes)}): nothing to show.`
+          : content.kind === "notUtf8"
+            ? "This file isn't UTF-8 text, so it can't be shown or edited here."
+            : `Too big to open here (${megabytes(content.bytes)}).`;
+      return addTab({ ...base, placeholder, readOnly: true }, null);
+    }
+    addTab(
+      {
+        ...base,
+        title: content.readOnly ? `${title} (read-only)` : title,
+        lineEnding: content.lineEnding,
+        placeholder: null,
+        readOnly: content.readOnly,
+        wrap: content.minified,
+        note: content.mixedLineEndings
+          ? `This file mixes line endings; saving makes them all ${content.lineEnding === "\r\n" ? "CRLF" : "LF"}.`
+          : null,
+      },
+      content.text,
+      content.readOnly ? undefined : languageOfPath(path),
+    );
+  };
+
+  const openSnippet = (code: string, label: string) =>
+    addTab(
+      { title: `snippet${label ? `.${label}` : ""}`, path: null, version: null, lineEnding: "\n", placeholder: null, note: null, readOnly: false, wrap: false },
+      code,
+      languageOf(label),
+    );
+
+  /** Shows tab `id` in the shared view, keeping the previous tab's state (and history). */
+  const show = (id: number) => {
+    const previous = activeId();
+    if (view && previous !== null && previous !== id && states.has(previous)) states.set(previous, view.state);
+    setActiveId(id);
+    const state = states.get(id);
+    if (view && state) {
+      view.setState(state);
+      void syncVim();
+      view.focus();
+    }
+  };
+
+  /** Saves the tab (one save at a time per tab); whether it was saved. */
+  const save = (tabId: number, overwrite = false): Promise<boolean> => {
+    const running = saving.get(tabId);
+    if (running) return running;
+    const attempt = (async () => {
+      const t = tab(tabId);
+      if (!t || t.readOnly) return false;
+      if (!t.path) {
+        setNotice("A snippet isn't saved anywhere; copy what you need into a file.");
+        return false;
+      }
+      const state = currentState(tabId);
+      if (!state) return false;
+      const sent = state.doc;
+      try {
+        const outcome = await core.saveFile(
+          t.path,
+          sent.toString(),
+          t.lineEnding,
+          overwrite ? { kind: "anything" } : { kind: "version", version: t.version! },
+        );
+        if (outcome.kind === "changedOnDisk") {
+          setConflict(tabId);
+          return false;
+        }
+        // Anything typed while it saved is still unsaved.
+        const now = currentState(tabId)?.doc ?? sent;
+        setTabs(
+          (x) => x.id === tabId,
+          produce((x) => {
+            x.version = outcome.version;
+            x.saved = sent;
+            x.dirty = !sent.eq(now);
+          }),
+        );
+        if (conflict() === tabId) setConflict(null);
+        return true;
+      } catch (err) {
+        props.onError(String(err));
+        return false;
+      }
+    })();
+    saving.set(tabId, attempt);
+    void attempt.finally(() => saving.delete(tabId));
+    return attempt;
+  };
+
+  const close = (tabId: number, force = false) => {
+    const t = tab(tabId);
+    if (!t) return;
+    if (t.dirty && !force) return void setClosing(tabId);
+    setClosing(null);
+    if (conflict() === tabId) setConflict(null);
+    const at = tabs.findIndex((x) => x.id === tabId);
+    states.delete(tabId);
+    setTabs((all) => all.filter((x) => x.id !== tabId));
+    if (activeId() !== tabId) return;
+    const next = tabs[Math.min(at, tabs.length - 1)];
+    if (next) show(next.id);
+    else {
+      setActiveId(null);
+      if (opening.size === 0) props.onEmpty(); // (unless a file is still on its way)
+    }
+  };
+
+  /** Vim on or off in the shown tab, as the setting says (applied live). */
+  const syncVim = async () => {
+    if (!view) return;
+    if (!props.vim) return view.dispatch({ effects: vimMode.reconfigure([]) });
+    const vim = await loadVim();
+    if (!props.vim || !view || !alive) return; // (switched off again meanwhile)
+    vim.defineEx("write", "w", () => void (activeId() !== null && save(activeId()!)));
+    vim.defineEx("quit", "q", () => activeId() !== null && close(activeId()!));
+    vim.defineEx("wq", "wq", () => {
+      const id = activeId();
+      if (id !== null) void save(id).then((saved) => saved && close(id));
+    });
+    view.dispatch({ effects: vimMode.reconfigure(vim.ext()) });
+  };
+  createEffect(on(() => props.vim, () => void syncVim(), { defer: true }));
+
+  const toggleWrap = () => {
+    const t = active();
+    if (!t) return;
+    const wrap = !t.wrap;
+    setTabs((x) => x.id === t.id, "wrap", wrap);
+    view?.dispatch({ effects: wrapping.reconfigure(wrap ? EditorView.lineWrapping : []) });
+  };
+
+  // Every request, in order (none dropped while the pane was still loading).
+  createEffect(
+    on(
+      () => props.requests.length,
+      () => {
+        for (const request of props.requests.filter((r) => r.n > handled)) {
+          handled = request.n;
+          if (request.open.kind === "file") void openFile(request.open.path);
+          else openSnippet(request.open.code, request.open.label);
+        }
+      },
+    ),
+  );
+
+  onMount(() => {
+    view = new EditorView({ parent: host, state: states.get(activeId() ?? -1) ?? EditorState.create() });
+    const id = activeId();
+    if (id !== null) show(id);
+  });
+  onCleanup(() => {
+    alive = false;
+    view?.destroy();
+  });
+
+  return (
+    <section class="manual-editor">
+      <div class="editor-tabs">
+        <For each={tabs}>
+          {(t) => (
+            <span class="editor-tab" classList={{ on: t.id === activeId() }}>
+              <button class="editor-tab-name" onClick={() => show(t.id)} onAuxClick={(e) => e.button === 1 && close(t.id)} title={t.path ?? "Not saved anywhere"}>
+                {t.title}
+                <Show when={t.dirty}>
+                  <span class="dirty" title="Unsaved changes">●</span>
+                </Show>
+              </button>
+              <button class="close-tab" aria-label={`Close ${t.title}`} onClick={() => close(t.id)}>
+                ×
+              </button>
+            </span>
+          )}
+        </For>
+        <span class="grow" />
+        <Show when={active() && !active()!.placeholder}>
+          <button class="ghost" classList={{ on: !!active()?.wrap }} onClick={toggleWrap} title="Soft-wrap long lines">
+            Wrap
+          </button>
+        </Show>
+        <Show when={active()?.path && !active()?.readOnly}>
+          <button class="ghost" onClick={() => void save(activeId()!)} title="Save (Ctrl+S)" disabled={!active()?.dirty}>
+            Save
+          </button>
+        </Show>
+      </div>
+      <Show when={conflict() !== null ? tab(conflict()!) : undefined}>
+        {(t) => (
+          <div class="editor-banner warning">
+            <span class="grow">
+              <span class="mono">{t().title}</span> changed on disk since you opened it. Saving would overwrite that.
+            </span>
+            <button onClick={() => void save(t().id, true)}>Overwrite</button>
+            <button class="ghost" onClick={() => setConflict(null)}>
+              Cancel
+            </button>
+          </div>
+        )}
+      </Show>
+      <Show when={closing() !== null ? tab(closing()!) : undefined}>
+        {(t) => (
+          <div class="editor-banner warning">
+            <span class="grow">
+              <span class="mono">{t().title}</span> has unsaved changes. Close anyway?
+            </span>
+            <button onClick={() => close(t().id, true)}>Close without saving</button>
+            <button class="ghost" onClick={() => setClosing(null)}>
+              Cancel
+            </button>
+          </div>
+        )}
+      </Show>
+      <Show when={notice()}>
+        <div class="editor-banner muted" onClick={() => setNotice("")} title="Click to dismiss">
+          {notice()}
+        </div>
+      </Show>
+      <Show when={active()?.note}>{(note) => <div class="editor-banner muted">{note()}</div>}</Show>
+      <Show when={active()?.placeholder}>{(text) => <div class="center muted editor-placeholder">{text()}</div>}</Show>
+      <div class="editor-host" ref={host} classList={{ hidden: !!active()?.placeholder || !active() }} />
+    </section>
+  );
+}

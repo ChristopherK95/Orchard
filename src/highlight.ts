@@ -42,7 +42,8 @@ interface Grammar {
   parser: Parser | undefined;
   loaded: Accessor<boolean>;
   setLoaded: Setter<boolean>;
-  loading: boolean;
+  /** The load in flight (or done), shared by everyone waiting for this grammar. */
+  loading: Promise<void> | undefined;
 }
 
 const grammars = new Map<string, Grammar>();
@@ -51,7 +52,7 @@ function grammar(language: string): Grammar {
   let g = grammars.get(language);
   if (!g) {
     const [loaded, setLoaded] = createSignal(false);
-    g = { parser: undefined, loaded, setLoaded, loading: false };
+    g = { parser: undefined, loaded, setLoaded, loading: undefined };
     grammars.set(language, g);
   }
   return g;
@@ -93,15 +94,22 @@ export function highlightCode(code: string, language: string | undefined): strin
   return html;
 }
 
-async function load(language: string, g: Grammar) {
-  if (g.loading || g.parser) return;
-  g.loading = true;
-  try {
-    g.parser = await LOADERS[language]();
-    g.setLoaded(true);
-  } catch {
-    // Leave it plain: an unloadable grammar shouldn't break the chat.
-  } finally {
-    g.loading = false;
-  }
+function load(language: string, g: Grammar): Promise<void> {
+  g.loading ??= LOADERS[language]()
+    .then((parser) => {
+      g.parser = parser;
+      g.setLoaded(true);
+    })
+    .catch(() => {
+      // Leave it plain: an unloadable grammar shouldn't break the chat (a later use retries).
+      g.loading = undefined;
+    });
+  return g.loading;
+}
+
+/** The Lezer parser for `language`, loading it on first use (shared with the chat's highlighting). */
+export async function parserFor(language: string): Promise<Parser | undefined> {
+  const g = grammar(language);
+  await load(language, g);
+  return g.parser;
 }

@@ -1,6 +1,6 @@
 // Walking skeleton view (ticket 01): prerequisite gate → open a Workspace → one Tab with a
 // streaming transcript and a composer. It only renders core state and sends commands (ADR 0003).
-import { batch, createEffect, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import { batch, createEffect, createSignal, For, lazy, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import {
   core,
@@ -23,6 +23,9 @@ import { NewWorktreeDialog } from "./NewWorktreeDialog";
 import { RemoveWorktreeDialog } from "./RemoveWorktreeDialog";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
 import { FilesDrawer } from "./FilesDrawer";
+import type { OpenRequest } from "./ManualEditor";
+// CodeMirror loads with the first file opened, not at startup.
+const ManualEditor = lazy(() => import("./ManualEditor").then((m) => ({ default: m.ManualEditor })));
 import { Transcript } from "./Transcript";
 import { ContextBar, removedWorktree, worktreeColour, worktreeLabel, WorktreeRow, type WorktreeTab } from "./Worktrees";
 import { notify, onNotificationClicked } from "./notify";
@@ -147,6 +150,28 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   const [revealed, setRevealed] = createSignal<{ path: string; n: number } | null>(null);
   /** The Worktree being looked at gets its files indexed and watched. */
   createEffect(() => void core.showWorktree(activeWorktree()).catch(() => {}));
+  /** The Manual editor pane, open while it has file tabs. */
+  const [editorOpen, setEditorOpen] = createSignal(false);
+  /** Every open request, in order (none lost while the pane's code is still loading). */
+  const [editorRequests, setEditorRequests] = createSignal<{ open: OpenRequest; n: number }[]>([]);
+  let requested = 0;
+  const openInEditor = (open: OpenRequest) => {
+    setEditorOpen(true);
+    setEditorRequests((all) => [...all.slice(-20), { open, n: ++requested }]);
+  };
+  /** The settings file, with a section for this repo, in the Manual editor. */
+  const openRepoSettings = () =>
+    core
+      .openRepoSettings()
+      .then((path) => openInEditor({ kind: "file", path }))
+      .catch((err) => setError(String(err)));
+  /** A file of the active Worktree, by its `/`-separated relative path (joined the way the
+   *  Worktree's own path is written, which matters for `\\?\UNC\…` paths). */
+  const worktreePath = (rel: string) => {
+    const root = activeWorktree();
+    return root.includes("\\") ? `${root.replace(/\\$/, "")}\\${rel.replaceAll("/", "\\")}` : `${root}/${rel}`;
+  };
+  const openWorktreeFile = (rel: string) => openInEditor({ kind: "file", path: worktreePath(rel) });
   const runCommand = (command: PaletteCommand) =>
     command.kind === "newSessionHere" ? void newSession() : setCreatingWorktree(true);
   /** The Worktree whose removal dialog is open. */
@@ -265,6 +290,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       return id;
     },
     show,
+    openFile: async () => {
+      // The file bench-memory.ps1 writes; reading it first makes a missing file fail the run.
+      const path = worktreePath("src/main.rs");
+      await core.readFile(path);
+      openInEditor({ kind: "file", path });
+      await new Promise((resolve) => setTimeout(resolve, 1500)); // (opened, grammar loaded)
+    },
     turn: (id, text) =>
       new Promise((resolve, reject) => {
         turnWaiters.set(id, { sawWorking: false, resolve, reject });
@@ -435,7 +467,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         <button class="ghost" classList={{ on: filesOpen() }} onClick={() => setFilesOpen((open) => !open)} title="Files of this Worktree (Ctrl+Shift+E); Ctrl+P to find one">
           Files
         </button>
-        <button class="ghost" onClick={() => core.openRepoSettings().catch((err) => setError(String(err)))} title="Settings for this repo, e.g. its Worktree setup commands">
+        <button class="ghost" onClick={openRepoSettings} title="Settings for this repo, e.g. its Worktree setup commands">
           Repo settings
         </button>
       </header>
@@ -515,9 +547,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         <CommandPalette
           worktree={activeWorktree()}
           onFile={(path) => {
-            // Until the Manual editor (ticket 14) can open it: shown in the Files drawer.
-            setFilesOpen(true);
-            setRevealed((now) => ({ path, n: (now?.n ?? 0) + 1 }));
+            openWorktreeFile(path);
+            // (and marked in the Files drawer, if that's open)
+            if (filesOpen()) setRevealed((now) => ({ path, n: (now?.n ?? 0) + 1 }));
           }}
           revision={filesRevision[activeWorktree()] ?? 0}
           onCommand={runCommand}
@@ -578,23 +610,32 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
               </div>
             }
           >
-            {(setup) => <Setup worktree={activeWorktree()} setup={setup()} onError={setError} />}
+            {(setup) => <Setup worktree={activeWorktree()} setup={setup()} onError={setError} onOpenSettings={openRepoSettings} />}
           </Show>
         }
       >
         {(s) => (
           <>
-            <Transcript sessionId={s.id} items={items} start={start()} onLoadEarlier={loadEarlier} onError={setError} />
+            <Transcript sessionId={s.id} items={items} start={start()} onLoadEarlier={loadEarlier} onError={setError} onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })} />
             <Composer session={s} />
           </>
         )}
       </Show>
       </div>
+      <Show when={editorOpen()}>
+        <ManualEditor
+          requests={editorRequests()}
+          vim={settings()?.settings.editor?.vim ?? false}
+          onEmpty={() => setEditorOpen(false)}
+          onError={setError}
+        />
+      </Show>
       <Show when={filesOpen()}>
         <FilesDrawer
           worktree={activeWorktree()}
           revision={filesRevision[activeWorktree()] ?? 0}
           reveal={revealed()}
+          onOpenFile={openWorktreeFile}
           onClose={() => setFilesOpen(false)}
         />
       </Show>

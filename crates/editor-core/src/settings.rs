@@ -15,6 +15,7 @@ use crate::worktrees;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
 pub struct Settings {
+    pub editor: EditorSettings,
     pub notifications: Notifications,
     pub agents: AgentSettings,
     /// Per-repo settings, keyed by the repo's `origin` URL or its main checkout's path.
@@ -26,6 +27,14 @@ pub struct Settings {
 pub struct Notifications {
     /// Notify when a Tab you're not looking at finishes its turn (off by default).
     pub turn_finished: bool,
+}
+
+/// The Manual editor (ticket 14).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
+pub struct EditorSettings {
+    /// Vim keybindings (`:w` saves, `:q` closes the file tab); off by default.
+    pub vim: bool,
 }
 
 /// Limits on the Agents' processes (ticket 12).
@@ -226,6 +235,10 @@ pub(crate) fn watch(
 /// A new file starts with this, so the settings there are to be found.
 const FILE_HEADER: &str = "\
 # Agent editor settings. Saved changes apply straight away.
+
+[editor]
+# Vim keybindings in the Manual editor (:w saves, :q closes the file tab).
+vim = false
 
 [notifications]
 # Notify when a Tab you're not looking at finishes its turn.

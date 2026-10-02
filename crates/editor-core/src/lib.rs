@@ -6,6 +6,7 @@ mod app_state;
 mod auto_suspend;
 mod core;
 mod create_worktree;
+mod documents;
 mod files;
 mod git;
 mod permissions;
@@ -24,6 +25,7 @@ pub use crate::core::{
     WorkspaceInfo,
 };
 pub use crate::create_worktree::{BranchInfo, BranchList, CreatedWorktree, NewWorktree};
+pub use crate::documents::{FileContent, OpenedFile, SaveOver};
 pub use crate::files::{DirEntry, FileMatch, FileWatchConfig, IndexStats, WatchStatus};
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};
 pub use crate::remove_worktree::{CommitSummary, RemovalCheck, RemoveWorktree, RemovedWorktree};
@@ -33,7 +35,8 @@ pub use crate::session::{
     TranscriptDelta, TranscriptItem, TranscriptPage, TRANSCRIPT_PAGE,
 };
 pub use crate::settings::{
-    AgentSettings, LoadedSettings, Notifications, RepoSettings, Settings, WindowsShell,
+    AgentSettings, EditorSettings, LoadedSettings, Notifications, RepoSettings, Settings,
+    WindowsShell,
 };
 pub use crate::setup::{SetupInfo, SetupStatus};
 pub use crate::worktrees::WorktreeInfo;

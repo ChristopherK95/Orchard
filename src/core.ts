@@ -21,6 +21,30 @@ export interface SessionInfo {
   unread: number;
 }
 
+/** A file as the Manual editor opens it; `version` goes back with the save. */
+export interface OpenedFile {
+  path: string;
+  content:
+    | {
+        kind: "text";
+        /** With "\n" line endings; `lineEnding` is the file's own, put back on save. */
+        text: string;
+        lineEnding: string;
+        mixedLineEndings: boolean;
+        readOnly: boolean;
+        minified: boolean;
+      }
+    | { kind: "binary"; bytes: number }
+    | { kind: "notUtf8"; bytes: number }
+    | { kind: "tooBig"; bytes: number };
+  version: string;
+}
+
+/** What a save may write over: the version read, or (once the user said so) anything. */
+export type SaveOver = { kind: "version"; version: string } | { kind: "anything" };
+
+export type SaveOutcome = { kind: "saved"; version: string } | { kind: "changedOnDisk" };
+
 /** A Ctrl+P result. */
 export interface FileMatch {
   /** `/`-separated, relative to the Worktree. */
@@ -143,6 +167,7 @@ export interface SetupInfo {
 }
 
 export interface Settings {
+  editor: { vim: boolean };
   notifications: { turnFinished: boolean };
   agents: { memoryLimitMb: number; idleSuspend: boolean; idleSuspendMinutes: number };
 }
@@ -272,8 +297,14 @@ export const core = {
   suggestBranchName: () => invoke<string>("suggest_branch_name"),
   defaultStartPoint: () => invoke<string>("default_start_point"),
   settings: () => invoke<LoadedSettings>("settings"),
-  /** Adds this repo's section to the settings file if need be, and opens the file. */
-  openRepoSettings: () => invoke<void>("open_repo_settings"),
+  /** Adds this repo's section to the settings file if need be; the file's path, to edit. */
+  openRepoSettings: () => invoke<string>("open_repo_settings"),
+  /** Opens a file (a Worktree's, or the settings file) for the Manual editor. */
+  readFile: (path: string) => invoke<OpenedFile>("read_file", { path }),
+  /** Saves `text` ("\n" line endings, written as `lineEnding`) if `over` allows; refused with
+   *  `changedOnDisk` if the file changed since it was read. */
+  saveFile: (path: string, text: string, lineEnding: string, over: SaveOver) =>
+    invoke<SaveOutcome>("save_file", { path, text, lineEnding, over }),
   /** Setups this editor ran or is running, for a view that opened after they started. */
   setups: () => invoke<SetupInfo[]>("setups"),
   /** Reruns a failed setup from the command that failed, as the settings file has it now. */

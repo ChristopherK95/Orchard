@@ -15,7 +15,7 @@
 
   Windows has no PSS, so memory is each process's private working set (pages only it uses), the
   closest Windows equivalent. Budget (ADR 0002): <= 250 MB total, <= 15 MB per extra Tab, near 0%
-  idle CPU (here: <= 1% of one core). The Manual editor isn't built yet (ticket 14 adds it).
+  idle CPU (here: <= 1% of one core). The last phase has a file open in the Manual editor.
 
 .EXAMPLE
   pnpm bench:memory                                                              # build, run, report; exit 1 on a miss
@@ -90,6 +90,10 @@ $markers = Join-Path $work 'markers.txt'
 $app = $null
 try {
     New-Item -ItemType Directory -Force $repo | Out-Null
+    # A source file for the Manual editor to open (a few hundred lines, highlighted).
+    New-Item -ItemType Directory -Force (Join-Path $repo 'src') | Out-Null
+    $source = (1..300 | ForEach-Object { "fn item_$_() -> u32 { $_ * 2 } // line $_" }) -join "`n"
+    [System.IO.File]::WriteAllText((Join-Path $repo 'src\main.rs'), $source)
     git -C $repo init --quiet
     git -C $repo -c user.name=Bench -c user.email=bench@example.com commit --quiet --allow-empty -m init
     $paragraph = 'The Agent explains a change in a sentence or two, the way real replies read, so the transcript has realistic weight. '
@@ -137,7 +141,7 @@ $results = @(
     [pscustomobject]@{ Check = "Idle CPU over $CpuWindowSeconds s (% of one core)"; Value = $idleCpu; Budget = "<= $($budget.IdleCpuPercent)"; Pass = $idleCpu -le $budget.IdleCpuPercent }
 )
 ""
-"Agent Editor memory benchmark (Windows, $Messages-message transcript, $([Environment]::ProcessorCount) logical cores; no Manual editor yet)"
+"Agent Editor memory benchmark (Windows, $Messages-message transcript, $([Environment]::ProcessorCount) logical cores; 1 Manual editor in the last phase)"
 "  1 Tab           : $($one.PrivateMB) MB private ($($one.WorkingSetMB) MB working set)  [$($one.Processes)]"
 "  5 Tabs          : $($five.PrivateMB) MB private ($($five.WorkingSetMB) MB working set)  [$($five.Processes)]"
 "  + long transcript: $($full.PrivateMB) MB private ($($full.WorkingSetMB) MB working set)  [$($full.Processes)]"
