@@ -1,10 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window may call the app's commands, listen for core events, and open web links in the system browser.",
-  "windows": ["main"],
+  "description": "The main window and popped-out Manual editors may call the app's commands, listen for core events, close their own window, and open web links in the system browser.",
+  "windows": ["main", "editor-*"],
   "permissions": [
     "core:default",
+    "core:window:allow-destroy",
     {
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "https://*" }, { "url": "http://*" }, { "url": "mailto:*" }]

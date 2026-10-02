@@ -16,7 +16,7 @@ use crate::auto_suspend::{
     self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, SystemClock, SystemProbe,
 };
 use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewWorktree};
-use crate::documents::{self, OpenedFile, SaveOver};
+use crate::documents::{self, DocumentTracker, OpenDocument, OpenedFile, PoppedOutFile, SaveOver};
 use crate::files::{
     ActorNews, DirEntry, FileMatch, FileWatchConfig, IndexStats, WatchStatus, WorktreeActor,
 };
@@ -198,6 +198,8 @@ pub enum CoreError {
     FileChangedOnDisk(PathBuf),
     #[error("{0}")]
     File(String),
+    #[error("this window has no popped-out file to show")]
+    NoPopOut,
     #[error("that session isn't in this Worktree's Recent sessions")]
     UnknownRecentSession,
     #[error("the Agent session isn't waiting for a permission answer")]
@@ -284,6 +286,12 @@ pub enum CoreEvent {
         worktree: PathBuf,
         message: String,
     },
+    /// A popped-out window closed before it showed its file: `window` (where it came from) should
+    /// reopen it, unsaved changes and all.
+    PopOutReturned {
+        window: String,
+        file: PoppedOutFile,
+    },
     /// A Worktree's Recent sessions changed (a Tab was closed or reopened).
     RecentSessionsChanged {
         worktree: PathBuf,
@@ -361,6 +369,8 @@ struct Inner {
     fallback_told: Mutex<HashSet<PathBuf>>,
     /// The Worktree being looked at.
     shown_worktree: Mutex<Option<PathBuf>>,
+    /// Files open in Manual editors, and popped-out files held for their windows.
+    documents: Mutex<DocumentTracker>,
 }
 
 #[derive(Default)]
@@ -565,6 +575,7 @@ impl Core {
             status_due: Mutex::default(),
             fallback_told: Mutex::default(),
             shown_worktree: Mutex::new(None),
+            documents: Mutex::default(),
         });
         if let Some(path) = &inner.config.settings_path {
             let weak = Arc::downgrade(&inner);
@@ -1451,6 +1462,7 @@ impl Core {
         text: &str,
         line_ending: &str,
         over: SaveOver,
+        window: &str,
     ) -> Result<String, CoreError> {
         let path = self.editable(path)?;
         let is_settings = self
@@ -1475,6 +1487,10 @@ impl Core {
         })
         .await
         .map_err(|e| CoreError::File(e.to_string()))?;
+        if let Ok(version) = &saved {
+            // The tracker knows the version the editor now has (whatever the frontend says later).
+            self.inner.documents().saved(&path, window, version);
+        }
         // The settings apply as soon as they're saved (the file watch would catch it a moment later).
         if saved.is_ok() && is_settings {
             self.inner.reload_settings();
@@ -1482,6 +1498,94 @@ impl Core {
         saved
     }
 
+    /// The files open in Manual editors, wherever they are.
+    pub fn open_documents(&self) -> Vec<OpenDocument> {
+        self.inner.documents().all()
+    }
+
+    /// A Manual editor in `window` opened `path` at `version`.
+    pub fn document_opened(
+        &self,
+        path: &Path,
+        window: &str,
+        version: &str,
+    ) -> Result<(), CoreError> {
+        let path = self.editable(path)?;
+        self.inner.documents().opened(path, window, version);
+        Ok(())
+    }
+
+    /// The file in `window` now has (or no longer has) unsaved changes.
+    pub fn document_changed(&self, path: &Path, window: &str, dirty: bool) {
+        let path = self.tracked_path(path);
+        self.inner.documents().changed(&path, window, dirty);
+    }
+
+    /// A Manual editor in `window` closed `path`.
+    pub fn document_closed(&self, path: &Path, window: &str) {
+        let path = self.tracked_path(path);
+        self.inner.documents().closed(&path, window);
+    }
+
+    /// The windows `path` is open in.
+    pub fn windows_with(&self, path: &Path) -> Vec<String> {
+        let path = self.tracked_path(path);
+        self.inner.documents().windows_with(&path)
+    }
+
+    /// Moves a file from `from`'s Manual editor into a new window (whose label this returns); the
+    /// core holds it, unsaved changes and all, until that window is gone.
+    pub fn pop_out(&self, from: &str, file: PoppedOutFile) -> Result<String, CoreError> {
+        let path = self.editable(&file.path)?;
+        Ok(self
+            .inner
+            .documents()
+            .pop_out(from, PoppedOutFile { path, ..file }))
+    }
+
+    /// The popped-out `window` collects its file (again after a reload: the latest copy).
+    pub fn collect_pop_out(&self, window: &str) -> Result<PoppedOutFile, CoreError> {
+        self.inner
+            .documents()
+            .collect(window)
+            .ok_or(CoreError::NoPopOut)
+    }
+
+    /// The popped-out `window`'s file as it is now (so reloading the window loses nothing).
+    pub fn update_pop_out(&self, window: &str, text: String, saved_text: String, version: String) {
+        self.inner
+            .documents()
+            .update_pop_out(window, text, saved_text, version);
+    }
+
+    /// The popped-out window couldn't be opened: the file stays where it was.
+    pub fn cancel_pop_out(&self, window: &str) {
+        self.inner.documents().cancel_pop_out(window);
+    }
+
+    /// `window`'s page is (re)loading: nothing is open in it until its editors say so again.
+    pub fn page_loading(&self, window: &str) {
+        self.inner.documents().page_loading(window);
+    }
+
+    /// `window` closed: its files aren't open any more. A popped-out file it never collected comes
+    /// back (`PopOutReturned`) rather than being lost.
+    pub fn window_closed(&self, window: &str) {
+        let returned = self.inner.documents().window_closed(window);
+        if let Some((window, file)) = returned {
+            let _ = self
+                .inner
+                .events
+                .send(CoreEvent::PopOutReturned { window, file });
+        }
+    }
+
+    /// The tracked form of `path` (canonical when it can be; else as given, so a file whose
+    /// Worktree has gone can still be closed).
+    fn tracked_path(&self, path: &Path) -> PathBuf {
+        self.editable(path)
+            .unwrap_or_else(|_| worktrees::normalize(path.to_owned()))
+    }
     /// `path`, canonical, if it's a file the Manual editor may open: inside one of the Workspace's
     /// Worktrees (not their `.git`; no `..` escapes, no symlinks out, none dangling), or the
     /// settings file. Anything that can't be resolved is refused.
@@ -1980,6 +2084,10 @@ impl Core {
 }
 
 impl Inner {
+    fn documents(&self) -> std::sync::MutexGuard<'_, DocumentTracker> {
+        self.documents.lock().expect("documents lock")
+    }
+
     /// Starts actors for the Worktree being looked at and those with sessions, and stops the rest
     /// (dimmed and not looked at). Never for a Worktree being removed.
     async fn update_actors(self: &Arc<Self>) {

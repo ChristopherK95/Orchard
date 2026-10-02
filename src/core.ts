@@ -40,6 +40,20 @@ export interface OpenedFile {
   version: string;
 }
 
+/** A file popped out into a window of its own: what it carries (undo history doesn't come along). */
+export interface PoppedOutFile {
+  path: string;
+  text: string;
+  /** As last saved, so the new window knows what's unsaved. */
+  savedText: string;
+  /** CodeMirror offsets into `text`. */
+  cursor: number;
+  anchor: number;
+  version: string;
+  lineEnding: string;
+  wrap: boolean;
+}
+
 /** What a save may write over: the version read, or (once the user said so) anything. */
 export type SaveOver = { kind: "version"; version: string } | { kind: "anything" };
 
@@ -255,6 +269,8 @@ export type CoreEvent =
   | { kind: "sessionUnreadChanged"; sessionId: SessionId; unread: number }
   | { kind: "worktreesChanged"; worktrees: WorktreeInfo[] }
   | { kind: "sessionClosed"; sessionId: SessionId }
+  /** A popped-out window closed before it showed its file: `window` reopens it. */
+  | { kind: "popOutReturned"; window: string; file: PoppedOutFile }
   | { kind: "filesChanged"; worktree: string }
   | { kind: "fileWatchFallback"; worktree: string; message: string }
   | { kind: "autoSuspended"; suspended: { session: SessionInfo; reason: AutoSuspendReason }[] }
@@ -299,6 +315,19 @@ export const core = {
   settings: () => invoke<LoadedSettings>("settings"),
   /** Adds this repo's section to the settings file if need be; the file's path, to edit. */
   openRepoSettings: () => invoke<string>("open_repo_settings"),
+  /** Tells the core this window's Manual editor opened, changed or closed a file. */
+  documentOpened: (path: string, version: string) => invoke<void>("document_opened", { path, version }),
+  documentChanged: (path: string, dirty: boolean) => invoke<void>("document_changed", { path, dirty }),
+  documentClosed: (path: string) => invoke<void>("document_closed", { path }),
+  /** If the file is open in another window, brings that window forward; whether it did. */
+  showWhereOpen: (path: string) => invoke<boolean>("show_where_open", { path }),
+  /** Moves a file into a window of its own; that window's label. */
+  popOut: (file: PoppedOutFile) => invoke<string>("pop_out", { file }),
+  /** In a popped-out window: its file (again after a reload). */
+  collectPopOut: () => invoke<PoppedOutFile>("collect_pop_out"),
+  /** A popped-out file as it is now (this window's, or window `label`'s). */
+  updatePopOut: (label: string | null, text: string, savedText: string, version: string) =>
+    invoke<void>("update_pop_out", { label, text, savedText, version }),
   /** Opens a file (a Worktree's, or the settings file) for the Manual editor. */
   readFile: (path: string) => invoke<OpenedFile>("read_file", { path }),
   /** Saves `text` ("\n" line endings, written as `lineEnding`) if `over` allows; refused with

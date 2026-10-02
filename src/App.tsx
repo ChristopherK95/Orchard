@@ -370,6 +370,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         setSessions(produce((all) => void delete all[id]));
         // Back to what's left of its Worktree, or to the main checkout if the Worktree's gone.
         if (activeId() === id && path) selectWorktree(worktrees().some((w) => w.path === path) ? path : props.workspace.root);
+      } else if (event.kind === "popOutReturned") {
+        // A popped-out window closed before it showed its file: back into the pane, unsaved work and all.
+        if (event.window === "main") openInEditor({ kind: "poppedOut", file: event.file });
       } else if (event.kind === "filesChanged") {
         setFilesRevision(event.worktree, (n) => (n ?? 0) + 1);
       } else if (event.kind === "fileWatchFallback") {

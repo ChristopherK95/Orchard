@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use editor_core::{
     check_prerequisites, AdapterCommand, BranchList, Core, CoreConfig, CoreError, CreatedWorktree,
     DirEntry, FileMatch, LoadedSettings, MissingPrerequisite, NewWorktree, OpenedFile,
-    PermissionMode, RecentSession, RemovalCheck, RemoveWorktree, RemovedWorktree, SaveOver,
-    SessionId, SessionInfo, SetupInfo, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo,
-    WorktreeInfo,
+    PermissionMode, PoppedOutFile, RecentSession, RemovalCheck, RemoveWorktree, RemovedWorktree,
+    SaveOver, SessionId, SessionInfo, SetupInfo, Tools, TranscriptDelta, TranscriptPage,
+    WorkspaceInfo, WorktreeInfo,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -152,13 +152,14 @@ enum SaveOutcome {
 #[tauri::command]
 async fn save_file(
     core: State<'_, Core>,
+    window: tauri::Window,
     path: String,
     text: String,
     line_ending: String,
     over: SaveOver,
 ) -> CommandResult<SaveOutcome> {
     match core
-        .save_file(path.as_ref(), &text, &line_ending, over)
+        .save_file(path.as_ref(), &text, &line_ending, over, window.label())
         .await
     {
         Ok(version) => Ok(SaveOutcome::Saved { version }),
@@ -202,6 +203,115 @@ async fn send_prompt(
         .map_err(|e| e.to_string())
 }
 
+/// A Manual editor in the calling window opened a file.
+#[tauri::command]
+fn document_opened(
+    core: State<'_, Core>,
+    window: tauri::Window,
+    path: String,
+    version: String,
+) -> CommandResult<()> {
+    core.document_opened(path.as_ref(), window.label(), &version)
+        .map_err(|e| e.to_string())
+}
+
+/// A file in the calling window got (or lost) unsaved changes.
+#[tauri::command]
+fn document_changed(core: State<'_, Core>, window: tauri::Window, path: String, dirty: bool) {
+    core.document_changed(path.as_ref(), window.label(), dirty);
+}
+
+#[tauri::command]
+fn document_closed(core: State<'_, Core>, window: tauri::Window, path: String) {
+    core.document_closed(path.as_ref(), window.label());
+}
+
+/// If the file is open in another window, brings that window forward (rather than opening a second
+/// copy that could be edited); whether it did.
+#[tauri::command]
+fn show_where_open(
+    app: AppHandle,
+    core: State<'_, Core>,
+    window: tauri::Window,
+    path: String,
+) -> bool {
+    let elsewhere = core
+        .windows_with(path.as_ref())
+        .into_iter()
+        .find(|label| label != window.label());
+    let Some(other) = elsewhere.and_then(|label| app.get_webview_window(&label)) else {
+        return false;
+    };
+    let _ = other.unminimize();
+    other.set_focus().is_ok()
+}
+
+/// Pops a file out of the calling window's pane into a window of its own, carrying its text and
+/// cursor. Async: building a window from a synchronous command can deadlock on Windows.
+#[tauri::command]
+async fn pop_out(
+    app: AppHandle,
+    core: State<'_, Core>,
+    window: tauri::Window,
+    file: PoppedOutFile,
+) -> CommandResult<String> {
+    let name = file
+        .path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // Which Worktree it's in, as the same file name is common across them.
+    let worktree = core
+        .worktrees()
+        .into_iter()
+        .filter(|w| file.path.starts_with(&w.path))
+        .max_by_key(|w| w.path.as_os_str().len())
+        .and_then(|w| {
+            w.branch
+                .or_else(|| w.path.file_name().map(|n| n.to_string_lossy().into_owned()))
+        })
+        .unwrap_or_default();
+    let label = core
+        .pop_out(window.label(), file)
+        .map_err(|e| e.to_string())?;
+    let built = tauri::WebviewWindowBuilder::new(
+        &app,
+        &label,
+        tauri::WebviewUrl::App("index.html#popout".into()),
+    )
+    .title(format!("{name} - {worktree} - Agent Editor"))
+    .inner_size(900.0, 720.0)
+    .build();
+    match built {
+        Ok(_) => Ok(label),
+        Err(err) => {
+            core.cancel_pop_out(&label);
+            Err(format!("couldn't open a window: {err}"))
+        }
+    }
+}
+
+/// A popped-out window collects its file (again, after a reload).
+#[tauri::command]
+fn collect_pop_out(core: State<'_, Core>, window: tauri::Window) -> CommandResult<PoppedOutFile> {
+    core.collect_pop_out(window.label())
+        .map_err(|e| e.to_string())
+}
+
+/// A popped-out window's file as it is now (a reload of the window then loses nothing); also the
+/// pane's text typed while the pop-out was opening, for window `label`.
+#[tauri::command]
+fn update_pop_out(
+    core: State<'_, Core>,
+    window: tauri::Window,
+    label: Option<String>,
+    text: String,
+    saved_text: String,
+    version: String,
+) {
+    let label = label.unwrap_or_else(|| window.label().to_owned());
+    core.update_pop_out(&label, text, saved_text, version);
+}
 /// The Worktree being looked at (its files are indexed and watched).
 #[tauri::command]
 async fn show_worktree(core: State<'_, Core>, worktree: String) -> CommandResult<()> {
@@ -375,6 +485,18 @@ async fn show_session(
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // A closed window's files are no longer open (however it closed).
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                window.state::<Core>().window_closed(window.label());
+            }
+        })
+        // A (re)loading page has nothing open yet: its editors say again what they open.
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                webview.state::<Core>().page_loading(webview.label());
+            }
+        })
         .setup(|app| {
             let core = Core::new(CoreConfig {
                 settings_path: app
@@ -426,6 +548,13 @@ fn main() {
             settings,
             open_repo_settings,
             read_file,
+            document_opened,
+            document_changed,
+            document_closed,
+            show_where_open,
+            pop_out,
+            collect_pop_out,
+            update_pop_out,
             save_file,
             setups,
             retry_setup,

@@ -27,11 +27,15 @@ import {
 import { classHighlighter } from "@lezer/highlight";
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import { core, type OpenedFile } from "./core";
+import { core, type OpenedFile, type PoppedOutFile } from "./core";
 import { languageOf, languageOfPath, parserFor } from "./highlight";
 
-/** What to open: a file (absolute path), or a chat code block as an unsaved snippet. */
-export type OpenRequest = { kind: "file"; path: string } | { kind: "snippet"; code: string; label: string };
+/** What to open: a file (absolute path), a chat code block as an unsaved snippet, or a file popped
+ *  out of the pane (in its new window). */
+export type OpenRequest =
+  | { kind: "file"; path: string }
+  | { kind: "snippet"; code: string; label: string }
+  | { kind: "poppedOut"; file: PoppedOutFile };
 
 interface Tab {
   id: number;
@@ -69,12 +73,24 @@ function loadVim() {
 
 const megabytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
+/** A carried selection, kept inside the text it lands in. */
+const clampSelection = (s: { anchor: number; head: number }, length: number) => ({
+  anchor: Math.min(s.anchor, length),
+  head: Math.min(s.head, length),
+});
+
 export function ManualEditor(props: {
   /** Open requests in order; each has a fresh `n`, so the same file can be asked for twice. */
   requests: { open: OpenRequest; n: number }[];
   vim: boolean;
+  /** In a popped-out window (no pop-out button there). */
+  poppedOut?: boolean;
   onEmpty: () => void;
   onError: (message: string) => void;
+  /** Whether any file tab has unsaved changes (for closing the window). */
+  onDirtyChange?: (dirty: boolean) => void;
+  /** Hands the window a way to save every file tab (for "Save and close"). */
+  controls?: (controls: { saveAll: () => Promise<boolean> }) => void;
 }) {
   const [tabs, setTabs] = createStore<Tab[]>([]);
   const [activeId, setActiveId] = createSignal<number | null>(null);
@@ -97,11 +113,32 @@ export function ManualEditor(props: {
   const tab = (id: number) => tabs.find((t) => t.id === id);
   const currentState = (id: number) => (activeId() === id && view ? view.state : states.get(id));
 
-  const markDirty = (tabId: number, doc: Text) =>
-    setTabs(
-      (t) => t.id === tabId,
-      produce((t) => (t.dirty = !!t.saved && !t.saved.eq(doc))),
-    );
+  const markDirty = (tabId: number, doc: Text) => {
+    const t = tab(tabId);
+    if (!t) return;
+    const dirty = !!t.saved && !t.saved.eq(doc);
+    if (dirty === t.dirty) return;
+    setTabs((x) => x.id === tabId, "dirty", dirty);
+    // The core tracks what's open, and unsaved, in every window.
+    if (t.path) void core.documentChanged(t.path, dirty).catch(() => {});
+  };
+
+  /** In a popped-out window: the tab that came with it, kept current in the core (debounced), so
+   *  reloading the window loses nothing. */
+  let poppedTab: number | null = null;
+  let snapshotTimer: ReturnType<typeof setTimeout> | undefined;
+  const snapshot = (tabId: number) => {
+    if (!props.poppedOut || tabId !== poppedTab) return;
+    clearTimeout(snapshotTimer);
+    snapshotTimer = setTimeout(() => {
+      const t = tab(tabId);
+      const state = currentState(tabId);
+      if (t?.saved && state) void core.updatePopOut(null, state.doc.toString(), t.saved.toString(), t.version ?? "").catch(() => {});
+    }, 500);
+  };
+  /** Pop-outs in flight (one per tab). */
+  const popping = new Set<number>();
+  createEffect(() => props.onDirtyChange?.(tabs.some((t) => t.dirty)));
 
   const extensions = (tabId: number, readOnly: boolean, wrap: boolean): Extension[] => [
     vimMode.of([]),
@@ -130,7 +167,11 @@ export function ManualEditor(props: {
     syntaxHighlighting(classHighlighter),
     EditorState.readOnly.of(readOnly),
     EditorView.editable.of(!readOnly),
-    EditorView.updateListener.of((update) => update.docChanged && markDirty(tabId, update.state.doc)),
+    EditorView.updateListener.of((update) => {
+      if (!update.docChanged) return;
+      markDirty(tabId, update.state.doc);
+      snapshot(tabId);
+    }),
   ];
 
   /** Highlighting for the tab, once its language's grammar has loaded (not for big files). */
@@ -145,12 +186,22 @@ export function ManualEditor(props: {
     else states.set(tabId, state.update({ effects: effect }).state);
   };
 
-  const addTab = (fields: Omit<Tab, "id" | "saved" | "dirty">, text: string | null, lang?: string) => {
+  const addTab = (
+    fields: Omit<Tab, "id" | "saved" | "dirty">,
+    text: string | null,
+    lang?: string,
+    carried?: { savedText: string; selection: { anchor: number; head: number } },
+  ) => {
     const id = nextId++;
     const full: Tab = { ...fields, id, saved: null, dirty: false };
     if (text !== null) {
-      const state = EditorState.create({ doc: text, extensions: extensions(id, fields.readOnly, fields.wrap) });
-      full.saved = state.doc;
+      const state = EditorState.create({
+        doc: text,
+        selection: carried && clampSelection(carried.selection, text.length),
+        extensions: extensions(id, fields.readOnly, fields.wrap),
+      });
+      full.saved = carried ? EditorState.create({ doc: carried.savedText }).doc : state.doc;
+      full.dirty = !full.saved.eq(state.doc);
       states.set(id, state);
       if (!fields.readOnly) void highlight(id, lang);
     }
@@ -158,6 +209,48 @@ export function ManualEditor(props: {
     show(id);
   };
 
+  /** A popped-out file arriving in this window (or coming back to it), with its unsaved text and
+   *  cursor. */
+  const openPoppedOut = (file: PoppedOutFile) => {
+    const title = file.path.split(/[\\/]/).pop() ?? file.path;
+    addTab(
+      { title, path: file.path, version: file.version, lineEnding: file.lineEnding, placeholder: null, note: null, readOnly: false, wrap: file.wrap },
+      file.text,
+      languageOfPath(file.path),
+      { savedText: file.savedText, selection: { anchor: file.anchor, head: file.cursor } },
+    );
+    poppedTab = activeId();
+  };
+
+  /** Moves a file tab into a window of its own, unsaved changes and cursor included. */
+  const popOut = async (tabId: number) => {
+    const t = tab(tabId);
+    const state = currentState(tabId);
+    if (!t?.path || !state || !t.saved || popping.has(tabId)) return;
+    popping.add(tabId);
+    const range = state.selection.main;
+    const sent = state.doc;
+    try {
+      const label = await core.popOut({
+        path: t.path,
+        text: sent.toString(),
+        savedText: t.saved.toString(),
+        cursor: range.head,
+        anchor: range.anchor,
+        version: t.version ?? "",
+        lineEnding: t.lineEnding,
+        wrap: t.wrap,
+      });
+      // Typed while the window was opening: that goes along too.
+      const now = currentState(tabId)?.doc;
+      if (now && !now.eq(sent)) await core.updatePopOut(label, now.toString(), t.saved.toString(), t.version ?? "");
+    } catch (err) {
+      return props.onError(String(err));
+    } finally {
+      popping.delete(tabId);
+    }
+    close(tabId, true);
+  };
   const openFile = async (asked: string) => {
     const existing = tabs.find((t) => t.path === asked);
     if (existing) return show(existing.id);
@@ -165,6 +258,8 @@ export function ManualEditor(props: {
     opening.add(asked);
     let opened: OpenedFile;
     try {
+      // Open in another window (popped out): that window comes forward instead of a second copy.
+      if (await core.showWhereOpen(asked)) return;
       opened = await core.readFile(asked);
     } catch (err) {
       props.onError(String(err));
@@ -180,6 +275,7 @@ export function ManualEditor(props: {
     const title = path.split(/[\\/]/).pop() ?? path;
     const content = opened.content;
     const base = { title, path, version: opened.version, lineEnding: "\n", note: null, wrap: false };
+    void core.documentOpened(path, opened.version).catch(() => {});
     if (content.kind !== "text") {
       const placeholder =
         content.kind === "binary"
@@ -261,6 +357,8 @@ export function ManualEditor(props: {
             x.dirty = !sent.eq(now);
           }),
         );
+        void core.documentChanged(t.path, !sent.eq(now)).catch(() => {});
+        snapshot(tabId);
         if (conflict() === tabId) setConflict(null);
         return true;
       } catch (err) {
@@ -279,6 +377,7 @@ export function ManualEditor(props: {
     if (t.dirty && !force) return void setClosing(tabId);
     setClosing(null);
     if (conflict() === tabId) setConflict(null);
+    if (t.path) void core.documentClosed(t.path).catch(() => {});
     const at = tabs.findIndex((x) => x.id === tabId);
     states.delete(tabId);
     setTabs((all) => all.filter((x) => x.id !== tabId));
@@ -322,12 +421,21 @@ export function ManualEditor(props: {
       () => {
         for (const request of props.requests.filter((r) => r.n > handled)) {
           handled = request.n;
-          if (request.open.kind === "file") void openFile(request.open.path);
-          else openSnippet(request.open.code, request.open.label);
+          const open = request.open;
+          if (open.kind === "file") void openFile(open.path);
+          else if (open.kind === "poppedOut") openPoppedOut(open.file);
+          else openSnippet(open.code, open.label);
         }
       },
     ),
   );
+
+  props.controls?.({
+    saveAll: async () => {
+      const results = await Promise.all(tabs.filter((t) => t.dirty).map((t) => save(t.id)));
+      return results.every(Boolean);
+    },
+  });
 
   onMount(() => {
     view = new EditorView({ parent: host, state: states.get(activeId() ?? -1) ?? EditorState.create() });
@@ -336,6 +444,7 @@ export function ManualEditor(props: {
   });
   onCleanup(() => {
     alive = false;
+    clearTimeout(snapshotTimer);
     view?.destroy();
   });
 
@@ -367,6 +476,11 @@ export function ManualEditor(props: {
           <button class="ghost" onClick={() => void save(activeId()!)} title="Save (Ctrl+S)" disabled={!active()?.dirty}>
             Save
           </button>
+          <Show when={!props.poppedOut}>
+            <button class="ghost" onClick={() => void popOut(activeId()!)} title="Move this file into a window of its own (its undo history stays behind)">
+              Pop out
+            </button>
+          </Show>
         </Show>
       </div>
       <Show when={conflict() !== null ? tab(conflict()!) : undefined}>

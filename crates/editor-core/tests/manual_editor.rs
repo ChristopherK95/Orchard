@@ -38,14 +38,20 @@ async fn a_file_saves_over_the_version_it_was_read_at() {
     let opened = core.read_file(&path).await.unwrap();
     assert_eq!(text_of(&opened.content), "# Notes\n");
     let saved = core
-        .save_file(&path, "# Notes\nmore\n", "\n", over(&opened.version))
+        .save_file(
+            &path,
+            "# Notes\nmore\n",
+            "\n",
+            over(&opened.version),
+            "main",
+        )
         .await
         .unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Notes\nmore\n");
     assert_ne!(saved, opened.version);
 
     // Saving again from the new version works too.
-    core.save_file(&path, "# Notes\n", "\n", over(&saved))
+    core.save_file(&path, "# Notes\n", "\n", over(&saved), "main")
         .await
         .unwrap();
 }
@@ -62,7 +68,13 @@ async fn saving_over_a_newer_file_on_disk_is_refused_until_confirmed() {
     // An Agent writes the file meanwhile.
     std::fs::write(&path, "fn agents() {}\n").unwrap();
     let refused = core
-        .save_file(&path, "fn mine_edited() {}\n", "\n", over(&opened.version))
+        .save_file(
+            &path,
+            "fn mine_edited() {}\n",
+            "\n",
+            over(&opened.version),
+            "main",
+        )
         .await;
     assert!(
         matches!(refused, Err(CoreError::FileChangedOnDisk(_))),
@@ -75,9 +87,15 @@ async fn saving_over_a_newer_file_on_disk_is_refused_until_confirmed() {
     );
 
     // The user chose to overwrite.
-    core.save_file(&path, "fn mine_edited() {}\n", "\n", SaveOver::Anything)
-        .await
-        .unwrap();
+    core.save_file(
+        &path,
+        "fn mine_edited() {}\n",
+        "\n",
+        SaveOver::Anything,
+        "main",
+    )
+    .await
+    .unwrap();
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
         "fn mine_edited() {}\n"
@@ -94,7 +112,7 @@ async fn a_file_deleted_on_disk_counts_as_changed() {
     let opened = core.read_file(&path).await.unwrap();
     std::fs::remove_file(&path).unwrap();
     assert!(matches!(
-        core.save_file(&path, "back", "\n", over(&opened.version))
+        core.save_file(&path, "back", "\n", over(&opened.version), "main")
             .await,
         Err(CoreError::FileChangedOnDisk(_))
     ));
@@ -177,6 +195,7 @@ async fn windows_line_endings_survive_an_edit_and_a_save() {
         "one\ntwo\nthree\n",
         line_ending,
         over(&opened.version),
+        "main",
     )
     .await
     .unwrap();
@@ -196,7 +215,7 @@ async fn mixed_line_endings_are_reported_and_made_one_kind_on_save() {
         FileContent::Text { line_ending, mixed_line_endings: true, text, .. }
             if line_ending == "\r\n" && text == "a\nb\nc\n"
     ));
-    core.save_file(&path, "a\nb\nc\n", "\r\n", over(&opened.version))
+    core.save_file(&path, "a\nb\nc\n", "\r\n", over(&opened.version), "main")
         .await
         .unwrap();
     assert_eq!(std::fs::read(&path).unwrap(), b"a\r\nb\r\nc\r\n");
@@ -225,7 +244,7 @@ async fn only_the_workspaces_files_and_the_settings_file_can_be_edited() {
         Err(CoreError::NotEditable(_))
     ));
     assert!(matches!(
-        core.save_file(&outside, "mine now", "\n", SaveOver::Anything)
+        core.save_file(&outside, "mine now", "\n", SaveOver::Anything, "main")
             .await,
         Err(CoreError::NotEditable(_))
     ));
@@ -255,6 +274,7 @@ async fn saving_the_settings_file_applies_it_at_once() {
         "[editor]\nvim = true\n",
         "\n",
         over(&opened.version),
+        "main",
     )
     .await
     .unwrap();
@@ -287,7 +307,7 @@ async fn a_dangling_link_out_of_the_worktree_is_refused() {
     let link = repo.path().join("link.txt");
     std::os::unix::fs::symlink(elsewhere.path().join("not-yet.txt"), &link).unwrap();
     assert!(matches!(
-        core.save_file(&link, "escape", "\n", SaveOver::Anything)
+        core.save_file(&link, "escape", "\n", SaveOver::Anything, "main")
             .await,
         Err(CoreError::NotEditable(_))
     ));

@@ -245,3 +245,4 @@ button.ghost.on { color: var(--fg); background: var(--bg3); }
 .editor-host .cm-panels { background: var(--bg2); color: var(--fg); border-color: var(--line); }
 .editor-host .cm-matchingBracket { outline: 1px solid var(--accent); background: transparent; }
 .editor-placeholder { flex: 1; }
+.popout .manual-editor { border-left: 0; }

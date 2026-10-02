@@ -25,7 +25,7 @@ pub use crate::core::{
     WorkspaceInfo,
 };
 pub use crate::create_worktree::{BranchInfo, BranchList, CreatedWorktree, NewWorktree};
-pub use crate::documents::{FileContent, OpenedFile, SaveOver};
+pub use crate::documents::{FileContent, OpenDocument, OpenedFile, PoppedOutFile, SaveOver};
 pub use crate::files::{DirEntry, FileMatch, FileWatchConfig, IndexStats, WatchStatus};
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};
 pub use crate::remove_worktree::{CommitSummary, RemovalCheck, RemoveWorktree, RemovedWorktree};
