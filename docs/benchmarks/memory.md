@@ -10,6 +10,7 @@ webview processes), not the fake ACP agent, Node or `claude`.
 | 2026-10-01 | Windows 11 (16 logical cores) | release, ticket 05 (three phases) | 5 Tabs each after a short turn, then a 2,000-message transcript in Tab 1; no virtualisation, **no Manual editor yet** | 80.7 MB | 89.4 MB (94.6 MB after the transcript) | 2.2 MB | 0.39% of one core (20 s) | Pass |
 | 2026-10-01 | Windows 11 (16 logical cores) | release, ticket 02 (markdown, Lezer, virtualised list, CSP) | same as above | 82.4 MB | 89.2 MB (98.7 MB after the transcript) | 1.7 MB | 0.31% of one core (20 s) | Pass |
 | 2026-10-02 | Windows 11 (16 logical cores) | release, ticket 14 (Manual editor, auto-suspend, file watching) | same, plus `src/main.rs` open in the Manual editor in the last phase | 90.4 MB | 98.9 MB (116.4 MB after the transcript, with the file open) | 2.1 MB | 0.39% of one core (20 s) | Pass |
+| 2026-10-02 | Windows 11 (16 logical cores) | release, tickets 15–22 (pop-out, conflicts, Edit notes, Git drawer, push/pull, branches, Changes vs base, Board) | same as ticket 14 | 91.5 MB | 99.5 MB (116.1 MB after the transcript, with the file open) | 2.0 MB | 0.08% of one core (20 s) | Pass |
 | — | Arch Linux (Wayland) | — | — | — | — | — | — | Pending: needs a Linux run (PSS) |
 
 \* The first version measured per-Tab cost as (5 Tabs − 1 Tab) / 4, with Tab 1's 2,000-message transcript
