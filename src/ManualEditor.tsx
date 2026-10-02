@@ -29,7 +29,7 @@ import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "s
 import { createStore, produce } from "solid-js/store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { core, type DiffLine, type OpenedFile, type PoppedOutFile } from "./core";
-import { DiffView } from "./DiffView";
+import { DiffPanel } from "./DiffView";
 import { languageOf, languageOfPath, parserFor } from "./highlight";
 
 /** What to open: a file (absolute path), a chat code block as an unsaved snippet, or a file popped
@@ -37,7 +37,19 @@ import { languageOf, languageOfPath, parserFor } from "./highlight";
 export type OpenRequest =
   | { kind: "file"; path: string }
   | { kind: "snippet"; code: string; label: string }
-  | { kind: "poppedOut"; file: PoppedOutFile };
+  | { kind: "poppedOut"; file: PoppedOutFile }
+  /** A read-only diff to review (ticket 21): one tab per `key` (Worktree, file and split); `name`
+   *  is the file relative to its Worktree; `path`, if the file is there, is what "Edit file" opens. */
+  | {
+      kind: "diff";
+      key: string;
+      title: string;
+      name: string;
+      path: string | null;
+      base: string;
+      renamedFrom: string | null;
+      lines: DiffLine[];
+    };
 
 interface Tab {
   id: number;
@@ -61,6 +73,8 @@ interface Tab {
   onDisk: "changed" | "deleted" | null;
   /** "Keep mine": the next save writes over whatever is on disk. */
   overwrite: boolean;
+  /** A read-only diff tab (Changes vs base). */
+  review?: Omit<Extract<OpenRequest, { kind: "diff" }>, "kind" | "title">;
 }
 
 type TabFields = Omit<Tab, "id" | "saved" | "dirty" | "onDisk" | "overwrite">;
@@ -313,6 +327,16 @@ export function ManualEditor(props: {
     );
   };
 
+  /** A diff to review, in a tab of its own (the same one again if it's open: brought up to date). */
+  const openDiff = ({ kind: _, title, ...review }: Extract<OpenRequest, { kind: "diff" }>) => {
+    const existing = tabs.find((t) => t.review?.key === review.key);
+    if (existing) {
+      setTabs((x) => x.id === existing.id, "review", review);
+      return show(existing.id);
+    }
+    addTab({ title, path: null, version: null, lineEnding: "\n", placeholder: null, note: null, readOnly: true, wrap: false, review }, null);
+  };
+
   const openSnippet = (code: string, label: string) =>
     addTab(
       { title: `snippet${label ? `.${label}` : ""}`, path: null, version: null, lineEnding: "\n", placeholder: null, note: null, readOnly: false, wrap: false },
@@ -555,6 +579,7 @@ export function ManualEditor(props: {
           const open = request.open;
           if (open.kind === "file") void openFile(open.path);
           else if (open.kind === "poppedOut") openPoppedOut(open.file);
+          else if (open.kind === "diff") openDiff(open);
           else openSnippet(open.code, open.label);
         }
       },
@@ -586,7 +611,7 @@ export function ManualEditor(props: {
         <For each={tabs}>
           {(t) => (
             <span class="editor-tab" classList={{ on: t.id === activeId() }}>
-              <button class="editor-tab-name" onClick={() => show(t.id)} onAuxClick={(e) => e.button === 1 && close(t.id)} title={t.path ?? "Not saved anywhere"}>
+              <button class="editor-tab-name" onClick={() => show(t.id)} onAuxClick={(e) => e.button === 1 && close(t.id)} title={t.review?.name ?? t.path ?? "Not saved anywhere"}>
                 {t.title}
                 <Show when={t.dirty}>
                   <span class="dirty" title="Unsaved changes">●</span>
@@ -604,7 +629,7 @@ export function ManualEditor(props: {
           )}
         </For>
         <span class="grow" />
-        <Show when={active() && !active()!.placeholder}>
+        <Show when={active() && !active()!.placeholder && !active()!.review}>
           <button class="ghost" classList={{ on: !!active()?.wrap }} onClick={toggleWrap} title="Soft-wrap long lines">
             Wrap
           </button>
@@ -663,22 +688,6 @@ export function ManualEditor(props: {
           </div>
         )}
       </Show>
-      <Show when={diff()?.tabId === activeId() ? diff() : undefined}>
-        <div class="diff-head">
-          <span class="grow muted">
-            <span class="removed-key">− yours</span> · <span class="added-key">+ on disk</span> (read-only)
-          </span>
-          <button class="ghost" classList={{ on: !sideBySide() }} onClick={() => setSideBySide(false)}>
-            Unified
-          </button>
-          <button class="ghost" classList={{ on: sideBySide() }} onClick={() => setSideBySide(true)}>
-            Side by side
-          </button>
-          <button onClick={() => setDiff(null)} title="Back to the editor">
-            Edit file
-          </button>
-        </div>
-      </Show>
       <Show when={closing() !== null ? tab(closing()!) : undefined}>
         {(t) => (
           <div class="editor-banner warning">
@@ -700,12 +709,49 @@ export function ManualEditor(props: {
       <Show when={active()?.note}>{(note) => <div class="editor-banner muted">{note()}</div>}</Show>
       <Show when={active()?.placeholder}>{(text) => <div class="center muted editor-placeholder">{text()}</div>}</Show>
       <Show when={diff()?.tabId === activeId() ? diff() : undefined}>
-        {(d) => <DiffView lines={d().lines} sideBySide={sideBySide()} language={languageOfPath(active()?.path)} />}
+        {(d) => (
+          <DiffPanel
+            legend={
+              <>
+                <span class="removed-key">− yours</span> · <span class="added-key">+ on disk</span>
+              </>
+            }
+            lines={d().lines}
+            language={languageOfPath(active()?.path)}
+            sideBySide={sideBySide()}
+            onSideBySide={setSideBySide}
+            editTitle="Back to the editor"
+            onEdit={() => setDiff(null)}
+          />
+        )}
+      </Show>
+      <Show when={active()?.review}>
+        {(review) => (
+          <DiffPanel
+            legend={
+              <>
+                <span class="removed-key">− where it split from {review().base}</span> · <span class="added-key">+ on this branch</span>
+              </>
+            }
+            lines={review().lines}
+            language={languageOfPath(review().name)}
+            sideBySide={sideBySide()}
+            onSideBySide={setSideBySide}
+            note={
+              review().renamedFrom
+                ? `Renamed from ${review().renamedFrom}${review().lines.length === 0 ? ", with no changes." : "."}`
+                : null
+            }
+            editTitle={review().path ? "Open the file itself (as it is now, uncommitted changes and all)" : "It's deleted on this branch"}
+            editDisabled={!review().path}
+            onEdit={() => review().path && void openFile(review().path!)}
+          />
+        )}
       </Show>
       <div
         class="editor-host"
         ref={host}
-        classList={{ hidden: !!active()?.placeholder || !active() || diff()?.tabId === activeId() }}
+        classList={{ hidden: !!active()?.placeholder || !active() || !!active()?.review || diff()?.tabId === activeId() }}
       />
     </section>
   );

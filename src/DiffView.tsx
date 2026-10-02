@@ -1,6 +1,6 @@
 // A read-only diff (ticket 16): the Manual editor's text against the file on disk. Unified by
 // default; side-by-side pairs each removed run with the added run after it.
-import { For, Show } from "solid-js";
+import { For, type JSX, Show } from "solid-js";
 import type { DiffLine } from "./core";
 import { highlightCode } from "./highlight";
 
@@ -39,6 +39,39 @@ function sideBySide(lines: DiffLine[]): Row[] {
   }
   flush();
   return rows;
+}
+
+/** A diff with its head: what the two sides are, Unified / Side by side, and "Edit file". */
+export function DiffPanel(props: {
+  legend: JSX.Element;
+  lines: DiffLine[];
+  language: string | undefined;
+  sideBySide: boolean;
+  onSideBySide: (on: boolean) => void;
+  /** Said above the diff (a rename with no changes, say). */
+  note?: string | null;
+  editTitle: string;
+  editDisabled?: boolean;
+  onEdit: () => void;
+}) {
+  return (
+    <>
+      <div class="diff-head">
+        <span class="grow muted">{props.legend} (read-only)</span>
+        <button class="ghost" classList={{ on: !props.sideBySide }} onClick={() => props.onSideBySide(false)}>
+          Unified
+        </button>
+        <button class="ghost" classList={{ on: props.sideBySide }} onClick={() => props.onSideBySide(true)}>
+          Side by side
+        </button>
+        <button disabled={props.editDisabled} onClick={() => props.onEdit()} title={props.editTitle}>
+          Edit file
+        </button>
+      </div>
+      <Show when={props.note}>{(note) => <div class="editor-banner muted">{note()}</div>}</Show>
+      <DiffView lines={props.lines} sideBySide={props.sideBySide} language={props.language} />
+    </>
+  );
 }
 
 export function DiffView(props: { lines: DiffLine[]; sideBySide: boolean; language: string | undefined }) {

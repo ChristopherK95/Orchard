@@ -98,6 +98,50 @@ pub enum CommitOutcome {
     AlreadyPushed,
 }
 
+/// "Changes vs base" (ticket 21): the files the Worktree's branch changed since it split from its
+/// Base, as a three-dot diff (`base...HEAD`: what's committed on the branch, not uncommitted work).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaseChanges {
+    /// The Worktree's Base: the default (`origin/<default>`), its start point, or one set for it.
+    pub base: String,
+    pub is_default: bool,
+    /// Where the branch split from it (their merge-base): what each file's diff runs from.
+    pub split: String,
+    pub files: Vec<BaseChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaseChange {
+    /// Relative to the Worktree, `/`-separated.
+    pub path: String,
+    pub change: ChangeKind,
+    /// A rename's original path.
+    pub renamed_from: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChangeKind {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+}
+
+impl ChangeKind {
+    /// From git's `--name-status` letter (a type change reads as a modification).
+    pub(crate) fn from_letter(letter: char) -> Self {
+        match letter {
+            'A' => Self::Added,
+            'D' => Self::Deleted,
+            'R' => Self::Renamed,
+            _ => Self::Modified,
+        }
+    }
+}
+
 /// What a push did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]

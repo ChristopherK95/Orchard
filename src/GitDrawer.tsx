@@ -6,7 +6,7 @@
 // mid-turn; branches checked out elsewhere lead to their Worktree); a merge or rebase in progress
 // shows a banner with its conflicted files and Abort.
 import { createEffect, createMemo, createResource, createSignal, For, on, onCleanup, Show } from "solid-js";
-import { core, type BranchInfo, type CommitRequest, type GitFile, type GitStatus } from "./core";
+import { core, type BaseChange, type BaseChanges, type BranchInfo, type CommitRequest, type DiffLine, type GitFile, type GitStatus } from "./core";
 import { hasUnsavedChangesUnder } from "./documents";
 
 /** What the drawer is asking before it goes on, and about which Worktree. */
@@ -35,6 +35,8 @@ export function GitDrawer(props: {
   onOpenFile: (path: string) => void;
   onGoToWorktree: (path: string) => void;
   onNewWorktreeFrom: (branch: string) => void;
+  /** A file's change vs the Base, to show in the Manual editor. */
+  onOpenDiff: (diff: { worktree: string; file: BaseChange; base: string; split: string; lines: DiffLine[] }) => void;
   onClose: () => void;
 }) {
   const [status, setStatus] = createSignal<GitStatus | null>(null);
@@ -68,6 +70,9 @@ export function GitDrawer(props: {
         setStatus(null);
         setAsk(null);
         setPicking(false);
+        setChanges(null);
+        setChangesError("");
+        if (mode() === "base") void refreshChanges();
         setAmend(false);
         setError("");
         setNotice(null);
@@ -83,9 +88,55 @@ export function GitDrawer(props: {
   });
   void core
     .onEvent((event) => {
-      if (event.kind === "gitStatusChanged" && event.worktree === props.worktree) void refresh();
+      if (event.kind === "gitStatusChanged" && event.worktree === props.worktree) {
+        void refresh();
+        if (mode() === "base") void refreshChanges();
+      }
     })
     .then((unlisten) => (alive ? (stop = unlisten) : unlisten()));
+
+  // "Changes vs base" (ticket 21): what the branch changed since it split from its Base.
+  const [mode, setMode] = createSignal<"status" | "base">("status");
+  const [changes, setChanges] = createSignal<BaseChanges | null>(null);
+  const [changesError, setChangesError] = createSignal("");
+  let askedChanges = 0;
+  const refreshChanges = async () => {
+    const n = ++askedChanges;
+    const worktree = props.worktree;
+    try {
+      const next = await core.changesVsBase(worktree);
+      if (n !== askedChanges || worktree !== props.worktree) return;
+      setChanges(next);
+      setChangesError("");
+    } catch (err) {
+      if (n !== askedChanges || worktree !== props.worktree) return;
+      setChanges(null); // (not a list for a Base that no longer stands)
+      setChangesError(String(err));
+    }
+  };
+  createEffect(on(mode, () => mode() === "base" && void refreshChanges(), { defer: true }));
+  /** Sets the Worktree's Base (empty: the default); a Base that isn't there leaves the list as it was. */
+  const changeBase = async (typed: string) => {
+    const worktree = props.worktree;
+    try {
+      await core.setBase(worktree, typed.trim() === "" ? null : typed.trim());
+      if (worktree === props.worktree) void refreshChanges();
+    } catch (err) {
+      if (worktree === props.worktree) setChangesError(String(err));
+    }
+  };
+  /** A file's diff, from the split the list was made at. */
+  const openDiff = async (file: BaseChange) => {
+    const worktree = props.worktree;
+    const list = changes();
+    if (!list) return;
+    try {
+      const lines = await core.diffVsBase(worktree, list.split, file);
+      if (worktree === props.worktree) props.onOpenDiff({ worktree, file, base: list.base, split: list.split, lines });
+    } catch (err) {
+      if (worktree === props.worktree) setChangesError(String(err));
+    }
+  };
 
   // The branch picker: every branch, fetched first (as the New Worktree dialog lists them).
   const [picking, setPicking] = createSignal(false);
@@ -251,6 +302,14 @@ export function GitDrawer(props: {
     <aside class="files-drawer git-drawer">
       <div class="drawer-head">
         <b>Git</b>
+        <div class="segmented small">
+          <button classList={{ on: mode() === "status" }} onClick={() => setMode("status")}>
+            Status
+          </button>
+          <button classList={{ on: mode() === "base" }} onClick={() => setMode("base")} title="What this branch changed since it split from its Base">
+            Changes vs base
+          </button>
+        </div>
         <span class="grow" />
         <button class="ghost" onClick={() => props.onClose()} title="Close (Ctrl+Shift+G)">
           ×
@@ -387,7 +446,61 @@ export function GitDrawer(props: {
                 </div>
               </div>
             </Show>
-            <div class="drawer-tree">
+            <Show when={mode() === "base"}>
+              <div class="drawer-tree">
+                <form
+                  class="git-base"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void changeBase(new FormData(e.currentTarget).get("base")?.toString() ?? "");
+                  }}
+                >
+                  <label class="grow">
+                    Base
+                    <input name="base" class="mono" value={changes()?.base ?? ""} placeholder="origin/<default>" spellcheck={false} />
+                  </label>
+                  <button class="ghost" type="submit" title="Compare this Worktree against this branch, tag or commit from now on">
+                    Compare
+                  </button>
+                  <Show when={changes() && !changes()!.isDefault}>
+                    <button class="ghost" type="button" onClick={() => void changeBase("")} title="Back to origin/<default>">
+                      Use the default
+                    </button>
+                  </Show>
+                </form>
+                <Show when={changesError()}>
+                  <p class="error small git-base-error">{changesError()}</p>
+                </Show>
+                <Show when={changes()} fallback={<p class="muted center">{changesError() ? "" : "Comparing…"}</p>}>
+                  {(c) => (
+                    <>
+                      <div class="git-section">
+                        <span class="grow">
+                          Changed since <span class="mono">{c().base}</span> ({c().files.length})
+                        </span>
+                      </div>
+                      <For each={c().files} fallback={<p class="muted center">Nothing changed on this branch yet.</p>}>
+                        {(file) => (
+                          <div class="git-file">
+                            <button
+                              class="tree-name"
+                              onClick={() => void openDiff(file)}
+                              title={file.renamedFrom ? `${file.renamedFrom} → ${file.path}: see the diff` : `${file.path}: see the diff`}
+                            >
+                              {file.path}
+                            </button>
+                            <span class={`change change-${file.change === "renamed" ? "modified" : file.change}`}>
+                              {{ added: "A", modified: "M", deleted: "D", renamed: "R" }[file.change]}
+                            </span>
+                          </div>
+                        )}
+                      </For>
+                    </>
+                  )}
+                </Show>
+              </div>
+            </Show>
+            <div class="drawer-tree" classList={{ hidden: mode() === "base" }}>
               <div class="git-section">
                 <span class="grow">Staged ({staged().length})</span>
                 <Show when={staged().length > 0}>
@@ -538,7 +651,7 @@ export function GitDrawer(props: {
           </Show>
         </div>
       </Show>
-      <div class="git-commit">
+      <div class="git-commit" classList={{ hidden: mode() === "base" }}>
         <Show when={error() && status()}>
           <p class="error">{error()}</p>
         </Show>

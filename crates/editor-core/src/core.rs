@@ -1,6 +1,6 @@
 //! The core's public API: the same surface the frontend drives over Tauri IPC (ADR 0003).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -24,7 +24,10 @@ use crate::files::{
     ActorNews, DirEntry, FileMatch, FileWatchConfig, IndexStats, WatchStatus, WorktreeActor,
 };
 use crate::git;
-use crate::git_status::{CommitOutcome, CommitRequest, GitStatus, PullOutcome, PushOutcome};
+use crate::git_status::{
+    BaseChange, BaseChanges, ChangeKind, CommitOutcome, CommitRequest, GitStatus, PullOutcome,
+    PushOutcome,
+};
 use crate::permissions;
 use crate::remove_worktree::{self, RemovalCheck, RemoveWorktree, RemovedWorktree};
 use crate::session::{
@@ -184,6 +187,8 @@ pub enum CoreError {
     SessionsWorking(Vec<String>),
     #[error("nothing is in progress to abort")]
     NothingToAbort,
+    #[error("`{0}` isn't a branch, tag or commit here, so it can't be the Base")]
+    UnknownBase(String),
     #[error("`{0}` isn't a branch, tag or commit in this repository")]
     UnknownStartPoint(String),
     #[error("git created {} but doesn't list it as a Worktree", .0.display())]
@@ -443,6 +448,8 @@ struct State {
     last_name: u64,
     /// The ACP id of the Tab last shown.
     active: Option<String>,
+    /// Each Worktree's Base, where it isn't the default (its start point, or one set for it).
+    bases: BTreeMap<PathBuf, String>,
     sessions: HashMap<SessionId, Arc<Session>>,
     by_acp_id: HashMap<String, SessionId>,
     next_session: u64,
@@ -1030,6 +1037,20 @@ impl Core {
         let (path, warning) = create_worktree::create(&root, &spec).await?;
         self.inner.refresh_worktrees().await;
         let path = worktrees::normalize(path);
+        // (Branched off a branch other than the default: that's what it's compared against.)
+        if let NewWorktree::NewBranch {
+            start_point: Some(start),
+            ..
+        } = &spec
+        {
+            self.inner
+                .state
+                .lock()
+                .expect("state lock")
+                .bases
+                .insert(path.clone(), start.clone());
+            self.inner.persist();
+        }
         let worktree = self
             .worktrees()
             .into_iter()
@@ -1620,6 +1641,105 @@ impl Core {
         self.inner.git_changed(worktree.clone());
         self.inner.refresh_status_of(&worktree).await; // (its branch, in the Worktree list)
         switched
+    }
+
+    /// "Changes vs base": the files the Worktree's branch changed since it split from its Base,
+    /// with what kind of change each is, and the split (the merge-base) the diffs run from.
+    pub async fn changes_vs_base(&self, worktree: &Path) -> Result<BaseChanges, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let (base, is_default) = self.base_of(&worktree).await;
+        if !git::is_commit(&worktree, &base).await {
+            return Err(CoreError::UnknownBase(base));
+        }
+        let split = git::merge_base(&worktree, &base)
+            .await
+            .map_err(CoreError::Git)?;
+        let files = git::changes_since(&worktree, &split)
+            .await
+            .map_err(CoreError::Git)?
+            .into_iter()
+            .map(|(letter, path, renamed_from)| BaseChange {
+                path,
+                change: ChangeKind::from_letter(letter),
+                renamed_from,
+            })
+            .collect();
+        Ok(BaseChanges {
+            base,
+            is_default,
+            split,
+            files,
+        })
+    }
+
+    /// Sets the Worktree's Base (None: back to the default, `origin/<default>`). It's checked in
+    /// the Worktree, where `HEAD~2` means this branch's, and remembered across restarts.
+    pub async fn set_base(&self, worktree: &Path, base: Option<&str>) -> Result<(), CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let base = base.map(str::trim).filter(|b| !b.is_empty());
+        if let Some(base) = base {
+            if !git::is_commit(&worktree, base).await {
+                return Err(CoreError::UnknownBase(base.to_owned()));
+            }
+        }
+        {
+            let mut state = self.inner.state.lock().expect("state lock");
+            match base {
+                Some(base) => state.bases.insert(worktree.clone(), base.to_owned()),
+                None => state.bases.remove(&worktree),
+            };
+        }
+        self.inner.persist();
+        self.inner.git_changed(worktree);
+        Ok(())
+    }
+
+    /// One file's change since the branch split from its Base: from its text at `split` (under
+    /// `renamed_from`, for a rename) to its text at HEAD. `change` says which side has no file.
+    pub async fn diff_vs_base(
+        &self,
+        worktree: &Path,
+        split: &str,
+        path: &str,
+        renamed_from: Option<&str>,
+        change: ChangeKind,
+    ) -> Result<Vec<crate::session::DiffLine>, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let side = |bytes: Option<Vec<u8>>, absent: bool| match (bytes, absent) {
+            (None, true) => Ok(String::new()),
+            (None, false) => Err(format!("{path} has no text to compare here (a submodule?)")),
+            (Some(bytes), _) => documents::decode_text(bytes)
+                .ok_or_else(|| format!("{path} isn't text, so there's no diff to show")),
+        };
+        let before = git::file_at(&worktree, split, renamed_from.unwrap_or(path)).await;
+        let after = git::file_at(&worktree, "HEAD", path).await;
+        let before = side(before, change == ChangeKind::Added).map_err(CoreError::File)?;
+        let after = side(after, change == ChangeKind::Deleted).map_err(CoreError::File)?;
+        Ok(crate::diff::unified_diff(
+            &before,
+            &after,
+            MAX_VIEW_DIFF_LINES,
+        ))
+    }
+
+    /// The Worktree's Base: the one set for it (or that it was created from), else the default.
+    /// Whether it's the default.
+    async fn base_of(&self, worktree: &Path) -> (String, bool) {
+        let set = self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .bases
+            .get(worktree)
+            .cloned();
+        match set {
+            Some(base) => (base, false),
+            None => match self.workspace() {
+                Ok(workspace) => (git::default_start_point(&workspace.root).await, true),
+                Err(_) => ("HEAD".into(), true),
+            },
+        }
     }
 
     /// Aborts the merge, rebase, cherry-pick or revert in progress in the Worktree.
@@ -2875,6 +2995,7 @@ impl Inner {
                 tabs: open.into_iter().map(|s| s.saved()).collect(),
                 recent: state.recent.clone(),
                 active: state.active.clone(),
+                bases: state.bases.clone(),
             };
             (workspace.root.clone(), saved)
         };
@@ -2917,6 +3038,13 @@ impl Inner {
                 .filter(|s| live(&state, s))
                 .collect();
             state.active = saved.active;
+            state.bases = saved
+                .bases
+                .into_iter()
+                .filter(|(worktree, _)| {
+                    listing_failed || state.worktrees.iter().any(|w| &w.path == worktree)
+                })
+                .collect();
         }
         for info in created {
             let _ = self

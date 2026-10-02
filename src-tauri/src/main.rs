@@ -528,6 +528,50 @@ async fn switch_branch(
         .map_err(|e| e.to_string())
 }
 
+/// "Changes vs base": what the Worktree's branch changed since it split from its Base.
+#[tauri::command]
+async fn changes_vs_base(
+    core: State<'_, Core>,
+    worktree: String,
+) -> CommandResult<editor_core::BaseChanges> {
+    core.changes_vs_base(worktree.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Sets the Worktree's Base (null: back to the default).
+#[tauri::command]
+async fn set_base(
+    core: State<'_, Core>,
+    worktree: String,
+    base: Option<String>,
+) -> CommandResult<()> {
+    core.set_base(worktree.as_ref(), base.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// One file's change since the branch split from its Base (`split`, as the list gave it).
+#[tauri::command]
+async fn diff_vs_base(
+    core: State<'_, Core>,
+    worktree: String,
+    split: String,
+    path: String,
+    renamed_from: Option<String>,
+    change: editor_core::ChangeKind,
+) -> CommandResult<Vec<editor_core::DiffLine>> {
+    core.diff_vs_base(
+        worktree.as_ref(),
+        &split,
+        &path,
+        renamed_from.as_deref(),
+        change,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// Aborts the merge, rebase, cherry-pick or revert in progress.
 #[tauri::command]
 async fn abort_operation(core: State<'_, Core>, worktree: String) -> CommandResult<()> {
@@ -756,6 +800,9 @@ fn main() {
             window_focused,
             switch_branch,
             abort_operation,
+            changes_vs_base,
+            set_base,
+            diff_vs_base,
             set_permission_mode,
             transcript_page_before,
             notify_session,

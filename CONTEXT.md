@@ -22,7 +22,7 @@ _Avoid_: Instance, chat, agent (the Agent is the program; the session is one con
 The UI surface of one Agent session. Hopping between Worktrees means switching or filtering Tabs, not opening another window.
 
 **Base**:
-The branch or commit a Worktree's branch is compared against in "Changes vs base". Defaults to `origin/<default branch>`.
+The branch or commit a Worktree's branch is compared against in "Changes vs base": what it committed since it split from the Base (not uncommitted work). Defaults to `origin/<default branch>`, or the start point the Worktree was branched off; it can be changed, and each Worktree keeps its own.
 _Avoid_: Upstream (that's the branch it pushes to), target
 
 **Tool call**:

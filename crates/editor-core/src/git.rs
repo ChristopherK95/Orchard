@@ -948,3 +948,67 @@ pub(crate) async fn fast_forward(worktree: &Path) -> Result<(), String> {
     .await
     .map(drop)
 }
+
+/// Where the Worktree's branch split from `base`: their merge-base.
+pub(crate) async fn merge_base(worktree: &Path, base: &str) -> Result<String, String> {
+    match run(worktree, &["merge-base", "HEAD", base]).await {
+        Ok(split) => Ok(split.trim().to_owned()),
+        Err(err) if !err.is_empty() => Err(err),
+        Err(_) => {
+            let shallow = common_dir(worktree)
+                .await
+                .is_some_and(|dir| dir.join("shallow").exists());
+            Err(match shallow {
+                true => format!(
+                    "`{base}` and this branch have no commit in common here: the history is shallow, so fetch more of it (`git fetch --unshallow`)."
+                ),
+                false => format!("`{base}` and this branch have no commit in common."),
+            })
+        }
+    }
+}
+
+/// What the branch changed since `split` (where it split from its Base: so a three-dot diff),
+/// renames found: `(status letter, path, original path of a rename)`.
+pub(crate) async fn changes_since(
+    worktree: &Path,
+    split: &str,
+) -> Result<Vec<(char, String, Option<String>)>, String> {
+    let out = run(
+        worktree,
+        &[
+            "diff",
+            "--name-status",
+            "-z",
+            "--find-renames",
+            "--no-ext-diff",
+            split,
+            "HEAD",
+        ],
+    )
+    .await?;
+    let mut entries = out.split('\0').filter(|e| !e.is_empty());
+    let mut changes = vec![];
+    while let Some(status) = entries.next() {
+        let letter = status.chars().next().unwrap_or('M');
+        // A rename names its original, then where it is now.
+        let (path, from) = if letter == 'R' {
+            let from = entries.next().unwrap_or_default().to_owned();
+            (entries.next().unwrap_or_default().to_owned(), Some(from))
+        } else {
+            (entries.next().unwrap_or_default().to_owned(), None)
+        };
+        changes.push((letter, path, from));
+    }
+    Ok(changes)
+}
+
+/// A file's bytes at `rev` (None if it isn't there).
+pub(crate) async fn file_at(worktree: &Path, rev: &str, path: &str) -> Option<Vec<u8>> {
+    let out = git(worktree)
+        .args(["cat-file", "blob", &format!("{rev}:{path}")])
+        .output()
+        .await
+        .ok()?;
+    out.status.success().then_some(out.stdout)
+}

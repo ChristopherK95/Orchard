@@ -29,6 +29,9 @@ pub(crate) struct WorkspaceState {
     /// The ACP id of the Tab last shown, to show again.
     #[serde(default)]
     pub(crate) active: Option<String>,
+    /// Each Worktree's Base, where it isn't the default.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) bases: BTreeMap<PathBuf, String>,
 }
 
 /// An Agent session as it's remembered: enough to show its Tab and resume it.
@@ -126,6 +129,7 @@ mod tests {
             tabs: vec![saved("a", "C:/repo"), saved("b", "C:/repo.worktrees/x")],
             recent: vec![saved("c", "C:/repo")],
             active: Some("b".into()),
+            bases: [(PathBuf::from("C:/repo.worktrees/x"), "wip".to_owned())].into(),
         };
         let other = WorkspaceState {
             tabs: vec![saved("d", "C:/other")],

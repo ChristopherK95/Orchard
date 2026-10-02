@@ -266,6 +266,23 @@ export type CommitOutcome =
   /** Amending would rewrite a pushed commit: ask first. */
   | { kind: "alreadyPushed" };
 
+/** "Changes vs base": what the branch changed since it split from its Base. */
+export interface BaseChanges {
+  /** The Worktree's Base: the default (`origin/<default>`), its start point, or one set for it. */
+  base: string;
+  isDefault: boolean;
+  /** Where the branch split from it: what each file's diff runs from. */
+  split: string;
+  files: BaseChange[];
+}
+
+export interface BaseChange {
+  /** Relative to the Worktree. */
+  path: string;
+  change: "added" | "modified" | "deleted" | "renamed";
+  renamedFrom: string | null;
+}
+
 /** What a push did. */
 export type PushOutcome =
   | { kind: "pushed"; to: string }
@@ -449,6 +466,13 @@ export const core = {
   windowFocused: () => invoke<void>("window_focused"),
   /** Switches the Worktree to another branch (local, or remote: it gets a local one tracking it). */
   switchBranch: (worktree: string, branch: string) => invoke<void>("switch_branch", { worktree, branch }),
+  /** What the branch changed since it split from its Base. */
+  changesVsBase: (worktree: string) => invoke<BaseChanges>("changes_vs_base", { worktree }),
+  /** The Worktree's Base from now on (null: the default). */
+  setBase: (worktree: string, base: string | null) => invoke<void>("set_base", { worktree, base }),
+  /** One file's change since the split (as the list gave it). */
+  diffVsBase: (worktree: string, split: string, file: BaseChange) =>
+    invoke<DiffLine[]>("diff_vs_base", { worktree, split, path: file.path, renamedFrom: file.renamedFrom, change: file.change }),
   /** Aborts the merge, rebase, cherry-pick or revert in progress. */
   abortOperation: (worktree: string) => invoke<void>("abort_operation", { worktree }),
   /** Throws away every change to the file (ask first). */

@@ -72,6 +72,18 @@ pub(crate) fn version_of(bytes: Option<&[u8]>) -> String {
     }
 }
 
+/// `bytes` as text with `\n` line endings, unless it's binary (a NUL early on) or not UTF-8.
+pub(crate) fn decode_text(bytes: Vec<u8>) -> Option<String> {
+    if bytes.iter().take(8192).any(|b| *b == 0) {
+        return None;
+    }
+    let text = String::from_utf8(bytes).ok()?;
+    Some(match text.contains("\r\n") {
+        true => text.replace("\r\n", "\n"),
+        false => text,
+    })
+}
+
 /// The version of the file on disk now, as `read` would give it (`"missing"` when it's gone).
 /// `None` if it's there but can't be read just now (another program holding it, say).
 pub(crate) fn disk_version(path: &Path) -> Option<String> {

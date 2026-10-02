@@ -680,6 +680,18 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           worktree={activeWorktree()}
           onOpenFile={openWorktreeFile}
           onGoToWorktree={selectWorktree}
+          onOpenDiff={(diff) =>
+            openInEditor({
+              kind: "diff",
+              key: [diff.worktree, diff.file.path, diff.split].join("\n"),
+              title: `${diff.file.path.split("/").pop()} vs ${diff.base}`,
+              name: diff.file.path,
+              path: diff.file.change === "deleted" ? null : worktreePath(diff.file.path),
+              base: diff.base,
+              renamedFrom: diff.file.renamedFrom,
+              lines: diff.lines,
+            })
+          }
           onNewWorktreeFrom={(branch) => {
             setCreatingFrom(branch);
             setCreatingWorktree(true);
