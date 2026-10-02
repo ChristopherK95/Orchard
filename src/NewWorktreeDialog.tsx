@@ -4,6 +4,7 @@
 // Agent session (so a failure there doesn't leave the dialog stuck on an already-created branch).
 import { createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { type BranchInfo, core, type CreatedWorktree, type NewWorktree } from "./core";
+import { GitBranch, X } from "./icons";
 
 type StartChoice = "default" | "active" | "other";
 
@@ -88,7 +89,6 @@ export function NewWorktreeDialog(props: {
       <div class="modal" role="dialog" aria-label="New Worktree">
         <div class="modal-head">
           <b>New Worktree</b>
-          <span class="grow" />
           <div class="segmented">
             <button classList={{ on: mode() === "new" }} onClick={() => setMode("new")} disabled={!!busy()}>
               New branch
@@ -97,10 +97,14 @@ export function NewWorktreeDialog(props: {
               Existing branch
             </button>
           </div>
+          <button class="ghost icon" onClick={() => props.onClose()} disabled={!!busy()} aria-label="Close" title="Close (Esc)">
+            <X />
+          </button>
         </div>
 
         <Show when={mode() === "new"}>
-          <form class="modal-body" onSubmit={(e) => void createNew(e)}>
+          <form class="modal-form" onSubmit={(e) => void createNew(e)}>
+            <div class="modal-body">
             <label>
               Branch
               <input
@@ -115,9 +119,10 @@ export function NewWorktreeDialog(props: {
                 spellcheck={false}
               />
             </label>
+            <p class="hint">Prefilled and selected, so typing replaces it.</p>
             <label>
               Start from
-              <select value={startChoice()} onChange={(e) => setStartChoice(e.currentTarget.value as StartChoice)}>
+              <select class="mono" value={startChoice()} onChange={(e) => setStartChoice(e.currentTarget.value as StartChoice)}>
                 <option value="default">
                   {defaultStart() ?? "origin/<default>"}
                   {defaultStart()?.startsWith("origin/") ? " (fetched first)" : ""}
@@ -129,10 +134,11 @@ export function NewWorktreeDialog(props: {
             <Show when={startChoice() === "other"}>
               <input class="mono" placeholder="branch, tag or commit" value={otherStart()} onInput={(e) => setOtherStart(e.currentTarget.value)} autofocus />
             </Show>
-            <p class="muted small">Created next to the repo, then an Agent session starts in it.</p>
-            <div class="modal-actions">
+            <p class="hint">Created next to the repo, then an Agent session starts in it.</p>
+            </div>
+            <div class="modal-foot">
               <button type="button" onClick={() => props.onClose()} disabled={!!busy()}>
-                Cancel
+                Cancel <kbd>Esc</kbd>
               </button>
               <button type="submit" class="primary" disabled={!!busy()}>
                 {busy() || "Create and start session"} <kbd>Enter</kbd>
@@ -150,6 +156,7 @@ export function NewWorktreeDialog(props: {
                 <For each={shown()} fallback={<p class="muted">No matching branches.</p>}>
                   {(b) => (
                     <button class="branch" classList={{ taken: !!b.checkedOutIn }} disabled={!!busy()} onClick={() => pick(b)}>
+                      <GitBranch />
                       <span class="mono">{b.name}</span>
                       <Show when={b.remote}>
                         <span class="muted small">remote</span>

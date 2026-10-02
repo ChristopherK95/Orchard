@@ -4,7 +4,9 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { createVirtualizer } from "@tanstack/solid-virtual";
 import { createEffect, createMemo, For, type JSX, on, Show } from "solid-js";
+import { Dynamic } from "solid-js/web";
 import type { SessionId, TranscriptItem } from "./core";
+import { BookOpen, Brain, Check, Globe, Loader, MoveRight, Pencil, Play, TextSearch, Trash2, Wrench } from "./icons";
 import { handleTranscriptClick, renderMarkdown } from "./markdown";
 import { PermissionCard } from "./PermissionCard";
 
@@ -15,11 +17,8 @@ const LOAD_EARLIER_AT = 400;
 
 type ToolCallItem = Extract<TranscriptItem, { kind: "toolCall" }>;
 
-const TOOL_ICON: Record<string, string> = {
-  read: "📖", edit: "✏️", delete: "🗑", move: "↔", search: "🔍", execute: "▶", think: "💭", fetch: "🌐",
-};
-const STATUS_LABEL: Record<ToolCallItem["status"], string> = {
-  pending: "pending", inProgress: "running", completed: "done", failed: "failed",
+const TOOL_ICON: Record<string, typeof Wrench> = {
+  read: BookOpen, edit: Pencil, delete: Trash2, move: MoveRight, search: TextSearch, execute: Play, think: Brain, fetch: Globe,
 };
 
 export function Transcript(props: {
@@ -135,14 +134,21 @@ function renderItem(sessionId: SessionId, item: TranscriptItem | undefined): JSX
       return <ToolCallRow item={item} />;
     case "user":
       return (
-        <div class="msg user">
-          {item.text}
+        <>
           <Show when={item.editNotes?.length}>
             <div class="sent-notes" title="Your hand edits that went with this message">
-              <For each={item.editNotes}>{(tag) => <span class="sent-note">📝 {tag}</span>}</For>
+              <For each={item.editNotes}>
+                {(tag) => (
+                  <span class="sent-note">
+                    <Pencil />
+                    {tag}
+                  </span>
+                )}
+              </For>
             </div>
           </Show>
-        </div>
+          <div class="msg user">{item.text}</div>
+        </>
       );
     default:
       return <div class={`msg ${item.kind}`}>{item.text}</div>;
@@ -152,11 +158,23 @@ function renderItem(sessionId: SessionId, item: TranscriptItem | undefined): JSX
 function ToolCallRow(props: { item: ToolCallItem }) {
   return (
     <div class={`tool ${props.item.status}`}>
-      <span class="tool-icon">{TOOL_ICON[props.item.toolKind ?? ""] ?? "⚙"}</span>
-      <b>{props.item.title}</b>
-      {props.item.target && !props.item.title.includes(props.item.target) && <span class="mono muted">{props.item.target}</span>}
-      <span class="grow" />
-      <span class="tool-status">{STATUS_LABEL[props.item.status]}</span>
+      <Dynamic component={TOOL_ICON[props.item.toolKind ?? ""] ?? Wrench} />
+      <span class="title">{props.item.title}</span>
+      {props.item.target && !props.item.title.includes(props.item.target) && <span class="target">{props.item.target}</span>}
+      <span class="tool-status">
+        {props.item.status === "completed" ? (
+          <Check />
+        ) : props.item.status === "inProgress" ? (
+          <>
+            <Loader class="spin" />
+            running
+          </>
+        ) : props.item.status === "failed" ? (
+          "failed"
+        ) : (
+          "queued"
+        )}
+      </span>
     </div>
   );
 }

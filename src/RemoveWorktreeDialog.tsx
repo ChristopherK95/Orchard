@@ -3,6 +3,7 @@
 // explicit "Discard and remove"; a clean Worktree needs one confirmation.
 import { createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { core, type SessionId } from "./core";
+import { TriangleAlert, X } from "./icons";
 
 /** How many changed files the dialog lists before "and N more". */
 const SHOWN = 20;
@@ -61,12 +62,20 @@ export function RemoveWorktreeDialog(props: {
     <div class="modal-backdrop" onClick={(e) => e.target === e.currentTarget && !busy() && props.onClose()}>
       <div class="modal" role="dialog" aria-label="Remove Worktree" tabIndex={-1} ref={dialog}>
         <div class="modal-head">
-          <b>
-            Remove Worktree <span class="mono">{props.label}</span>
-          </b>
+          <b>Remove Worktree {props.label}?</b>
+          <button class="ghost icon" onClick={() => props.onClose()} disabled={busy()} aria-label="Close" title="Close (Esc)">
+            <X />
+          </button>
         </div>
         <div class="modal-body">
-          <span class="mono muted small">{props.worktree}</span>
+          <Show when={needsDiscard()} fallback={<span class="mono muted">{props.worktree}</span>}>
+            <div class="callout danger">
+              <TriangleAlert />
+              <span>
+                This deletes work that git cannot get back. Its folder <span class="mono">{props.worktree}</span> will be deleted.
+              </span>
+            </div>
+          </Show>
           <Show when={check.error}>
             <p class="error">{String(check.error)}</p>
           </Show>
@@ -74,16 +83,20 @@ export function RemoveWorktreeDialog(props: {
             {(c) => (
               <>
                 <Show when={c().sessions.length}>
-                  <p>
-                    Stops {c().sessions.length === 1 ? "its Agent session" : `its ${c().sessions.length} Agent sessions`}:{" "}
-                    {c().sessions.map(props.sessionName).join(", ")}.
-                  </p>
+                  <div class="loss sessions">
+                    <div class="section-label">
+                      {c().sessions.length === 1 ? "1 Agent session is running here and will be stopped" : `${c().sessions.length} Agent sessions are running here and will be stopped`}
+                    </div>
+                    <ul>
+                      <For each={c().sessions}>{(id) => <li>{props.sessionName(id)}</li>}</For>
+                    </ul>
+                  </div>
                 </Show>
                 <Show when={c().changedCount}>
                   <div class="loss">
-                    <b class="warning">
-                      {c().changedCount === 1 ? "1 uncommitted change" : `${c().changedCount} uncommitted changes`} will be lost
-                    </b>
+                    <div class="section-label">
+                      Uncommitted changes <span class="badge">{c().changedCount}</span>
+                    </div>
                     <ul class="mono small">
                       <For each={c().changes.slice(0, SHOWN)}>{(line) => <li>{line}</li>}</For>
                       <Show when={c().changedCount > SHOWN}>
@@ -94,15 +107,14 @@ export function RemoveWorktreeDialog(props: {
                 </Show>
                 <Show when={c().unpushedCount}>
                   <div class="loss">
-                    <b classList={{ warning: c().discardToRemove || deleteBranch() }}>
-                      {c().unpushedCount === 1 ? "1 commit" : `${c().unpushedCount} commits`} not pushed or merged into{" "}
-                      <span class="mono">{c().base}</span>
-                    </b>
-                    <ul class="mono small">
+                    <div class="section-label">
+                      Not pushed or merged into {c().base} <span class="badge">{c().unpushedCount}</span>
+                    </div>
+                    <ul>
                       <For each={c().unpushed.slice(0, SHOWN)}>
                         {(commit) => (
                           <li>
-                            <span class="muted">{commit.id}</span> {commit.subject}
+                            <span class="commit-id">{commit.id}</span> {commit.subject}
                           </li>
                         )}
                       </For>
@@ -132,35 +144,35 @@ export function RemoveWorktreeDialog(props: {
                   {(branch) => (
                     <label class="check">
                       <input type="checkbox" checked={deleteBranch()} onChange={(e) => setDeleteChoice(e.currentTarget.checked)} disabled={busy()} />
-                      Delete branch <span class="mono">{branch()}</span> too
-                      <Show when={c().merged}>
-                        <span class="muted small">
-                          (merged into <span class="mono">{c().base}</span>)
+                      <span>
+                        Delete branch <span class="mono">{branch()}</span> too
+                        <span class="sub">
+                          {c().merged ? `merged into ${c().base}` : `not merged into ${c().base}: leaving it unticked keeps the commits recoverable`}
                         </span>
-                      </Show>
+                      </span>
                     </label>
                   )}
                 </Show>
               </>
             )}
           </Show>
-          <div class="modal-actions">
-            <button onClick={() => props.onClose()} disabled={busy()}>
-              Cancel
-            </button>
-            <Show
-              when={needsDiscard()}
-              fallback={
-                <button class="primary" onClick={() => void remove()} disabled={busy() || !check()}>
-                  {busy() ? "Removing…" : "Remove"} <kbd>Enter</kbd>
-                </button>
-              }
-            >
-              <button class="danger" onClick={() => void remove()} disabled={busy()}>
-                {busy() ? "Removing…" : "Discard and remove"}
+        </div>
+        <div class="modal-foot">
+          <button onClick={() => props.onClose()} disabled={busy()}>
+            Cancel <kbd>Esc</kbd>
+          </button>
+          <Show
+            when={needsDiscard()}
+            fallback={
+              <button class="primary" onClick={() => void remove()} disabled={busy() || !check()}>
+                {busy() ? "Removing…" : "Remove"} <kbd>Enter</kbd>
               </button>
-            </Show>
-          </div>
+            }
+          >
+            <button class="danger" onClick={() => void remove()} disabled={busy()}>
+              {busy() ? "Removing…" : "Discard and remove"}
+            </button>
+          </Show>
         </div>
         <Show when={error()}>
           <p class="error modal-error">{error()}</p>

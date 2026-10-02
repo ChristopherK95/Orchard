@@ -2,6 +2,7 @@
 // went, the output as it streams, and Retry / Start anyway once a command fails.
 import { createEffect, createSignal, For, Show } from "solid-js";
 import { core, type SetupStatus } from "./core";
+import { Check, Loader, RefreshCw, TriangleAlert, X } from "./icons";
 
 /** What the view knows of a setup; built from events, so nothing printed before it opened is lost. */
 export interface SetupView {
@@ -31,7 +32,15 @@ function stepState(status: SetupStatus, step: number): StepState {
   }
 }
 
-const STEP_ICON: Record<StepState, string> = { done: "✓", running: "…", failed: "✗", pending: "·" };
+const STEP_LABEL: Record<StepState, string> = { done: "", running: "running", failed: "failed", pending: "not run" };
+
+function StepIcon(props: { state: StepState }) {
+  return (
+    <>
+      {props.state === "done" ? <Check /> : props.state === "running" ? <Loader class="spin" /> : props.state === "failed" ? <X /> : <span class="lucide" />}
+    </>
+  );
+}
 
 export function Setup(props: {
   worktree: string;
@@ -78,45 +87,67 @@ export function Setup(props: {
 
   return (
     <div class="setup">
-      <div class="setup-head">
-        <b classList={{ error: !!failed() }}>{heading()}</b>
-        <span class="grow" />
-        <button class="ghost" onClick={() => props.onOpenSettings()} title="Edit this repo's setup commands">
-          Repo settings
-        </button>
-      </div>
-      <ol class="setup-steps">
-        <For each={props.setup.commands}>
-          {(command, i) => (
-            <li class={stepState(props.setup.status, i())}>
-              <span class="setup-icon">{STEP_ICON[stepState(props.setup.status, i())]}</span>
-              <span class="mono">{command}</span>
-            </li>
-          )}
-        </For>
-      </ol>
-      <pre
-        ref={output}
-        class="setup-output mono"
-        onScroll={() => (following = output.scrollTop + output.clientHeight >= output.scrollHeight - 4)}
-      >
-        {props.setup.output}
-      </pre>
-      <Show when={failed()}>
-        {(f) => (
-          <div class="setup-actions">
-            <span class="error grow">{f().message}</span>
-            <Show when={f().kind === "failed"}>
-              <button onClick={act(() => core.startAnyway(props.worktree))} disabled={busy()}>
-                Start anyway
-              </button>
-            </Show>
-            <button class="primary" onClick={act(() => core.retrySetup(props.worktree))} disabled={busy()}>
-              {f().kind === "failed" ? "Retry from this command" : "Retry"}
-            </button>
+      <div class="setup-inner">
+        <div class="setup-head" classList={{ failed: !!failed(), running: !failed() }}>
+          {failed() ? <TriangleAlert /> : <Loader class="spin" />}
+          <b>{heading()}</b>
+          <span class="grow" />
+          <button class="link" onClick={() => props.onOpenSettings()} title="Edit this repo's setup commands">
+            Repo settings
+          </button>
+        </div>
+        <Show when={failed()}>
+          <p class="setup-sub">The Worktree exists and its branch is checked out. No Agent session has started in it yet.</p>
+        </Show>
+        <Show when={props.setup.commands.length}>
+          <ol class="setup-steps">
+            <For each={props.setup.commands}>
+              {(command, i) => (
+                <li class={stepState(props.setup.status, i())}>
+                  <StepIcon state={stepState(props.setup.status, i())} />
+                  <span>{command}</span>
+                  <span class="step-state">{STEP_LABEL[stepState(props.setup.status, i())]}</span>
+                </li>
+              )}
+            </For>
+          </ol>
+        </Show>
+        <div class="setup-output-box">
+          <div class="section-label">
+            Output
           </div>
-        )}
-      </Show>
+          <pre
+            ref={output}
+            class="setup-output"
+            onScroll={() => (following = output.scrollTop + output.clientHeight >= output.scrollHeight - 4)}
+          >
+            {props.setup.output}
+          </pre>
+        </div>
+        <Show when={failed()}>
+          {(f) => (
+            <>
+              <div class="callout danger">
+                <TriangleAlert />
+                <span>{f().message}</span>
+              </div>
+              <div class="setup-actions">
+                <button class="primary" onClick={act(() => core.retrySetup(props.worktree))} disabled={busy()}>
+                  <RefreshCw />
+                  {f().kind === "failed" ? "Retry from this command" : "Retry"}
+                </button>
+                <Show when={f().kind === "failed"}>
+                  <button onClick={act(() => core.startAnyway(props.worktree))} disabled={busy()}>
+                    Start anyway
+                  </button>
+                  <span class="grow" />
+                  <span class="muted small">Starting anyway skips the commands that haven't run.</span>
+                </Show>
+              </div>
+            </>
+          )}
+        </Show>
+      </div>
     </div>
   );
 }

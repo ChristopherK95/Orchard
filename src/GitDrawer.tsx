@@ -8,6 +8,14 @@
 import { createEffect, createMemo, createResource, createSignal, For, on, onCleanup, Show } from "solid-js";
 import { core, type BaseChange, type BaseChanges, type BranchInfo, type CommitRequest, type DiffLine, type GitFile, type GitStatus } from "./core";
 import { hasUnsavedChangesUnder } from "./documents";
+import { DrawerHead } from "./FilesDrawer";
+import { ArrowDown, ArrowUp, ChevronDown, CircleMinus, CirclePlus, GitBranch, RefreshCw, TriangleAlert, Undo2 } from "./icons";
+
+/** A path as the rows show it: the file name, then its folder, muted. */
+function splitPath(path: string) {
+  const slash = path.lastIndexOf("/");
+  return { name: path.slice(slash + 1), dir: slash < 0 ? "" : path.slice(0, slash + 1) };
+}
 
 /** What the drawer is asking before it goes on, and about which Worktree. */
 type Ask = { worktree: string } & (
@@ -28,7 +36,7 @@ const OPERATION: Record<Operation, { name: string; git: string }> = {
   am: { name: "patch apply (git am)", git: "am" },
 };
 
-const LETTER_KIND: Record<string, string> = { "?": "added", A: "added", D: "deleted", U: "conflicted" };
+const LETTER_KIND: Record<string, string> = { "?": "untracked", A: "added", D: "deleted", U: "deleted", R: "renamed" };
 
 export function GitDrawer(props: {
   worktree: string;
@@ -37,6 +45,9 @@ export function GitDrawer(props: {
   onNewWorktreeFrom: (branch: string) => void;
   /** A file's change vs the Base, to show in the Manual editor. */
   onOpenDiff: (diff: { worktree: string; file: BaseChange; base: string; split: string; lines: DiffLine[] }) => void;
+  label: string;
+  colour: string;
+  onFiles: () => void;
   onClose: () => void;
 }) {
   const [status, setStatus] = createSignal<GitStatus | null>(null);
@@ -264,17 +275,19 @@ export function GitDrawer(props: {
 
   const row = (file: GitFile, side: "staged" | "unstaged") => {
     const letter = side === "staged" ? file.staged! : file.unstaged!;
+    const { name, dir } = splitPath(file.path);
     return (
       <div class="git-file">
+        <span class={`change change-${LETTER_KIND[letter] ?? "modified"}`}>{letter === "?" ? "U" : letter}</span>
         <button
           class="tree-name"
           disabled={deleted(file)}
           onClick={() => props.onOpenFile(file.path)}
           title={deleted(file) ? `${file.path} (deleted)` : file.renamedFrom ? `${file.renamedFrom} → ${file.path}` : file.path}
         >
-          {file.path}
+          {name}
+          <span class="dir">{dir}</span>
         </button>
-        <span class={`change change-${LETTER_KIND[letter] ?? "modified"}`}>{letter}</span>
         {/* (A conflict is resolved, not discarded: that's the conflict banner's business.) */}
         <Show when={!file.conflicted}>
           <button
@@ -283,7 +296,7 @@ export function GitDrawer(props: {
             disabled={busy()}
             onClick={() => setAsk({ kind: "discard", file, worktree: props.worktree })}
           >
-            ↺
+            <Undo2 />
           </button>
         </Show>
         <button
@@ -292,7 +305,7 @@ export function GitDrawer(props: {
           disabled={busy()}
           onClick={() => run((worktree) => (side === "staged" ? core.gitUnstage : core.gitStage)(worktree, [file.path]))}
         >
-          {side === "staged" ? "−" : "+"}
+          {side === "staged" ? <CircleMinus /> : <CirclePlus />}
         </button>
       </div>
     );
@@ -300,58 +313,52 @@ export function GitDrawer(props: {
 
   return (
     <aside class="files-drawer git-drawer">
-      <div class="drawer-head">
-        <b>Git</b>
-        <div class="segmented small">
-          <button classList={{ on: mode() === "status" }} onClick={() => setMode("status")}>
-            Status
-          </button>
-          <button classList={{ on: mode() === "base" }} onClick={() => setMode("base")} title="What this branch changed since it split from its Base">
-            Changes vs base
-          </button>
-        </div>
-        <span class="grow" />
-        <button class="ghost" onClick={() => props.onClose()} title="Close (Ctrl+Shift+G)">
-          ×
-        </button>
-      </div>
-      <Show when={status()} fallback={<p class="muted center">{error() || "Reading the status…"}</p>}>
+      <DrawerHead label={props.label} colour={props.colour} tab="git" onTab={(tab) => tab === "files" && props.onFiles()} onClose={props.onClose} />
+      <Show when={status()} fallback={<p class="muted center small">{error() || "Reading the status…"}</p>}>
         {(s) => (
           <>
-            <div class="git-branch">
-              <button
-                class="ghost mono branch-pick"
-                classList={{ on: picking() }}
-                onClick={togglePicker}
-                title="Switch this Worktree to another branch"
-              >
-                <b>{s().branch ?? "detached HEAD"}</b> ▾
+            <div class="git-top" style={{ "--c": props.colour }}>
+              <button class="branch-pick" classList={{ on: picking() }} onClick={togglePicker} title="Switch this Worktree to another branch">
+                <GitBranch />
+                {s().branch ?? "detached HEAD"}
+                <span class="counts">
+                  <Show when={s().upstream} fallback="no upstream">
+                    <Show when={s().ahead !== null} fallback={`${s().upstream} is gone`}>
+                      ↑{s().ahead} ↓{s().behind}
+                    </Show>
+                  </Show>
+                </span>
+                <ChevronDown class="chev" />
               </button>
-              <Show when={s().upstream} fallback={<span class="muted">no upstream</span>}>
-                <Show when={s().ahead !== null} fallback={<span class="muted">{s().upstream} is gone</span>}>
-                  <span class="muted" title={`Against ${s().upstream}`}>
-                    ↑{s().ahead} ↓{s().behind}
-                  </span>
+              <div class="git-sync">
+                <button disabled={busy()} onClick={() => void fetch()} title="Fetch from the remote">
+                  <RefreshCw class={busy() ? "spin" : undefined} />
+                  Fetch
+                </button>
+                <button
+                  disabled={busy() || s().ahead === null}
+                  onClick={() => void pull()}
+                  title={s().ahead === null ? "Nothing to pull from: no upstream (or it's gone)" : "Fast-forward to the upstream (never merges or rebases)"}
+                >
+                  <ArrowDown />
+                  Pull
+                </button>
+                <button disabled={busy() || !s().branch} onClick={() => void push()} title={`Push ${s().branch ?? ""} to the branch of its name on the remote`}>
+                  <ArrowUp />
+                  Push
+                </button>
+                <Show when={notice()?.tone === "ok"}>
+                  <span class="note">{notice()!.text}</span>
                 </Show>
-              </Show>
-              <span class="grow" />
-              <button class="ghost" disabled={busy()} onClick={() => void fetch()} title="Fetch from the remote">
-                Fetch
-              </button>
-              <button
-                class="ghost"
-                disabled={busy() || s().ahead === null}
-                onClick={() => void pull()}
-                title={s().ahead === null ? "Nothing to pull from: no upstream (or it's gone)" : "Fast-forward to the upstream (never merges or rebases)"}
-              >
-                Pull
-              </button>
-              <button class="ghost" disabled={busy() || !s().branch} onClick={() => void push()} title={`Push ${s().branch ?? ""} to the branch of its name on the remote`}>
-                Push
-              </button>
+              </div>
             </div>
-            <Show when={notice()}>
-              {(n) => <p class={`git-notice ${n().tone === "ok" ? "muted" : n().tone}`}>{n().text}</p>}
+            <Show when={notice()?.tone !== "ok" ? notice() : null}>
+              {(n) => (
+                <p class={`git-notice ${n().tone}`}>
+                  <TriangleAlert />
+                  {n().text}
+                </p>
+              )}
             </Show>
             <Show when={s().operation}>
               {(operation) => (
@@ -446,6 +453,16 @@ export function GitDrawer(props: {
                 </div>
               </div>
             </Show>
+            <div class="git-mode">
+              <div class="segmented full">
+                <button classList={{ on: mode() === "status" }} onClick={() => setMode("status")}>
+                  Working changes
+                </button>
+                <button classList={{ on: mode() === "base" }} onClick={() => setMode("base")} title="What this branch changed since it split from its Base">
+                  Changes vs base
+                </button>
+              </div>
+            </div>
             <Show when={mode() === "base"}>
               <div class="drawer-tree">
                 <form
@@ -475,23 +492,23 @@ export function GitDrawer(props: {
                   {(c) => (
                     <>
                       <div class="git-section">
-                        <span class="grow">
-                          Changed since <span class="mono">{c().base}</span> ({c().files.length})
-                        </span>
+                        Changed since {c().base}
+                        <span class="badge">{c().files.length}</span>
                       </div>
-                      <For each={c().files} fallback={<p class="muted center">Nothing changed on this branch yet.</p>}>
+                      <For each={c().files} fallback={<p class="muted center small">Nothing changed on this branch yet.</p>}>
                         {(file) => (
                           <div class="git-file">
+                            <span class={`change change-${file.change}`}>{{ added: "A", modified: "M", deleted: "D", renamed: "R" }[file.change]}</span>
                             <button
                               class="tree-name"
                               onClick={() => void openDiff(file)}
                               title={file.renamedFrom ? `${file.renamedFrom} → ${file.path}: see the diff` : `${file.path}: see the diff`}
                             >
-                              {file.path}
+                              <Show when={file.renamedFrom} fallback={splitPath(file.path).name}>
+                                {(from) => `${splitPath(from()).name} → ${splitPath(file.path).name}`}
+                              </Show>
+                              <span class="dir">{splitPath(file.path).dir}</span>
                             </button>
-                            <span class={`change change-${file.change === "renamed" ? "modified" : file.change}`}>
-                              {{ added: "A", modified: "M", deleted: "D", renamed: "R" }[file.change]}
-                            </span>
                           </div>
                         )}
                       </For>
@@ -502,25 +519,27 @@ export function GitDrawer(props: {
             </Show>
             <div class="drawer-tree" classList={{ hidden: mode() === "base" }}>
               <div class="git-section">
-                <span class="grow">Staged ({staged().length})</span>
+                Staged
+                <span class="badge">{staged().length}</span>
                 <Show when={staged().length > 0}>
-                  <button class="ghost" disabled={busy()} onClick={() => run((worktree) => core.gitUnstageAll(worktree))} title="Unstage everything">
+                  <button class="link" disabled={busy()} onClick={() => run((worktree) => core.gitUnstageAll(worktree))} title="Unstage everything">
                     Unstage all
                   </button>
                 </Show>
               </div>
               <For each={staged()}>{(file) => row(file, "staged")}</For>
               <div class="git-section">
-                <span class="grow">Changes ({unstaged().length})</span>
+                Changes
+                <span class="badge">{unstaged().length}</span>
                 <Show when={unstaged().length > 0}>
-                  <button class="ghost" disabled={busy()} onClick={() => run((worktree) => core.gitStageAll(worktree))} title="Stage everything">
+                  <button class="link" disabled={busy()} onClick={() => run((worktree) => core.gitStageAll(worktree))} title="Stage everything">
                     Stage all
                   </button>
                 </Show>
               </div>
               <For each={unstaged()}>{(file) => row(file, "unstaged")}</For>
               <Show when={s().files.length === 0}>
-                <p class="muted center">Nothing to commit.</p>
+                <p class="muted center small">Nothing to commit.</p>
               </Show>
             </div>
           </>
@@ -670,8 +689,11 @@ export function GitDrawer(props: {
           <input type="checkbox" checked={amend()} disabled={!status()?.lastCommit} onChange={(e) => setAmend(e.currentTarget.checked)} />
           Amend last commit
         </label>
-        <button class="primary" disabled={!canCommit()} onClick={() => void commit({ message: message(), amend: amend() })}>
-          {amend() ? "Amend" : `Commit${staged().length ? ` ${staged().length} file${staged().length === 1 ? "" : "s"}` : ""}`}
+        <button class="primary" disabled={!canCommit()} onClick={() => void commit({ message: message(), amend: amend() })} title="Ctrl+Enter">
+          {amend() ? "Amend" : "Commit"}
+          <Show when={!amend() && staged().length}>
+            <span class="badge accent">{staged().length}</span>
+          </Show>
         </button>
       </div>
     </aside>

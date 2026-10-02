@@ -4,7 +4,9 @@
 // drawn from the same session store as the Tabs.
 import { createMemo, createResource, createSignal, For, type JSX, Show } from "solid-js";
 import { core, type SessionInfo, type SessionState } from "./core";
+import { CirclePause, CirclePlay, GitBranch, Sparkles } from "./icons";
 import { noOption, yesOption } from "./PermissionCard";
+import { StateDot } from "./StateDot";
 import { worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 
 const COLUMNS: { title: string; states: SessionState[] }[] = [
@@ -13,6 +15,13 @@ const COLUMNS: { title: string; states: SessionState[] }[] = [
   { title: "Idle", states: ["idle"] },
   { title: "Suspended / Exited", states: ["suspended", "exited"] },
 ];
+
+/** What a card says under its name, by state (the Board has no transcript to quote). */
+const SUMMARY: Partial<Record<SessionState, string>> = {
+  working: "Working…",
+  suspended: "Sending a message wakes this session up.",
+  exited: "The Agent process ended.",
+};
 
 export function Board(props: {
   sessions: SessionInfo[];
@@ -36,15 +45,32 @@ export function Board(props: {
     <section class="board" style={{ top: `${props.top}px` }}>
       {props.banners}
       <div class="board-head">
-        <label>
-          Worktree{" "}
-          <select value={props.only ?? ""} onChange={(e) => props.onOnly(e.currentTarget.value || null)}>
-            <option value="">All Worktrees</option>
-            <For each={props.worktrees}>{(w) => <option value={w.path}>{worktreeLabel(w)}</option>}</For>
-          </select>
-        </label>
-        <span class="grow" />
-        <span class="muted small">Esc or Ctrl+B for the Tabs</span>
+        <span class="label">Filter</span>
+        <button class="chip all" classList={{ on: props.only === null }} onClick={() => props.onOnly(null)}>
+          All
+          <span class="badge">{props.sessions.length}</span>
+        </button>
+        <For each={props.worktrees}>
+          {(w) => {
+            const here = () => props.sessions.filter((s) => s.worktree === w.path);
+            return (
+              <button
+                class="chip"
+                classList={{ on: props.only === w.path }}
+                style={{ "--c": worktreeColour(w.path) }}
+                onClick={() => props.onOnly(props.only === w.path ? null : w.path)}
+                title={w.path}
+              >
+                <GitBranch />
+                <span class="label-text">{worktreeLabel(w)}</span>
+                <span class="badge" classList={{ needs: here().some((s) => s.state === "needsYou") }}>
+                  {here().length}
+                </span>
+              </button>
+            );
+          }}
+        </For>
+        <span class="hint">Esc or Ctrl+B for the Tabs</span>
       </div>
       <div class="board-columns">
         <For each={COLUMNS}>
@@ -52,10 +78,14 @@ export function Board(props: {
             const cards = () => shown().filter((s) => column.states.includes(s.state));
             return (
               <div class="board-column">
-                <div class="board-column-head">
-                  <b>{column.title}</b> <span class="muted">{cards().length}</span>
+                <div class={`board-column-head ${column.states[0]}`}>
+                  <StateDot state={column.states[0]} />
+                  {column.title}
+                  <span class="badge" classList={{ needs: column.states[0] === "needsYou" && cards().length > 0 }}>
+                    {cards().length}
+                  </span>
                 </div>
-                <For each={cards()} fallback={<p class="muted small center">None</p>}>
+                <For each={cards()} fallback={<p class="board-empty">None</p>}>
                   {(session) => <Card session={session} worktree={label(session.worktree) ?? ""} onOpen={() => props.onOpen(session.id)} />}
                 </For>
               </div>
@@ -75,6 +105,7 @@ function Card(props: { session: SessionInfo; worktree: string; onOpen: () => voi
   );
   const [answering, setAnswering] = createSignal(false);
   const [error, setError] = createSignal("");
+  const act = (action: Promise<void>) => action.catch((err) => setError(String(err)));
   const answer = async (optionId: string, toolCallId: string) => {
     setAnswering(true);
     setError("");
@@ -91,8 +122,12 @@ function Card(props: { session: SessionInfo; worktree: string; onOpen: () => voi
   return (
     // (The whole card opens the Tab with the mouse; its name is the button for the keyboard.)
     <div class={`board-card ${props.session.state}`} style={{ "--c": worktreeColour(props.session.worktree) }} onClick={() => props.onOpen()}>
+      <div class="board-card-top">
+        <GitBranch />
+        <span class="wt">{props.worktree}</span>
+      </div>
       <div class="board-card-head">
-        <span class={`dot ${props.session.state}`} />
+        <Sparkles />
         <button
           class="board-card-open"
           onClick={(e) => {
@@ -103,12 +138,37 @@ function Card(props: { session: SessionInfo; worktree: string; onOpen: () => voi
         >
           {props.session.name}
         </button>
-        <Show when={props.session.unread > 0}>
-          <span class="badge">{props.session.unread}</span>
-        </Show>
-        <span class="grow" />
-        <span class="worktree-chip mono">{props.worktree}</span>
+        <span class="end">
+          <Show when={props.session.unread > 0}>
+            <span class="badge">{props.session.unread}</span>
+          </Show>
+          <StateDot state={props.session.state} />
+        </span>
       </div>
+      <Show when={SUMMARY[props.session.state]}>{(text) => <span class="summary">{text()}</span>}</Show>
+      <Show when={props.session.state === "idle" || props.session.state === "exited"}>
+        <div class="card-actions" onClick={(e) => e.stopPropagation()}>
+          <Show
+            when={props.session.state === "idle"}
+            fallback={
+              <button onClick={() => void act(core.resumeSession(props.session.id))} title="Bring the Agent back with this conversation">
+                <CirclePlay />
+                Resume
+              </button>
+            }
+          >
+            <button onClick={() => void act(core.suspendSession(props.session.id))} title="Stop this session's Agent to free memory; sending a message resumes it">
+              <CirclePause />
+              Suspend
+            </button>
+          </Show>
+        </div>
+      </Show>
+      <Show when={props.session.state !== "needsYou" && error()}>
+        <p class="error small" onClick={(e) => e.stopPropagation()}>
+          {error()}
+        </p>
+      </Show>
       <Show when={props.session.state === "needsYou" && pending.error}>
         <p class="error small" onClick={(e) => e.stopPropagation()}>
           Couldn't read its question: {String(pending.error)}
@@ -117,11 +177,11 @@ function Card(props: { session: SessionInfo; worktree: string; onOpen: () => voi
       <Show when={props.session.state === "needsYou" && !pending.error ? pending.latest : undefined}>
         {(request) => (
           <div class="board-question" onClick={(e) => e.stopPropagation()}>
-            <span>
-              {request().title}
+            <span class="what">
+              <b>{request().title}</b>
               <Show when={request().target && !request().title.includes(request().target!)}>
                 {" "}
-                <span class="mono muted">{request().target}</span>
+                <span class="mono">{request().target}</span>
               </Show>
             </span>
             <div class="actions">

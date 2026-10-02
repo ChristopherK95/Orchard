@@ -2,6 +2,7 @@
 // start a new Agent session here or in a fresh Worktree. Arrow keys move, Enter picks, Esc closes.
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import { core, type FileMatch } from "./core";
+import { FileIcon, GitBranch, Search, Sparkles } from "./icons";
 
 export type PaletteCommand = { kind: "newSessionHere" } | { kind: "newSessionInFreshWorktree" };
 
@@ -17,6 +18,9 @@ const LIMIT = 50;
 
 export function CommandPalette(props: {
   worktree: string;
+  /** The Worktree's branch (or label) and colour, for the scope chip. */
+  label: string;
+  colour: string;
   /** Bumped when the Worktree's files change (or its first index is ready): search again. */
   revision: number;
   onFile: (path: string) => void;
@@ -67,42 +71,72 @@ export function CommandPalette(props: {
 
   return (
     <div class="modal-backdrop" onClick={(e) => e.target === e.currentTarget && props.onClose()}>
-      <div class="modal palette" role="dialog" aria-label="Go to file">
-        <input
-          ref={input}
-          class="palette-input"
-          placeholder="Go to file, or start an Agent session…"
-          value={query()}
-          onInput={(e) => void search(e.currentTarget.value)}
-          onKeyDown={(e) => {
-            const count = items().length;
-            if (e.key === "ArrowDown") {
-              e.preventDefault();
-              setSelected((i) => (count ? (i + 1) % count : 0));
-            } else if (e.key === "ArrowUp") {
-              e.preventDefault();
-              setSelected((i) => (count ? (i - 1 + count) % count : 0));
-            } else if (e.key === "Enter") {
-              e.preventDefault();
-              pick(items()[selected()]);
-            }
-          }}
-          spellcheck={false}
-        />
+      <div class="modal palette" role="dialog" aria-label="Go to file" style={{ "--c": props.colour }}>
+        <div class="palette-search">
+          <Search />
+          <input
+            ref={input}
+            class="palette-input"
+            placeholder="Go to file, or start an Agent session…"
+            value={query()}
+            onInput={(e) => void search(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              const count = items().length;
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setSelected((i) => (count ? (i + 1) % count : 0));
+              } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setSelected((i) => (count ? (i - 1 + count) % count : 0));
+              } else if (e.key === "Enter") {
+                e.preventDefault();
+                pick(items()[selected()]);
+              }
+            }}
+            spellcheck={false}
+          />
+          <span class="palette-scope" title={props.worktree}>
+            <GitBranch />
+            {props.label}
+          </span>
+        </div>
         <div class="palette-list">
-          <For each={items()} fallback={<p class="muted small palette-empty">No matching files.</p>}>
+          <For each={items()} fallback={<p class="muted small palette-empty">No files match {query().trim() ? `“${query().trim()}”` : ""} in {props.label}.</p>}>
             {(item, i) => (
-              <button
-                class="palette-item"
-                classList={{ on: i() === selected() }}
-                ref={(row) => createEffect(() => i() === selected() && row.scrollIntoView({ block: "nearest" }))}
-                onMouseEnter={() => setSelected(i())}
-                onClick={() => pick(item)}
-              >
-                <Show when={item.kind === "file" ? item.file : null} fallback={<span>✦ {(item as { label: string }).label}</span>}>
-                  {(file) => <Highlighted text={file().path} indices={file().indices} />}
+              <>
+                <Show when={i() === 0 || items()[i() - 1]?.kind !== item.kind}>
+                  <div class="palette-group">{item.kind === "command" ? "Commands" : `Files in ${props.label}`}</div>
                 </Show>
-              </button>
+                <button
+                  class="palette-item"
+                  classList={{ on: i() === selected() }}
+                  ref={(row) => createEffect(() => i() === selected() && row.scrollIntoView({ block: "nearest" }))}
+                  onMouseEnter={() => setSelected(i())}
+                  onClick={() => pick(item)}
+                >
+                  <Show
+                    when={item.kind === "file" ? item.file : null}
+                    fallback={
+                      <>
+                        <Sparkles />
+                        <span class="file">{(item as { label: string }).label}</span>
+                      </>
+                    }
+                  >
+                    {(file) => (
+                      <>
+                        <FileIcon />
+                        <Highlighted text={file().path} indices={file().indices} />
+                      </>
+                    )}
+                  </Show>
+                  <span class="end">
+                    <Show when={i() === selected()}>
+                      <kbd>Enter</kbd>
+                    </Show>
+                  </span>
+                </button>
+              </>
             )}
           </For>
         </div>
@@ -111,27 +145,33 @@ export function CommandPalette(props: {
   );
 }
 
-/** The path with its matched characters bold, and its file name brighter than its folder. */
+/** The file name with its matched characters in the accent, then its folder, muted. */
 function Highlighted(props: { text: string; indices: number[] }) {
   const parts = () => {
     const marked = new Set(props.indices);
     const slash = props.text.lastIndexOf("/");
-    const out: { text: string; hit: boolean; dir: boolean }[] = [];
+    const name: { text: string; hit: boolean }[] = [];
+    const dir: { text: string; hit: boolean }[] = [];
     // Offsets are bytes; paths here are mostly ASCII, so walk UTF-8 to be exact.
     let byte = 0;
     for (const ch of props.text) {
       const hit = marked.has(byte);
-      const dir = byte <= slash;
-      const last = out.at(-1);
-      if (last && last.hit === hit && last.dir === dir) last.text += ch;
-      else out.push({ text: ch, hit, dir });
+      const into = byte <= slash ? dir : name;
+      const last = into.at(-1);
+      if (last && last.hit === hit) last.text += ch;
+      else into.push({ text: ch, hit });
       byte += new TextEncoder().encode(ch).length;
     }
-    return out;
+    return { name, dir };
   };
   return (
-    <span class="mono">
-      <For each={parts()}>{(p) => <span classList={{ hit: p.hit, muted: p.dir && !p.hit }}>{p.text}</span>}</For>
-    </span>
+    <>
+      <span class="file">
+        <For each={parts().name}>{(p) => <span classList={{ hit: p.hit }}>{p.text}</span>}</For>
+      </span>
+      <span class="dir">
+        <For each={parts().dir}>{(p) => <span classList={{ hit: p.hit }}>{p.text}</span>}</For>
+      </span>
+    </>
   );
 }

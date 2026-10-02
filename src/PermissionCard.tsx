@@ -11,6 +11,8 @@ import {
 } from "./core";
 import { hasUnsavedChanges } from "./documents";
 import { highlightCode, languageOfPath } from "./highlight";
+import { Ban, Check, TriangleAlert } from "./icons";
+import { StateDot } from "./StateDot";
 
 const DIFF_PREFIX = { hunk: "", context: " ", added: "+", removed: "−" } as const;
 
@@ -72,41 +74,69 @@ export function PermissionCard(props: {
     if (outcome.kind === "cancelled") return "Cancelled: the turn ended before an answer";
     return `You chose: ${props.request.options.find((o) => o.id === outcome.optionId)?.name ?? outcome.optionId}`;
   };
+  const cancelled = () => props.outcome?.kind === "cancelled";
+  const counts = () => {
+    const diff = props.request.diff ?? [];
+    return { added: diff.filter((l) => l.kind === "added").length, removed: diff.filter((l) => l.kind === "removed").length };
+  };
+  /** A command to run is shown itself (it is the thing being authorised). */
+  const command = () => (!props.request.diff && props.request.kind === "execute" ? props.request.target : null);
 
   return (
-    <div ref={card} class={`permission ${pending() ? "pending" : "answered"}`} tabindex={-1}>
+    <div ref={card} class={`permission ${pending() ? "pending" : "answered"}`} classList={{ cancelled: cancelled() }} tabindex={-1}>
       <div class="permission-head">
-        <span class={`dot ${pending() ? "needsYou" : "idle"}`} />
-        <b>{props.request.title}</b>
+        {pending() ? <StateDot state="needsYou" /> : cancelled() ? <Ban /> : <Check />}
+        <span class="title">{props.request.title}</span>
         <Show when={props.request.target && !props.request.title.includes(props.request.target)}>
-          <span class="mono muted">{props.request.target}</span>
+          <span class="target">{props.request.target}</span>
         </Show>
-        <span class="grow" />
-        <span class="muted">{pending() ? "Permission requested" : chosen()}</span>
+        <span class="outcome">{pending() ? "Permission requested" : chosen()}</span>
       </div>
       <Show when={pending() && props.request.file && hasUnsavedChanges(props.request.file)}>
         <p class="permission-warning">
-          ⚠ This file has unsaved changes in the editor. If you allow this, you'll be asked which version to keep.
+          <TriangleAlert />
+          You have unsaved changes in this file. If you allow this, you'll be asked which version to keep.
         </p>
       </Show>
-      <Show when={props.request.diff}>
-        {(diff) => (
-          <pre class="diff">
-            <For each={diff()}>
-              {(line) =>
-                line.kind === "hunk" ? (
-                  <span class="line hunk">{line.text}</span>
-                ) : (
-                  // Each line is highlighted on its own: cheap, and good enough for short snippets.
-                  <span class={`line ${line.kind}`}>
-                    {DIFF_PREFIX[line.kind]}
-                    <span innerHTML={highlightCode(line.text, language())} />
-                  </span>
-                )
-              }
-            </For>
-          </pre>
-        )}
+      <Show when={props.request.diff || command()}>
+        <div class="permission-body">
+          <Show when={props.request.diff}>
+            {(diff) => (
+              <>
+                <div class="permission-stat">
+                  <span class="add">+{counts().added}</span>
+                  <span class="del">−{counts().removed}</span>
+                  <span>{props.request.target}</span>
+                </div>
+                <pre class="diff">
+                  <For each={diff()}>
+                    {(line) =>
+                      line.kind === "hunk" ? (
+                        <span class="line hunk">{line.text}</span>
+                      ) : (
+                        // Each line is highlighted on its own: cheap, and good enough for short snippets.
+                        <span class={`line ${line.kind}`}>
+                          {DIFF_PREFIX[line.kind]}
+                          <span innerHTML={highlightCode(line.text, language())} />
+                        </span>
+                      )
+                    }
+                  </For>
+                </pre>
+              </>
+            )}
+          </Show>
+          <Show when={command()}>
+            {(cmd) => (
+              <pre class="diff command">
+                <span class="line">
+                  <span class="dim">$ </span>
+                  <span class="cmd">{cmd()}</span>
+                </span>
+              </pre>
+            )}
+          </Show>
+        </div>
       </Show>
       <Show when={pending()}>
         <div class="permission-actions">
@@ -115,16 +145,15 @@ export function PermissionCard(props: {
               <button class={option.kind === "allowOnce" ? "primary" : ""} disabled={sending()} onClick={() => void answer(option)}>
                 {option.name}
                 <Show when={option === yesOption(props.request)}>
-                  {" "}
                   <kbd>Y</kbd>
                 </Show>
                 <Show when={option === noOption(props.request)}>
-                  {" "}
                   <kbd>N</kbd>
                 </Show>
               </button>
             )}
           </For>
+          <span class="hint">Y / N answer the oldest open card</span>
         </div>
       </Show>
       <Show when={error()}>

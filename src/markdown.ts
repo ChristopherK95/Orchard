@@ -15,6 +15,12 @@ md.renderer.rules.fence = (tokens, index) => {
   return codeBlock(token.content.replace(/\n$/, ""), label);
 };
 
+/** Lucide's external-link and copy, as markup (code blocks are HTML strings, not components). */
+const svg = (paths: string) =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const OPEN_ICON = svg('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>');
+const COPY_ICON = svg('<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>');
+
 function codeBlock(code: string, label: string): string {
   const lines = highlightCode(code, languageOf(label))
     .split("\n")
@@ -22,8 +28,8 @@ function codeBlock(code: string, label: string): string {
     .join("");
   return (
     `<div class="cb" data-code="${escapeHtml(code)}" data-label="${escapeHtml(label)}"><div class="cb-head"><span>${escapeHtml(label || "text")}</span>` +
-    `<span class="grow"></span><button type="button" class="ghost" data-open>Open in editor</button>` +
-    `<button type="button" class="ghost" data-copy>Copy</button></div>` +
+    `<span class="grow"></span><button type="button" class="ghost" data-open>${OPEN_ICON}Open in editor</button>` +
+    `<button type="button" class="ghost" data-copy>${COPY_ICON}<span>Copy</span></button></div>` +
     `<pre class="numbered"><code>${lines}</code></pre></div>`
   );
 }
@@ -56,8 +62,9 @@ export async function handleTranscriptClick(
     const copy = target?.closest<HTMLButtonElement>("[data-copy]");
     if (copy) {
       await navigator.clipboard.writeText(copy.closest<HTMLElement>(".cb")?.dataset.code ?? "");
-      copy.textContent = "Copied";
-      setTimeout(() => (copy.textContent = "Copy"), 1200);
+      const text = copy.lastElementChild!;
+      text.textContent = "Copied";
+      setTimeout(() => (text.textContent = "Copy"), 1200);
       return;
     }
     const link = target?.closest<HTMLAnchorElement>("a[href]");

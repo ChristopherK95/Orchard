@@ -1,6 +1,6 @@
 // Walking skeleton view (ticket 01): prerequisite gate → open a Workspace → one Tab with a
 // streaming transcript and a composer. It only renders core state and sends commands (ADR 0003).
-import { batch, createEffect, createSignal, For, lazy, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
+import { batch, createEffect, createSignal, For, type JSX, lazy, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import {
   core,
@@ -33,6 +33,24 @@ import { Transcript } from "./Transcript";
 import { ContextBar, removedWorktree, worktreeColour, worktreeLabel, WorktreeRow, type WorktreeTab } from "./Worktrees";
 import { notify, onNotificationClicked } from "./notify";
 import { keepOutput, Setup, type SetupView } from "./Setup";
+import { StateDot } from "./StateDot";
+import {
+  BookOpen,
+  ChevronDown,
+  CirclePlay,
+  GitBranch,
+  Info,
+  Loader,
+  PanelRight,
+  Plus,
+  Search,
+  Settings,
+  ShieldQuestion,
+  Sparkles,
+  TriangleAlert,
+  X,
+  Zap,
+} from "./icons";
 
 const STATE_LABEL: Record<SessionState, string> = {
   working: "Working",
@@ -49,7 +67,14 @@ export function App() {
   onMount(async () => setProblems(await core.prerequisites()));
 
   return (
-    <Switch fallback={<div class="center muted">Checking prerequisites…</div>}>
+    <Switch
+      fallback={
+        <div class="center muted small">
+          <Loader class="spin" />
+          &nbsp;Checking prerequisites…
+        </div>
+      }
+    >
       <Match when={problems()?.length}>
         <Prerequisites problems={problems()!} />
       </Match>
@@ -63,16 +88,34 @@ export function App() {
   );
 }
 
+function AppMark() {
+  return (
+    <div class="app-mark">
+      <span class="mark">
+        <Sparkles />
+      </span>
+      Agent Editor
+    </div>
+  );
+}
+
 function Prerequisites(props: { problems: MissingPrerequisite[] }) {
   return (
-    <div class="center">
-      <div class="card">
-        <h1>Missing prerequisites</h1>
-        <p class="muted">The editor can't start until these are installed:</p>
-        <ul>
-          <For each={props.problems}>{(p) => <li>{p.message}</li>}</For>
-        </ul>
-        <p class="muted">Restart the editor afterwards.</p>
+    <div class="startup">
+      <div class="startup-card">
+        <AppMark />
+        <h1>The editor can't start until these are installed:</h1>
+        <div class="list-box">
+          <For each={props.problems}>
+            {(p) => (
+              <div class="list-box-row">
+                <X />
+                <span>{p.message}</span>
+              </div>
+            )}
+          </For>
+        </div>
+        <p class="muted small">Restart the editor afterwards.</p>
       </div>
     </div>
   );
@@ -104,17 +147,20 @@ function OpenWorkspace(props: { onOpened: (w: WorkspaceInfo) => void }) {
   };
 
   return (
-    <div class="center">
-      <form class="card" onSubmit={open}>
+    <div class="startup">
+      <div class="startup-card">
+        <AppMark />
         <h1>Open a repository</h1>
-        <input value={path()} onInput={(e) => setPath(e.currentTarget.value)} placeholder="Path to a git repository" autofocus />
-        <button type="submit" class="primary" disabled={!path().trim()}>
-          Open
-        </button>
+        <form onSubmit={open}>
+          <input class="mono" value={path()} onInput={(e) => setPath(e.currentTarget.value)} placeholder="Path to a git repository" autofocus spellcheck={false} />
+          <button type="submit" class="primary" disabled={!path().trim()}>
+            Open <kbd>Enter</kbd>
+          </button>
+        </form>
         <Show when={error()}>
-          <p class="error">{error()}</p>
+          <p class="error small">{error()}</p>
         </Show>
-      </form>
+      </div>
     </div>
   );
 }
@@ -162,6 +208,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   /** Each Worktree's Recent sessions (closed Tabs), as the core last reported them. */
   const [recent, setRecent] = createStore<Record<string, RecentSession[]>>({});
   const [recentOpen, setRecentOpen] = createSignal(false);
+  /** Where the Recent menu opens (it's fixed, so the scrolling session row doesn't clip it). */
+  const [recentAt, setRecentAt] = createSignal({ left: 0, top: 0 });
   createEffect(() => {
     const path = activeWorktree();
     if (!recent[path]) void core.recentSessions(path).then((list) => !recent[path] && setRecent(path, list));
@@ -172,8 +220,11 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   const filesOpen = () => drawer() === "files";
   const gitOpen = () => drawer() === "git";
   const setFilesOpen = (open: boolean) => setDrawer(open ? "files" : null);
+  /** The drawer the title bar's button opens: the one last shown. */
+  let lastDrawer: "files" | "git" = "files";
   const toggleDrawer = (which: "files" | "git") => {
     setView("tabs"); // (the drawers are the Tabs view's)
+    lastDrawer = which;
     setDrawer((now) => (now === which ? null : which));
   };
   const [paletteOpen, setPaletteOpen] = createSignal(false);
@@ -486,7 +537,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     window.addEventListener("keydown", onKey);
     onCleanup(() => window.removeEventListener("keydown", onKey));
     // The Recent menu closes on a click anywhere else.
-    const onClick = (e: MouseEvent) => !(e.target as Element | null)?.closest?.(".recent-menu") && setRecentOpen(false);
+    const onClick = (e: MouseEvent) => !(e.target as Element | null)?.closest?.(".recent-menu, .menu") && setRecentOpen(false);
     window.addEventListener("click", onClick);
     onCleanup(() => window.removeEventListener("click", onClick));
     // Worktrees may have changed while the editor was in the background (the watcher covers the rest),
@@ -522,8 +573,11 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   return (
     <div class="workspace" classList={{ "board-open": view() === "board" }}>
       <header class="titlebar" ref={titlebar}>
-        <b>{props.workspace.name}</b>
-        <span class="muted mono">{props.workspace.root}</span>
+        <span class="name">{props.workspace.name}</span>
+        <span class="path" title={props.workspace.root}>
+          {props.workspace.root}
+        </span>
+        <span class="grow" />
         <div class="segmented">
           <button classList={{ on: view() === "tabs" }} onClick={() => setView("tabs")} title="One session at a time (Esc)">
             Tabs
@@ -537,15 +591,22 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
             {needYou()} need{needYou() === 1 ? "s" : ""} you
           </button>
         </Show>
-        <span class="grow" />
-        <button class="ghost" classList={{ on: filesOpen() }} onClick={() => toggleDrawer("files")} title="Files of this Worktree (Ctrl+Shift+E); Ctrl+P to find one">
-          Files
+        <button class="search-button" onClick={() => !removing() && !creatingWorktree() && setPaletteOpen(true)} title="Go to a file in this Worktree, or start a session">
+          <Search />
+          Search files
+          <kbd>Ctrl+P</kbd>
         </button>
-        <button class="ghost" classList={{ on: gitOpen() }} onClick={() => toggleDrawer("git")} title="Git: stage, commit, discard (Ctrl+Shift+G)">
-          Git
+        <button
+          class="ghost icon"
+          classList={{ on: drawer() !== null }}
+          onClick={() => (drawer() ? setDrawer(null) : toggleDrawer(lastDrawer))}
+          title="Files and Git of this Worktree (Ctrl+Shift+E, Ctrl+Shift+G)"
+          aria-label="Files and Git drawer"
+        >
+          <PanelRight />
         </button>
-        <button class="ghost" onClick={openRepoSettings} title="Settings for this repo, e.g. its Worktree setup commands">
-          Repo settings
+        <button class="ghost icon" onClick={openRepoSettings} title="Settings for this repo, e.g. its Worktree setup commands" aria-label="Repo settings">
+          <Settings />
         </button>
       </header>
       <Show when={view() === "board"}>
@@ -558,12 +619,14 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           banners={
             <>
               <Show when={error()}>
-                <p class="error banner">{error()}</p>
+                <Banner tone="error" onDismiss={() => setError("")}>
+                  {error()}
+                </Banner>
               </Show>
               <Show when={notice()}>
-                <p class="warning banner" onClick={() => setNotice("")} title="Click to dismiss">
+                <Banner tone="info" onDismiss={() => setNotice("")}>
                   {notice()}
-                </p>
+                </Banner>
               </Show>
             </>
           }
@@ -573,7 +636,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           }}
         />
       </Show>
-      <WorktreeRow worktrees={rowWorktrees()} active={activeWorktree()} sessionsIn={sessionsIn} onSelect={selectWorktree} onNewSession={(path) => void newSession(path)} onNewWorktree={() => setCreatingWorktree(true)} />
+      <WorktreeRow
+        worktrees={rowWorktrees()}
+        active={activeWorktree()}
+        sessionsIn={sessionsIn}
+        settingUp={(path) => !!setups[path] && setups[path].status.kind !== "done"}
+        onSelect={selectWorktree} onNewSession={(path) => void newSession(path)} onNewWorktree={() => setCreatingWorktree(true)} />
       <Show when={creatingWorktree()}>
         <NewWorktreeDialog
           activeBranch={worktree()?.branch ?? null}
@@ -607,15 +675,16 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           {(id) => (
             <span class={`tab-wrap ${id === activeId() ? "active" : ""}`}>
               <button
-                class={`tab ${id === activeId() ? "active" : ""}`}
+                class="tab"
                 onClick={() => id !== activeId() && void show(id)}
                 onAuxClick={(e) => e.button === 1 && void closeTab(id)}
               >
-                <span class="agent-glyph">✦</span>
-                <span class={`dot ${sessions[id].state}`} title={STATE_LABEL[sessions[id].state]} />
-                {sessions[id].name}
+                <Sparkles />
+                <StateDot state={sessions[id].state} title={STATE_LABEL[sessions[id].state]} />
+                <span class="name">{sessions[id].name}</span>
                 <Show when={id === activeId()} fallback={<Show when={sessions[id].unread}>{(n) => <span class="badge">{n()}</span>}</Show>}>
-                  <span class="muted">{STATE_LABEL[sessions[id].state]}</span>
+                  <span class="sep">·</span>
+                  <span class={`state ${sessions[id].state}`}>{STATE_LABEL[sessions[id].state]}</span>
                 </Show>
               </button>
               <button
@@ -624,21 +693,40 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
                 title="Close (it stays in Recent sessions; Ctrl+Shift+T reopens)"
                 onClick={() => void closeTab(id)}
               >
-                ×
+                <X />
               </button>
             </span>
           )}
         </For>
         <button class="ghost add-tab" onClick={() => void newSession()} title="New Agent session in this Worktree" disabled={worktree()?.removed || settingUp()}>
-          ＋ session
+          <Plus />
+          session
         </button>
         <Show when={recent[activeWorktree()]?.length}>
           <span class="recent-menu">
-            <button class="ghost" onClick={() => setRecentOpen((open) => !open)} title="Closed sessions in this Worktree">
-              Recent ▾
+            <button
+              class="ghost"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                setRecentAt({ left: r.left, top: r.bottom + 4 });
+                setRecentOpen((open) => !open);
+              }}
+              title="Closed sessions in this Worktree"
+            >
+              Recent
+              <ChevronDown />
             </button>
             <Show when={recentOpen()}>
-              <RecentList sessions={recent[activeWorktree()] ?? []} onReopen={(r) => void reopen(core.reopenSession(r.acpId))} />
+              <div class="menu" style={{ left: `${recentAt().left}px`, top: `${recentAt().top}px` }}>
+                <For each={recent[activeWorktree()] ?? []}>
+                  {(r) => (
+                    <button class="menu-item" onClick={() => void reopen(core.reopenSession(r.acpId))} title="Reopen with its conversation">
+                      <Sparkles />
+                      {r.name}
+                    </button>
+                  )}
+                </For>
+              </div>
             </Show>
           </span>
         </Show>
@@ -654,6 +742,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       <Show when={paletteOpen()}>
         <CommandPalette
           worktree={activeWorktree()}
+          label={worktree() ? worktreeLabel(worktree()!) : ""}
+          colour={worktreeColour(activeWorktree())}
           onFile={(path) => {
             openWorktreeFile(path);
             // (and marked in the Files drawer, if that's open)
@@ -682,20 +772,31 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         )}
       </Show>
       <Show when={sharing() > 1}>
-        <p class="warning banner">
-          {sharing()} Agent sessions share this Worktree, so they can edit the same files.
-        </p>
+        <Banner tone="warn">{sharing()} Agent sessions share this Worktree, so they can edit the same files.</Banner>
       </Show>
       <Show when={notice()}>
-        <p class="warning banner" onClick={() => setNotice("")} title="Click to dismiss">
+        <Banner tone="info" onDismiss={() => setNotice("")}>
           {notice()}
-        </p>
+        </Banner>
       </Show>
       <Show when={settings()?.error}>
-        {(e) => <p class="error banner">Settings not applied: {e()}</p>}
+        {(e) => (
+          <Banner
+            tone="error"
+            action={
+              <button class="link" onClick={openRepoSettings}>
+                Open settings
+              </button>
+            }
+          >
+            Settings not applied: {e()}
+          </Banner>
+        )}
       </Show>
       <Show when={error()}>
-        <p class="error banner">{error()}</p>
+        <Banner tone="error" onDismiss={() => setError("")}>
+          {error()}
+        </Banner>
       </Show>
       <div class="main-row">
       <div class="main-col">
@@ -706,13 +807,16 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           <Show
             when={setups[activeWorktree()]?.status.kind !== "done" && setups[activeWorktree()]}
             fallback={
-              <div class="center muted empty-worktree">
-                <p>No Agent sessions open in this Worktree.</p>
-                <button class="primary" onClick={() => void newSession()}>
-                  ＋ session
-                </button>
+              <div class="center empty-worktree" style={{ "--c": worktreeColour(activeWorktree()) }}>
+                <GitBranch />
+                <p>No Agent sessions in this Worktree yet.</p>
+                <Show when={!worktree()?.removed}>
+                  <button class="primary" onClick={() => void newSession()}>
+                    <Sparkles />
+                    New Agent session here
+                  </button>
+                </Show>
                 <Show when={recent[activeWorktree()]?.length}>
-                  <p class="small">Or reopen a Recent session:</p>
                   <RecentList sessions={recent[activeWorktree()] ?? []} onReopen={(r) => void reopen(core.reopenSession(r.acpId))} />
                 </Show>
               </div>
@@ -744,6 +848,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           revision={filesRevision[activeWorktree()] ?? 0}
           reveal={revealed()}
           onOpenFile={openWorktreeFile}
+          label={worktree() ? worktreeLabel(worktree()!) : ""}
+          colour={worktreeColour(activeWorktree())}
+          onGit={() => toggleDrawer("git")}
           onClose={() => setFilesOpen(false)}
         />
       </Show>
@@ -768,6 +875,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
             setCreatingFrom(branch);
             setCreatingWorktree(true);
           }}
+          label={worktree() ? worktreeLabel(worktree()!) : ""}
+          colour={worktreeColour(activeWorktree())}
+          onFiles={() => toggleDrawer("files")}
           onClose={() => setDrawer(null)}
         />
       </Show>
@@ -802,14 +912,38 @@ function autoSuspendNotice(suspended: { session: SessionInfo; reason: AutoSuspen
 
 function RecentList(props: { sessions: RecentSession[]; onReopen: (session: RecentSession) => void }) {
   return (
-    <div class="recent-list">
+    <div class="list-box">
+      <div class="section-label">
+        Recent sessions
+        <span class="note">closing a Tab is never destructive</span>
+      </div>
       <For each={props.sessions}>
         {(s) => (
-          <button class="ghost" onClick={() => props.onReopen(s)} title="Reopen with its conversation">
-            <span class="agent-glyph">✦</span> {s.name}
-          </button>
+          <div class="recent-row">
+            <Sparkles />
+            <span class="grow">{s.name}</span>
+            <button class="link" onClick={() => props.onReopen(s)} title="Reopen with its conversation">
+              Reopen
+            </button>
+          </div>
         )}
       </For>
+    </div>
+  );
+}
+
+/** One line between the context bar and the content: a standing fact, a notice or an error. */
+function Banner(props: { tone: "warn" | "info" | "error"; children: JSX.Element; action?: JSX.Element; onDismiss?: () => void }) {
+  return (
+    <div class={`banner ${props.tone}`} role={props.tone === "error" ? "alert" : "status"}>
+      {props.tone === "info" ? <Info /> : <TriangleAlert />}
+      <span class="text">{props.children}</span>
+      {props.action}
+      <Show when={props.onDismiss}>
+        <button class="dismiss" onClick={() => props.onDismiss!()} aria-label="Dismiss" title="Dismiss">
+          <X />
+        </button>
+      </Show>
     </div>
   );
 }
@@ -862,55 +996,76 @@ function Composer(props: { session: SessionInfo }) {
     }
   };
 
+  const locked = () => props.session.state === "exited" || props.session.state === "needsYou";
+
   return (
-    <div class="composer">
+    <div class="composer" style={{ "--c": worktreeColour(props.session.worktree) }}>
       <EditNotes sessionId={props.session.id} />
       <Show when={error()}>
-        <p class="error">{error()}</p>
+        <p class="error">
+          <TriangleAlert />
+          {error()}
+        </p>
       </Show>
-      <textarea
-        ref={input}
-        value={text()}
-        onInput={(e) => setText(e.currentTarget.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            void send();
-          }
-        }}
-        placeholder={
-          props.session.state === "exited"
-            ? "The Agent exited. Resume it to carry on."
-            : props.session.state === "suspended"
-              ? "Suspended. Sending a message resumes it (Enter to send, Shift+Enter for a newline)."
-            : props.session.state === "needsYou"
-              ? "Answer the permission card above first (Y / N)."
-              : "Message the Agent (Enter to send, Shift+Enter for a newline)"
-        }
-        disabled={props.session.state === "exited" || props.session.state === "needsYou"}
-      />
-      <div class="composer-side">
-        <select
-          title="Permission mode"
-          value={props.session.permissionMode}
-          onChange={(e) => void setMode(e.currentTarget)}
-        >
-          <For each={Object.keys(MODE_LABEL) as PermissionMode[]}>
-            {(mode) => <option value={mode}>{MODE_LABEL[mode]}</option>}
-          </For>
-        </select>
-        <Show
-          when={props.session.state === "exited"}
-          fallback={
-            <button class="primary" onClick={send} disabled={disabled() || !text().trim()}>
-              Send
-            </button>
-          }
-        >
-          <button class="primary" onClick={() => void resume()} title="Bring the Agent back with this conversation">
-            Resume
-          </button>
-        </Show>
+      <div class="composer-box" classList={{ locked: locked() }}>
+        <div class="composer-inner">
+          <textarea
+            ref={input}
+            value={text()}
+            onInput={(e) => setText(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+            placeholder={
+              props.session.state === "exited"
+                ? "The Agent exited."
+                : props.session.state === "needsYou"
+                  ? "Answer the permission card above first (Y / N)."
+                  : "Message the Agent (Enter to send, Shift+Enter for a newline)"
+            }
+            disabled={locked()}
+          />
+          <div class="composer-bar">
+            <label class={`mode-pill ${props.session.permissionMode}`} title="Permission mode">
+              <Switch fallback={<ShieldQuestion />}>
+                <Match when={props.session.permissionMode === "acceptEdits"}>
+                  <Zap />
+                </Match>
+                <Match when={props.session.permissionMode === "plan"}>
+                  <BookOpen />
+                </Match>
+              </Switch>
+              {MODE_LABEL[props.session.permissionMode]}
+              <ChevronDown class="chev" />
+              <select value={props.session.permissionMode} onChange={(e) => void setMode(e.currentTarget)}>
+                <For each={Object.keys(MODE_LABEL) as PermissionMode[]}>{(mode) => <option value={mode}>{MODE_LABEL[mode]}</option>}</For>
+              </select>
+            </label>
+            <Show when={props.session.state === "suspended"}>
+              <span class="hint">Sending resumes this session</span>
+            </Show>
+            <Show when={props.session.state === "working"}>
+              <span class="hint">The Agent is working; send once its turn is done.</span>
+            </Show>
+            <span class="grow" />
+            <Show
+              when={props.session.state === "exited"}
+              fallback={
+                <button class="primary send" onClick={send} disabled={disabled() || !text().trim()}>
+                  Send <kbd>Enter</kbd>
+                </button>
+              }
+            >
+              <button class="primary send" onClick={() => void resume()} title="Bring the Agent back with this conversation">
+                <CirclePlay />
+                Resume
+              </button>
+            </Show>
+          </div>
+        </div>
       </div>
     </div>
   );

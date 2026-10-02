@@ -3,6 +3,35 @@
 // Worktree's files changed.
 import { createEffect, createResource, createSignal, Index, on, Show } from "solid-js";
 import { core, type DirEntry } from "./core";
+import { ChevronDown, ChevronRight, FileIcon, Folder as FolderIcon, FolderOpen, GitBranch, X } from "./icons";
+
+/** The drawer's head, shared by its two tabs: whose files these are, Files / Git, and close. */
+export function DrawerHead(props: {
+  /** The Worktree's branch (or label) and colour. */
+  label: string;
+  colour: string;
+  tab: "files" | "git";
+  onTab: (tab: "files" | "git") => void;
+  onClose: () => void;
+}) {
+  return (
+    <div class="drawer-head" style={{ "--c": props.colour }}>
+      <GitBranch />
+      <span class="drawer-branch">{props.label}</span>
+      <div class="segmented">
+        <button classList={{ on: props.tab === "files" }} onClick={() => props.onTab("files")} title="Files of this Worktree (Ctrl+Shift+E)">
+          Files
+        </button>
+        <button classList={{ on: props.tab === "git" }} onClick={() => props.onTab("git")} title="Git: stage, commit, discard (Ctrl+Shift+G)">
+          Git
+        </button>
+      </div>
+      <button class="ghost icon" onClick={() => props.onClose()} title="Close the drawer" aria-label="Close the drawer">
+        <X />
+      </button>
+    </div>
+  );
+}
 
 export function FilesDrawer(props: {
   worktree: string;
@@ -12,6 +41,9 @@ export function FilesDrawer(props: {
   reveal: { path: string; n: number } | null;
   /** A file was clicked (its path relative to the Worktree). */
   onOpenFile: (path: string) => void;
+  label: string;
+  colour: string;
+  onGit: () => void;
   onClose: () => void;
 }) {
   const [open, setOpen] = createSignal<Set<string>>(new Set());
@@ -41,13 +73,7 @@ export function FilesDrawer(props: {
 
   return (
     <aside class="files-drawer">
-      <div class="drawer-head">
-        <b>Files</b>
-        <span class="grow" />
-        <button class="ghost" onClick={() => props.onClose()} title="Close (Ctrl+Shift+E)">
-          ×
-        </button>
-      </div>
+      <DrawerHead label={props.label} colour={props.colour} tab="files" onTab={(tab) => tab === "git" && props.onGit()} onClose={props.onClose} />
       <div class="drawer-tree">
         <Folder worktree={props.worktree} dir="" depth={0} open={open()} revision={props.revision} reveal={props.reveal?.path ?? null} onToggle={toggle} onOpenFile={props.onOpenFile} />
       </div>
@@ -78,15 +104,20 @@ function Folder(props: {
           <button
             class="tree-row"
             classList={{ revealed: entry().path === props.reveal, changed: !!entry().change || entry().hasChanges }}
-            style={{ "padding-left": `${8 + props.depth * 14}px` }}
+            style={{ "padding-left": `${8 + props.depth * 16}px` }}
             onClick={() => (entry().isDir ? props.onToggle(entry().path) : props.onOpenFile(entry().path))}
             ref={(row) => createEffect(() => entry().path === props.reveal && row.scrollIntoView({ block: "nearest" }))}
             title={entry().path}
           >
-            <span class="tree-icon">{entry().isDir ? (props.open.has(entry().path) ? "▾" : "▸") : ""}</span>
+            <Show when={entry().isDir} fallback={<span class="spacer" />}>
+              {props.open.has(entry().path) ? <ChevronDown class="chev" /> : <ChevronRight class="chev" />}
+            </Show>
+            <Show when={entry().isDir} fallback={<FileIcon class="kind" />}>
+              {props.open.has(entry().path) ? <FolderOpen class="kind" /> : <FolderIcon class="kind" />}
+            </Show>
             <span class="tree-name">{entry().name}</span>
-            <Show when={entry().change} fallback={<Show when={entry().hasChanges}><span class="change-dot">•</span></Show>}>
-              {(change) => <span class={`change change-${changeKind(change())}`}>{change()}</span>}
+            <Show when={entry().change} fallback={<Show when={entry().hasChanges}><span class="change-dot" title="Changes inside" /></Show>}>
+              {(change) => <span class={`change change-${changeKind(change())}`}>{letter(change())}</span>}
             </Show>
           </button>
           <Show when={entry().isDir && props.open.has(entry().path)}>
@@ -98,8 +129,12 @@ function Folder(props: {
   );
 }
 
+/** One letter for a status code (`??` is U, untracked). */
+const letter = (code: string) => (code === "??" ? "U" : code.trim().charAt(0));
+
 function changeKind(code: string): string {
-  if (code === "??" || code.includes("A")) return "added";
+  if (code === "??") return "untracked";
+  if (code.includes("A")) return "added";
   if (code.includes("D")) return "deleted";
   return "modified";
 }

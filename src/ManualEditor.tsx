@@ -31,6 +31,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { core, type DiffLine, type OpenedFile, type PoppedOutFile } from "./core";
 import { DiffPanel } from "./DiffView";
 import { languageOf, languageOfPath, parserFor } from "./highlight";
+import { ExternalLink, TextWrap, X } from "./icons";
 
 /** What to open: a file (absolute path), a chat code block as an unsaved snippet, or a file popped
  *  out of the pane (in its new window). */
@@ -614,7 +615,7 @@ export function ManualEditor(props: {
               <button class="editor-tab-name" onClick={() => show(t.id)} onAuxClick={(e) => e.button === 1 && close(t.id)} title={t.review?.name ?? t.path ?? "Not saved anywhere"}>
                 {t.title}
                 <Show when={t.dirty}>
-                  <span class="dirty" title="Unsaved changes">●</span>
+                  <span class="dirty" title="Unsaved changes" />
                 </Show>
                 <Show when={t.onDisk}>
                   <span class="on-disk" title={t.onDisk === "deleted" ? "Deleted on disk" : "Changed on disk"}>
@@ -623,7 +624,7 @@ export function ManualEditor(props: {
                 </Show>
               </button>
               <button class="close-tab" aria-label={`Close ${t.title}`} onClick={() => close(t.id)}>
-                ×
+                <X />
               </button>
             </span>
           )}
@@ -631,6 +632,7 @@ export function ManualEditor(props: {
         <span class="grow" />
         <Show when={active() && !active()!.placeholder && !active()!.review}>
           <button class="ghost" classList={{ on: !!active()?.wrap }} onClick={toggleWrap} title="Soft-wrap long lines">
+            <TextWrap />
             Wrap
           </button>
         </Show>
@@ -640,6 +642,7 @@ export function ManualEditor(props: {
           </button>
           <Show when={!props.poppedOut}>
             <button class="ghost" onClick={() => void popOut(activeId()!)} title="Move this file into a window of its own (its undo history stays behind)">
+              <ExternalLink />
               Pop out
             </button>
           </Show>

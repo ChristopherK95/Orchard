@@ -5,6 +5,7 @@ import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { core, type EditNote, type SessionId } from "./core";
 import { DiffView } from "./DiffView";
 import { languageOfPath } from "./highlight";
+import { ChevronDown, ChevronRight, Pencil, X } from "./icons";
 
 export function EditNotes(props: { sessionId: SessionId }) {
   const [notes, setNotes] = createSignal<EditNote[]>([]);
@@ -50,7 +51,13 @@ export function EditNotes(props: { sessionId: SessionId }) {
                 onClick={() => setOpen(open() === note.path ? null : note.path)}
                 title="Sent with your next message. Click to see the change."
               >
-                📝 You edited <span class="mono">{note.name}</span> (+{note.added} −{note.removed})
+                <Pencil />
+                <span class="mono">{note.name}</span>
+                <Show when={note.diff} fallback={<span class="muted">changed substantially</span>}>
+                  <span class="add">+{note.added}</span>
+                  <span class="del">−{note.removed}</span>
+                </Show>
+                {open() === note.path ? <ChevronDown class="chev" /> : <ChevronRight class="chev" />}
               </button>
               <button
                 class="close-tab"
@@ -58,11 +65,12 @@ export function EditNotes(props: { sessionId: SessionId }) {
                 title="Don't tell the Agent about these changes (a later save is noted from here)"
                 onClick={() => remove(note)}
               >
-                ×
+                <X />
               </button>
             </span>
           )}
         </For>
+        <span class="note">sent with your next message</span>
         <Show when={opened()}>
           {(note) => (
             <div class="edit-note-diff">
