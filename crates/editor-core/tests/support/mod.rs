@@ -169,6 +169,36 @@ impl FakeAgent {
             .collect()
     }
 
+    /// How many times the fake agent process has started.
+    pub fn starts(&self) -> usize {
+        self.log()
+            .iter()
+            .filter(|m| m.get("started").is_some())
+            .count()
+    }
+
+    /// Kills the running fake agent process (the adapter crashing).
+    pub fn kill(&self) {
+        let pid = self
+            .log()
+            .iter()
+            .rev()
+            .find_map(|m| m["started"].as_u64())
+            .expect("the fake agent started");
+        let status = if cfg!(windows) {
+            Command::new("taskkill")
+                .args(["/F", "/PID", &pid.to_string()])
+                .output()
+        } else {
+            Command::new("kill").args(["-9", &pid.to_string()]).output()
+        }
+        .expect("run kill");
+        assert!(
+            status.status.success(),
+            "couldn't kill the fake agent {pid}"
+        );
+    }
+
     pub fn received(&self, method: &str) -> Vec<serde_json::Value> {
         self.log()
             .into_iter()

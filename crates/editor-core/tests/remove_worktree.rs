@@ -304,7 +304,10 @@ async fn running_sessions_are_stopped_before_removal() {
     ));
     let closed = fake.received("session/close");
     assert_eq!(closed.len(), 1);
-    assert_eq!(closed[0]["params"]["sessionId"], "fake-1");
+    assert_eq!(
+        closed[0]["params"]["sessionId"],
+        fake.received("session/prompt")[0]["params"]["sessionId"]
+    );
     let order: Vec<_> = fake
         .log()
         .into_iter()

@@ -64,8 +64,8 @@ _Avoid_: Blocked, waiting
 The turn has finished and the Agent is waiting for the next prompt.
 
 **Suspended**:
-The Agent's process has been stopped to free memory while the Tab and its conversation are kept; returning to the Tab resumes it.
+The Agent's process has been stopped to free memory while the Tab and its conversation are kept; sending a message in the Tab resumes it (just looking at the Tab doesn't).
 _Avoid_: Paused, sleeping
 
 **Exited**:
-The Agent's process ended without being Suspended (crash, or it quit).
+The Agent's process ended without being Suspended (crash, or it quit). Resuming it brings the conversation back.

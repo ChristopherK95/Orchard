@@ -170,6 +170,22 @@ async fn send_prompt(
         .map_err(|e| e.to_string())
 }
 
+/// Stops an Idle session's Agent process; the next prompt resumes it.
+#[tauri::command]
+async fn suspend_session(core: State<'_, Core>, session_id: SessionId) -> CommandResult<()> {
+    core.suspend_session(session_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Brings a Suspended or Exited session back.
+#[tauri::command]
+async fn resume_session(core: State<'_, Core>, session_id: SessionId) -> CommandResult<()> {
+    core.resume_session(session_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn answer_permission(
     core: State<'_, Core>,
@@ -305,6 +321,8 @@ fn main() {
             retry_setup,
             start_anyway,
             send_prompt,
+            suspend_session,
+            resume_session,
             answer_permission,
             set_permission_mode,
             transcript_page_before,

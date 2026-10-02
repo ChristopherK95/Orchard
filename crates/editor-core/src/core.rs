@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -26,8 +26,41 @@ use crate::worktrees::{self, Discovery, WorktreeInfo};
 /// How long streamed transcript changes are gathered before being flushed to the visible Tab.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(16);
 
+/// The adapter is restarted after a crash unless it has crashed more than `CRASH_LIMIT` times
+/// within `CRASH_WINDOW`.
+const CRASH_LIMIT: usize = 3;
+const CRASH_WINDOW: Duration = Duration::from_secs(60);
+
 /// How long a stopped session's Agent gets to confirm it closed before removal goes ahead anyway.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// `session/close`, given `CLOSE_TIMEOUT` to answer; `None` if the Agent didn't.
+async fn close_acp(connection: &Connection, acp_id: &str) -> Option<Result<Value, AcpError>> {
+    let close = connection.request("session/close", json!({ "sessionId": acp_id }));
+    tokio::time::timeout(CLOSE_TIMEOUT, close).await.ok()
+}
+
+/// Puts the Agent's ACP session in `mode`.
+async fn apply_mode(
+    connection: &Connection,
+    acp_id: &str,
+    mode: PermissionMode,
+) -> Result<(), AcpError> {
+    connection
+        .request(
+            "session/set_mode",
+            json!({ "sessionId": acp_id, "modeId": mode.acp_id() }),
+        )
+        .await
+        .map(|_| ())
+}
+
+/// A prompt error meaning the Agent no longer has the session (e.g. it was closed under it):
+/// nothing more will happen there, so it counts as Exited.
+fn session_gone(err: &AcpError) -> bool {
+    matches!(err, AcpError::Closed)
+        || matches!(err, AcpError::Rpc { message, .. } if message.to_lowercase().contains("not found"))
+}
 
 /// Refuses removal options that would lose work the user didn't agree to discard.
 fn refuse_loss(check: &RemovalCheck, options: &RemoveWorktree) -> Result<(), CoreError> {
@@ -86,8 +119,14 @@ pub enum CoreError {
     UnknownSession,
     #[error("the Agent session is still working on the previous prompt")]
     SessionBusy,
-    #[error("the Agent session has exited")]
+    #[error("the Agent session has exited; resume it first")]
     SessionExited,
+    #[error("the Agent session is running; only a Suspended or Exited one can be resumed")]
+    SessionRunning,
+    #[error("the Agent session is stopping or starting; try again in a moment")]
+    SessionInTransition,
+    #[error("the Agent doesn't support {0}")]
+    Unsupported(&'static str),
     #[error("the Agent session isn't waiting for a permission answer")]
     NoPendingPermission,
     #[error("`{0}` isn't one of the options the Agent offered")]
@@ -204,6 +243,10 @@ struct Inner {
     settings_watch: Mutex<Option<notify::RecommendedWatcher>>,
     /// Serialises the editor's own writes to the settings file.
     settings_write: tokio::sync::Mutex<()>,
+    /// When the adapter last crashed with sessions to restart (within `CRASH_WINDOW`).
+    crashes: Mutex<Vec<std::time::Instant>>,
+    /// Numbers each adapter process (`Connection::generation`).
+    generations: AtomicU64,
 }
 
 #[derive(Default)]
@@ -252,7 +295,8 @@ struct Session {
     /// What the frontend sees. `state` here is only ever written by `update`, derived from `control`.
     info: Mutex<SessionInfo>,
     acp_id: String,
-    connection: Arc<Connection>,
+    /// The adapter connection it lives on (a new one after it's resumed on a restarted adapter).
+    connection: Mutex<Arc<Connection>>,
     transcript: Mutex<Transcript>,
     deltas: broadcast::Sender<TranscriptDelta>,
     events: broadcast::Sender<CoreEvent>,
@@ -275,18 +319,36 @@ struct KnownToolCall {
 struct Control {
     in_turn: bool,
     exited: bool,
+    /// Its Agent process was stopped on purpose; resuming brings the conversation back.
+    suspended: bool,
+    /// Being brought back (`session/resume`), on request or after the adapter restarted. Whoever
+    /// sets it runs `Inner::resume_claimed`, which clears it.
+    resuming: bool,
+    /// Being Suspended: `session/close` sent, not yet confirmed.
+    suspending: bool,
+    /// Closed for good (its Worktree is being removed); a resume in flight must not revive it.
+    closed: bool,
     /// Permission questions the Agent is waiting on, oldest first.
     questions: Vec<OpenQuestion>,
 }
 
 impl Control {
+    /// Mid-suspend or mid-resume: nothing else may start until that settles.
+    fn in_transition(&self) -> bool {
+        self.resuming || self.suspending
+    }
+
     fn state(&self) -> SessionState {
-        if self.exited {
+        if self.in_transition() {
+            SessionState::Working
+        } else if self.exited {
             SessionState::Exited
         } else if !self.questions.is_empty() {
             SessionState::NeedsYou
         } else if self.in_turn {
             SessionState::Working
+        } else if self.suspended {
+            SessionState::Suspended
         } else {
             SessionState::Idle
         }
@@ -319,6 +381,8 @@ impl Core {
             settings: Mutex::new(loaded),
             settings_watch: Mutex::new(None),
             settings_write: tokio::sync::Mutex::new(()),
+            crashes: Mutex::default(),
+            generations: AtomicU64::new(1),
         });
         if let Some(path) = &inner.config.settings_path {
             let weak = Arc::downgrade(&inner);
@@ -806,24 +870,29 @@ impl Core {
         }
     }
 
-    /// Ends an Agent session: open questions are cancelled, the Agent closes it (its Claude process
-    /// exits), and it's gone from the editor. If the Agent doesn't confirm in time, the session
-    /// stays (marked exited) and removal stops, rather than deleting a folder it's still in.
+    /// Ends an Agent session for good: open questions are cancelled, the Agent closes it (its Claude
+    /// process exits), and it's gone from the editor. One mid-resume is closed by the resume when it
+    /// lands (see `resume_claimed`). If the Agent doesn't confirm in time, the session stays (Exited)
+    /// and removal stops, rather than deleting a folder it's still in.
     async fn close_session(&self, session: Arc<Session>) -> Result<(), CoreError> {
-        session.update(|control| {
+        let resuming = session.update(|control| {
             session.cancel_questions(control);
+            control.in_turn = false;
             control.exited = true;
+            control.closed = true;
+            control.resuming
         });
-        // Stop a turn in progress first (closing does too, but this works on any ACP agent).
-        let _ = session
-            .connection
-            .notify("session/cancel", json!({ "sessionId": session.acp_id }));
-        let close = session
-            .connection
-            .request("session/close", json!({ "sessionId": session.acp_id }));
-        // An error reply (e.g. the adapter already dropped it, or exited) means it's gone too.
-        if tokio::time::timeout(CLOSE_TIMEOUT, close).await.is_err() {
-            return Err(CoreError::SessionWontStop);
+        if !resuming {
+            let connection = session.connection();
+            // Stop a turn in progress first (closing does too, but this works on any ACP agent).
+            let _ = connection.notify("session/cancel", json!({ "sessionId": session.acp_id }));
+            let closed = connection.supports_session("close")
+                // An error reply (e.g. the adapter already dropped it, or exited) means it's gone too.
+                && close_acp(&connection, &session.acp_id).await.is_some();
+            if !closed {
+                session.update(|control| control.closed = false);
+                return Err(CoreError::SessionWontStop);
+            }
         }
         self.forget_session(&session);
         Ok(())
@@ -938,12 +1007,7 @@ impl Core {
         // Every Tab starts in Ask for edits, whatever the Agent's own settings default to.
         let current_mode = created["modes"]["currentModeId"].as_str();
         if current_mode.is_some_and(|mode| mode != PermissionMode::AskForEdits.acp_id()) {
-            connection
-                .request(
-                    "session/set_mode",
-                    json!({ "sessionId": acp_id, "modeId": PermissionMode::AskForEdits.acp_id() }),
-                )
-                .await?;
+            apply_mode(&connection, &acp_id, PermissionMode::AskForEdits).await?;
         }
 
         // Registered under the same lock `remove_worktree` marks the Worktree under, so a session
@@ -967,7 +1031,7 @@ impl Core {
                 let session = Arc::new(Session {
                     info: Mutex::new(info.clone()),
                     acp_id: acp_id.clone(),
-                    connection: connection.clone(),
+                    connection: Mutex::new(connection.clone()),
                     transcript: Mutex::default(),
                     deltas,
                     events: self.inner.events.clone(),
@@ -982,8 +1046,7 @@ impl Core {
         };
         let Some(info) = added else {
             // Removal began while the Agent was starting it: it mustn't outlive the folder.
-            let close = connection.request("session/close", json!({ "sessionId": acp_id }));
-            let _ = tokio::time::timeout(CLOSE_TIMEOUT, close).await;
+            let _ = close_acp(&connection, &acp_id).await;
             return Err(CoreError::BeingRemoved);
         };
         let id = info.id;
@@ -994,12 +1057,28 @@ impl Core {
         Ok(id)
     }
 
-    /// Sends a prompt; returns once it's on its way. The reply streams to watchers.
+    /// Sends a prompt; returns once it's on its way. The reply streams to watchers. A Suspended
+    /// session is resumed first (the same conversation); if that fails, nothing was sent.
     pub async fn send_prompt(&self, id: SessionId, text: &str) -> Result<(), CoreError> {
         let session = self.session(id)?;
+        let resume_first = session.update(|control| {
+            if control.in_transition() {
+                return Err(CoreError::SessionInTransition);
+            }
+            match control.state() {
+                SessionState::Suspended => {
+                    control.resuming = true;
+                    Ok(true)
+                }
+                SessionState::Idle => Ok(false),
+                SessionState::Exited => Err(CoreError::SessionExited),
+                SessionState::Working | SessionState::NeedsYou => Err(CoreError::SessionBusy),
+            }
+        })?;
+        if resume_first {
+            self.inner.resume_claimed(&session, None).await?;
+        }
         session.update(|control| match control.state() {
-            SessionState::Working | SessionState::NeedsYou => Err(CoreError::SessionBusy),
-            SessionState::Exited => Err(CoreError::SessionExited),
             SessionState::Idle => {
                 session.record(|t| {
                     t.push(TranscriptItem::User {
@@ -1009,23 +1088,31 @@ impl Core {
                 control.in_turn = true;
                 Ok(())
             }
+            SessionState::Exited => Err(CoreError::SessionExited),
+            _ => Err(CoreError::SessionBusy),
         })?;
 
+        let connection = session.connection();
         let params =
             json!({ "sessionId": session.acp_id, "prompt": [{ "type": "text", "text": text }] });
         let inner = self.inner.clone();
         tokio::spawn(async move {
-            let result = session.connection.request("session/prompt", params).await;
+            let result = connection.request("session/prompt", params).await;
             // The Agent may have committed or changed files: refresh ahead/changed counts.
             let refresh = inner.clone();
             tokio::spawn(async move { refresh.refresh_worktrees().await });
             session.update(|control| {
+                // The adapter crashed and the session has been resumed elsewhere since (or closed):
+                // this turn's ending is old news.
+                if control.closed || !Arc::ptr_eq(&connection, &session.connection()) {
+                    return;
+                }
                 // A question still open when the turn ends will never be answered.
                 session.cancel_questions(control);
                 control.in_turn = false;
                 match result {
                     Ok(_) => {}
-                    Err(AcpError::Closed) => control.exited = true,
+                    Err(err) if session_gone(&err) => control.exited = true,
                     Err(err) => session.record(|t| {
                         t.push(TranscriptItem::Notice {
                             text: format!("The turn failed: {err}"),
@@ -1036,7 +1123,6 @@ impl Core {
         });
         Ok(())
     }
-
     /// Answers the permission card for `tool_call_id` with one of the options the Agent offered.
     pub async fn answer_permission(
         &self,
@@ -1070,24 +1156,84 @@ impl Core {
         })
     }
 
-    /// Switches how much the session's Agent may do without asking.
+    /// Stops an Idle session's Agent process to free its memory; the conversation stays in the
+    /// Tab, and the next prompt brings it back. It shows as Working until the Agent confirms.
+    pub async fn suspend_session(&self, id: SessionId) -> Result<(), CoreError> {
+        let session = self.session(id)?;
+        let stop = session.update(|control| {
+            if control.in_transition() {
+                return Err(CoreError::SessionInTransition);
+            }
+            match control.state() {
+                SessionState::Idle => {
+                    control.suspending = true;
+                    Ok(true)
+                }
+                // Nothing running to stop.
+                SessionState::Suspended | SessionState::Exited => Ok(false),
+                SessionState::Working | SessionState::NeedsYou => Err(CoreError::SessionBusy),
+            }
+        })?;
+        if !stop {
+            return Ok(());
+        }
+        let connection = session.connection();
+        let stopped = if !connection.supports_session("close") {
+            Err(CoreError::Unsupported("suspending sessions"))
+        } else {
+            match close_acp(&connection, &session.acp_id).await {
+                // A dead adapter has stopped it as surely as a close.
+                Some(Ok(_)) | Some(Err(AcpError::Closed)) => Ok(()),
+                Some(Err(err)) => Err(err.into()),
+                None => Err(CoreError::SessionWontStop),
+            }
+        };
+        session.update(|control| {
+            control.suspending = false;
+            control.suspended = stopped.is_ok();
+        });
+        stopped
+    }
+
+    /// Brings an Exited (or Suspended) session's conversation back, Idle and ready for a prompt.
+    pub async fn resume_session(&self, id: SessionId) -> Result<(), CoreError> {
+        let session = self.session(id)?;
+        session.update(|control| {
+            if control.in_transition() {
+                return Err(CoreError::SessionInTransition);
+            }
+            match control.state() {
+                SessionState::Suspended | SessionState::Exited => {
+                    control.resuming = true;
+                    Ok(())
+                }
+                _ => Err(CoreError::SessionRunning),
+            }
+        })?;
+        self.inner.resume_claimed(&session, None).await
+    }
+
+    /// Switches how much the session's Agent may do without asking. A session that isn't running
+    /// (Suspended, Exited, or mid-suspend/resume) takes the mode when it's resumed.
     pub async fn set_permission_mode(
         &self,
         id: SessionId,
         mode: PermissionMode,
     ) -> Result<(), CoreError> {
         let session = self.session(id)?;
-        session
-            .connection
-            .request(
-                "session/set_mode",
-                json!({ "sessionId": session.acp_id, "modeId": mode.acp_id() }),
-            )
-            .await?;
-        session.set_mode(mode);
+        let stopped = session.update(|control| {
+            let stopped = control.in_transition() || control.suspended || control.exited;
+            if stopped {
+                session.set_mode(mode); // under the control lock, so a resume can't miss it
+            }
+            stopped
+        });
+        if !stopped {
+            apply_mode(&session.connection(), &session.acp_id, mode).await?;
+            session.set_mode(mode);
+        }
         Ok(())
     }
-
     pub fn session_info(&self, id: SessionId) -> Result<SessionInfo, CoreError> {
         Ok(self.session(id)?.info.lock().expect("info lock").clone())
     }
@@ -1201,18 +1347,26 @@ impl Core {
             .ok_or(CoreError::UnknownSession)
     }
 
-    /// The shared adapter connection, started (and initialised) on first use or after it exited.
     async fn adapter(&self) -> Result<Arc<Connection>, CoreError> {
-        let mut slot = self.inner.adapter.lock().await;
+        self.inner.connect().await
+    }
+}
+
+impl Inner {
+    /// The shared adapter connection, started (and initialised) on first use or after it exited.
+    async fn connect(self: &Arc<Self>) -> Result<Arc<Connection>, CoreError> {
+        let mut slot = self.adapter.lock().await;
         if let Some(connection) = slot.as_ref().filter(|c| !c.is_closed()) {
             return Ok(connection.clone());
         }
-        let weak = Arc::downgrade(&self.inner);
+        let weak = Arc::downgrade(self);
+        let generation = self.generations.fetch_add(1, Ordering::Relaxed);
         let connection = Arc::new(Connection::spawn(
-            &self.inner.config.adapter,
+            &self.config.adapter,
+            generation,
             move |incoming| {
                 if let Some(inner) = Weak::upgrade(&weak) {
-                    inner.handle(incoming);
+                    inner.handle(incoming, generation);
                 }
             },
         )?);
@@ -1229,12 +1383,178 @@ impl Core {
         if init["protocolVersion"] != json!(PROTOCOL_VERSION) {
             return Err(AcpError::UnsupportedProtocol(init["protocolVersion"].clone()).into());
         }
+        connection.set_capabilities(init["agentCapabilities"].clone());
         *slot = Some(connection.clone());
         Ok(connection)
     }
-}
 
-impl Inner {
+    /// Brings a session whose `resuming` the caller set back on `connection` (default: the current
+    /// adapter), and clears `resuming`. On success it's Idle on the new connection, in its current
+    /// permission mode; on failure it's left as it was (Suspended stays Suspended). A session closed
+    /// meanwhile (its Worktree is being removed) isn't revived: it's closed on the new connection.
+    async fn resume_claimed(
+        self: &Arc<Self>,
+        session: &Arc<Session>,
+        connection: Option<Arc<Connection>>,
+    ) -> Result<(), CoreError> {
+        let reopened = self.reopen(session, connection).await;
+        let outcome = session.update(|control| {
+            control.resuming = false;
+            match reopened {
+                Ok((connection, _)) if control.closed => {
+                    Err((CoreError::BeingRemoved, Some(connection)))
+                }
+                // It died again while resuming; `adapter_closed` didn't see it, as it wasn't on it yet.
+                Ok((connection, _)) if connection.is_closed() => {
+                    Err((CoreError::Acp(AcpError::Closed), None))
+                }
+                Ok((connection, applied)) => {
+                    *session.connection.lock().expect("connection lock") = connection;
+                    control.suspended = false;
+                    control.exited = false;
+                    Ok(applied)
+                }
+                Err(err) => Err((err, None)),
+            }
+        });
+        match outcome {
+            Ok(applied) => {
+                // The mode may have been changed while it was resuming.
+                let mode = session.info.lock().expect("info lock").permission_mode;
+                if mode != applied {
+                    apply_mode(&session.connection(), &session.acp_id, mode).await?;
+                }
+                Ok(())
+            }
+            Err((err, revived)) => {
+                if let Some(connection) = revived {
+                    let _ = close_acp(&connection, &session.acp_id).await;
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// `session/resume` (which doesn't replay the conversation: the transcript is already here),
+    /// then the session's permission mode. Returns the connection and the mode it's now in.
+    async fn reopen(
+        self: &Arc<Self>,
+        session: &Session,
+        connection: Option<Arc<Connection>>,
+    ) -> Result<(Arc<Connection>, PermissionMode), CoreError> {
+        let cwd = session.info.lock().expect("info lock").worktree.clone();
+        if self
+            .state
+            .lock()
+            .expect("state lock")
+            .removing
+            .contains(&cwd)
+        {
+            return Err(CoreError::BeingRemoved);
+        }
+        let connection = match connection {
+            Some(connection) => connection,
+            None => self.connect().await?,
+        };
+        if !connection.supports_session("resume") {
+            return Err(CoreError::Unsupported("resuming sessions"));
+        }
+        let resumed = connection
+            .request(
+                "session/resume",
+                json!({ "sessionId": session.acp_id, "cwd": cwd, "mcpServers": [] }),
+            )
+            .await?;
+        let mode = session.info.lock().expect("info lock").permission_mode;
+        if resumed["modes"]["currentModeId"].as_str() != Some(mode.acp_id()) {
+            apply_mode(&connection, &session.acp_id, mode).await?;
+        }
+        Ok((connection, mode))
+    }
+
+    /// Adapter process `generation` ended. Its Idle sessions are resumed on one restarted adapter;
+    /// ones that were mid-turn (or waiting on you) become Exited, since that turn is lost; Suspended
+    /// ones, and ones already mid-suspend or mid-resume, are left to that. Only a crash that had
+    /// sessions to restart counts towards the restart limit.
+    fn adapter_closed(self: &Arc<Self>, generation: u64) {
+        let on_it: Vec<_> = self
+            .state
+            .lock()
+            .expect("state lock")
+            .sessions
+            .values()
+            .filter(|s| s.connection().generation == generation)
+            .cloned()
+            .collect();
+        let mut idle = vec![];
+        for session in on_it {
+            session.update(|control| {
+                let mid_turn = control.in_turn || !control.questions.is_empty();
+                session.cancel_questions(control);
+                control.in_turn = false;
+                let settled = control.in_transition()
+                    || control.suspended
+                    || control.exited
+                    || control.closed;
+                if mid_turn && !control.in_transition() && !control.suspended {
+                    control.exited = true;
+                } else if !settled {
+                    idle.push(session.clone());
+                }
+            });
+        }
+        if idle.is_empty() {
+            return;
+        }
+        if !self.may_restart() {
+            for session in idle {
+                session.exit_with_notice(
+                    "The Agent adapter keeps crashing, so it wasn't restarted. Resume to try again.",
+                );
+            }
+            return;
+        }
+        for session in &idle {
+            session.update(|control| control.resuming = true);
+        }
+        let inner = self.clone();
+        tokio::spawn(async move {
+            // One restart for all of them (a failing restart mustn't spawn one adapter per session).
+            let connection = match inner.connect().await {
+                Ok(connection) => Some(connection),
+                Err(err) => {
+                    for session in &idle {
+                        session.update(|control| control.resuming = false);
+                        session.exit_with_notice(&format!(
+                            "The Agent adapter couldn't be restarted: {err}"
+                        ));
+                    }
+                    None
+                }
+            };
+            let Some(connection) = connection else { return };
+            for session in idle {
+                if let Err(err) = inner
+                    .resume_claimed(&session, Some(connection.clone()))
+                    .await
+                {
+                    session.exit_with_notice(&format!(
+                        "The Agent stopped and couldn't be resumed: {err}"
+                    ));
+                }
+            }
+        });
+    }
+
+    /// Whether to restart the adapter after a crash: not after `CRASH_LIMIT` within `CRASH_WINDOW`
+    /// (something is wrong, and restarting would only loop).
+    fn may_restart(&self) -> bool {
+        let mut crashes = self.crashes.lock().expect("crashes lock");
+        let now = std::time::Instant::now();
+        crashes.retain(|at| now.duration_since(*at) < CRASH_WINDOW);
+        crashes.push(now);
+        crashes.len() <= CRASH_LIMIT
+    }
     /// Re-reads the settings file, publishing the result if it changed anything.
     fn reload_settings(&self) {
         let Some(path) = &self.config.settings_path else {
@@ -1369,8 +1689,8 @@ impl Inner {
         });
     }
 
-    /// Handles what the adapter sends us, in arrival order (see `acp`).
-    fn handle(&self, incoming: Incoming) {
+    /// Handles what adapter process `generation` sends us, in arrival order (see `acp`).
+    fn handle(self: &Arc<Self>, incoming: Incoming, generation: u64) {
         match incoming {
             Incoming::Notification { method, params } if method == "session/update" => {
                 let Some(session) = self.session_for(&params) else {
@@ -1408,23 +1728,7 @@ impl Inner {
             Incoming::Request { responder, .. } => {
                 responder.error(-32601, "method not supported by this client")
             }
-            Incoming::Closed => {
-                let sessions: Vec<_> = self
-                    .state
-                    .lock()
-                    .expect("state lock")
-                    .sessions
-                    .values()
-                    .cloned()
-                    .collect();
-                for session in sessions {
-                    session.update(|control| {
-                        session.cancel_questions(control);
-                        control.in_turn = false;
-                        control.exited = true;
-                    });
-                }
-            }
+            Incoming::Closed => self.adapter_closed(generation),
         }
     }
 
@@ -1436,6 +1740,22 @@ impl Inner {
 }
 
 impl Session {
+    fn connection(&self) -> Arc<Connection> {
+        self.connection.lock().expect("connection lock").clone()
+    }
+
+    /// Marks it Exited, saying why in its transcript.
+    fn exit_with_notice(&self, why: &str) {
+        self.update(|control| {
+            control.exited = true;
+            self.record(|t| {
+                t.push(TranscriptItem::Notice {
+                    text: why.to_owned(),
+                })
+            });
+        });
+    }
+
     /// Changes the facts behind the session's state under one lock, then publishes the state they
     /// now imply. Lock order: control, then transcript, then info.
     fn update<R>(&self, change: impl FnOnce(&mut Control) -> R) -> R {

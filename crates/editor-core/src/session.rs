@@ -10,7 +10,7 @@ use serde::Serialize;
 #[serde(transparent)]
 pub struct SessionId(pub u64);
 
-/// The Agent session states this slice supports. Suspended arrives in a later ticket.
+/// An Agent session's state, as its Tab shows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionState {
@@ -20,6 +20,9 @@ pub enum SessionState {
     NeedsYou,
     /// The turn has finished and the Agent is waiting for the next prompt.
     Idle,
+    /// The Agent's process was stopped to save memory; the conversation stays, and sending a
+    /// message resumes it.
+    Suspended,
     /// The Agent's process ended without being Suspended (crash, or it quit).
     Exited,
 }

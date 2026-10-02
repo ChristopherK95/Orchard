@@ -1,6 +1,6 @@
 // The Worktree row and context bar (ticket 06, layout A1): Worktrees on top, the active Worktree's
 // Agent sessions in the row below, and a bar saying exactly where your next prompt goes.
-import { For, Show } from "solid-js";
+import { For, Match, Show, Switch } from "solid-js";
 import type { SessionInfo, SessionState, WorktreeInfo } from "./core";
 
 const PALETTE = ["#7aa2f7", "#c49cf0", "#6cc5d9", "#e5c07b", "#7fd18b", "#ef8f9a", "#f0a35e", "#9aa1ad"];
@@ -86,6 +86,8 @@ export function ContextBar(props: {
   session: SessionInfo | undefined;
   stateLabel: Record<SessionState, string>;
   onRemove: (path: string) => void;
+  onSuspend: (session: SessionInfo) => void;
+  onResume: (session: SessionInfo) => void;
 }) {
   return (
     <Show when={props.worktree}>
@@ -113,11 +115,29 @@ export function ContextBar(props: {
               </>
             )}
           </Show>
-          <Show when={!w().isMain && !w().removed}>
-            <button class="ghost remove" onClick={() => props.onRemove(w().path)} title="Remove this Worktree (asks first)">
-              Remove Worktree…
-            </button>
-          </Show>
+          <span class="bar-actions">
+            <Show when={props.session}>
+              {(s) => (
+                <Switch>
+                  <Match when={s().state === "idle"}>
+                    <button class="ghost" onClick={() => props.onSuspend(s())} title="Stop this session's Agent to free memory; sending a message resumes it">
+                      Suspend
+                    </button>
+                  </Match>
+                  <Match when={s().state === "exited"}>
+                    <button class="ghost" onClick={() => props.onResume(s())} title="Bring the Agent back with this conversation">
+                      Resume
+                    </button>
+                  </Match>
+                </Switch>
+              )}
+            </Show>
+            <Show when={!w().isMain && !w().removed}>
+              <button class="ghost" onClick={() => props.onRemove(w().path)} title="Remove this Worktree (asks first)">
+                Remove Worktree…
+              </button>
+            </Show>
+          </span>
         </div>
       )}
     </Show>

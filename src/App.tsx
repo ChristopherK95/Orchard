@@ -28,6 +28,7 @@ const STATE_LABEL: Record<SessionState, string> = {
   working: "Working",
   needsYou: "Needs you",
   idle: "Idle",
+  suspended: "Suspended",
   exited: "Exited",
 };
 
@@ -402,7 +403,14 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           ＋ session
         </button>
       </nav>
-      <ContextBar worktree={worktree()} session={session()} stateLabel={STATE_LABEL} onRemove={() => setRemoving(worktree() ?? null)} />
+      <ContextBar
+        worktree={worktree()}
+        session={session()}
+        stateLabel={STATE_LABEL}
+        onRemove={() => setRemoving(worktree() ?? null)}
+        onSuspend={(s) => core.suspendSession(s.id).catch((err) => setError(String(err)))}
+        onResume={(s) => core.resumeSession(s.id).catch((err) => setError(String(err)))}
+      />
       <Show when={removing()}>
         {(w) => (
           <RemoveWorktreeDialog
@@ -475,16 +483,27 @@ const MODE_LABEL: Record<PermissionMode, string> = {
 function Composer(props: { session: SessionInfo }) {
   const [text, setText] = createSignal("");
   const [error, setError] = createSignal("");
-  const disabled = () => props.session.state !== "idle";
+  // A Suspended session takes a message too: sending it resumes the session.
+  const disabled = () => props.session.state !== "idle" && props.session.state !== "suspended";
   let input!: HTMLTextAreaElement;
   onMount(() => input.focus());
   // Back to the composer once a turn (or a permission question) is over.
   createEffect(() => props.session.state === "idle" && input.focus());
 
-  const setMode = async (mode: PermissionMode) => {
+  const setMode = async (select: HTMLSelectElement) => {
     setError("");
     try {
-      await core.setPermissionMode(props.session.id, mode);
+      await core.setPermissionMode(props.session.id, select.value as PermissionMode);
+    } catch (err) {
+      setError(String(err));
+      select.value = props.session.permissionMode; // back to the mode it's really in
+    }
+  };
+
+  const resume = async () => {
+    setError("");
+    try {
+      await core.resumeSession(props.session.id);
     } catch (err) {
       setError(String(err));
     }
@@ -520,7 +539,9 @@ function Composer(props: { session: SessionInfo }) {
         }}
         placeholder={
           props.session.state === "exited"
-            ? "The Agent exited."
+            ? "The Agent exited. Resume it to carry on."
+            : props.session.state === "suspended"
+              ? "Suspended. Sending a message resumes it (Enter to send, Shift+Enter for a newline)."
             : props.session.state === "needsYou"
               ? "Answer the permission card above first (Y / N)."
               : "Message the Agent (Enter to send, Shift+Enter for a newline)"
@@ -531,16 +552,24 @@ function Composer(props: { session: SessionInfo }) {
         <select
           title="Permission mode"
           value={props.session.permissionMode}
-          onChange={(e) => void setMode(e.currentTarget.value as PermissionMode)}
-          disabled={props.session.state === "exited"}
+          onChange={(e) => void setMode(e.currentTarget)}
         >
           <For each={Object.keys(MODE_LABEL) as PermissionMode[]}>
             {(mode) => <option value={mode}>{MODE_LABEL[mode]}</option>}
           </For>
         </select>
-        <button class="primary" onClick={send} disabled={disabled() || !text().trim()}>
-          Send
-        </button>
+        <Show
+          when={props.session.state === "exited"}
+          fallback={
+            <button class="primary" onClick={send} disabled={disabled() || !text().trim()}>
+              Send
+            </button>
+          }
+        >
+          <button class="primary" onClick={() => void resume()} title="Bring the Agent back with this conversation">
+            Resume
+          </button>
+        </Show>
       </div>
     </div>
   );

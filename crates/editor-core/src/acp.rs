@@ -75,6 +75,11 @@ impl Responder {
 type Pending = Arc<Mutex<Option<HashMap<u64, oneshot::Sender<Result<Value, AcpError>>>>>>;
 
 pub(crate) struct Connection {
+    /// Which adapter process this is (each restart gets the next number), known before it starts
+    /// so even an immediate crash can be told apart from a later one.
+    pub(crate) generation: u64,
+    /// The `agentCapabilities` the adapter announced in `initialize`.
+    capabilities: Mutex<Value>,
     out: mpsc::UnboundedSender<String>,
     /// `None` once the adapter has closed; no new requests are accepted then.
     pending: Pending,
@@ -86,6 +91,7 @@ pub(crate) struct Connection {
 impl Connection {
     pub(crate) fn spawn(
         command: &AdapterCommand,
+        generation: u64,
         on_incoming: impl Fn(Incoming) + Send + 'static,
     ) -> Result<Self, AcpError> {
         let mut cmd = crate::process::command(&command.program);
@@ -146,6 +152,8 @@ impl Connection {
         });
 
         Ok(Self {
+            generation,
+            capabilities: Mutex::new(Value::Null),
             out,
             pending,
             next_id: AtomicU64::new(1),
@@ -171,6 +179,16 @@ impl Connection {
     pub(crate) fn notify(&self, method: &str, params: Value) -> Result<(), AcpError> {
         let msg = json!({ "jsonrpc": "2.0", "method": method, "params": params });
         self.out.send(msg.to_string()).map_err(|_| AcpError::Closed)
+    }
+
+    pub(crate) fn set_capabilities(&self, capabilities: Value) {
+        *self.capabilities.lock().expect("capabilities lock") = capabilities;
+    }
+
+    /// Whether the adapter announced the optional session method `method` (`close`, `resume`).
+    pub(crate) fn supports_session(&self, method: &str) -> bool {
+        self.capabilities.lock().expect("capabilities lock")["sessionCapabilities"][method]
+            .is_object()
     }
 
     pub(crate) fn is_closed(&self) -> bool {

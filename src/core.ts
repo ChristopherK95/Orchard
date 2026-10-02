@@ -3,7 +3,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type SessionId = number;
-export type SessionState = "working" | "needsYou" | "idle" | "exited";
+export type SessionState = "working" | "needsYou" | "idle" | "suspended" | "exited";
 export type PermissionMode = "askForEdits" | "acceptEdits" | "plan";
 
 export interface WorkspaceInfo {
@@ -224,7 +224,12 @@ export const core = {
   retrySetup: (worktree: string) => invoke<void>("retry_setup", { worktree }),
   /** Skips the rest of a failed setup and starts the session. */
   startAnyway: (worktree: string) => invoke<void>("start_anyway", { worktree }),
+  /** A Suspended session is resumed first. */
   sendPrompt: (sessionId: SessionId, text: string) => invoke<void>("send_prompt", { sessionId, text }),
+  /** Stops an Idle session's Agent process to free memory; the conversation stays. */
+  suspendSession: (sessionId: SessionId) => invoke<void>("suspend_session", { sessionId }),
+  /** Brings a Suspended or Exited session back. */
+  resumeSession: (sessionId: SessionId) => invoke<void>("resume_session", { sessionId }),
   answerPermission: (sessionId: SessionId, toolCallId: string, optionId: string) =>
     invoke<void>("answer_permission", { sessionId, toolCallId, optionId }),
   setPermissionMode: (sessionId: SessionId, mode: PermissionMode) =>

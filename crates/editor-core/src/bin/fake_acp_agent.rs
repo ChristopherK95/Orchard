@@ -16,6 +16,8 @@
 //! }
 //! ```
 //!
+//! A top-level `"failResume": true` makes `session/resume` fail (`Session not found`).
+//!
 //! Each `session/prompt` consumes the next turn (across all sessions); once the script runs out, the
 //! agent echoes the prompt. A `permission` turn first announces the tool call, then asks
 //! `session/request_permission` (id `"perm-1"`, `"perm-2"`, …) and waits for the answer, which it
@@ -46,6 +48,9 @@ struct Script {
     turns: VecDeque<Turn>,
     #[serde(default = "default_mode")]
     initial_mode: String,
+    /// Answer `session/resume` with an error (a conversation that can't be picked back up).
+    #[serde(default)]
+    fail_resume: bool,
 }
 
 fn default_mode() -> String {
@@ -140,6 +145,7 @@ fn main() {
         .unwrap_or(Script {
             turns: VecDeque::new(),
             initial_mode: default_mode(),
+            fail_resume: false,
         });
     let log = std::env::var("FAKE_ACP_LOG").ok().map(|path| {
         OpenOptions::new()
@@ -170,25 +176,36 @@ impl Agent {
             let params = msg.get("params").cloned().unwrap_or(Value::Null);
             let result = match method.as_str() {
                 "initialize" => {
-                    json!({ "protocolVersion": 1, "agentCapabilities": {}, "authMethods": [] })
+                    json!({
+                        "protocolVersion": 1,
+                        "agentCapabilities": { "sessionCapabilities": { "close": {}, "resume": {} } },
+                        "authMethods": []
+                    })
                 }
                 "session/new" => {
                     self.sessions += 1;
-                    let session_id = format!("fake-{}", self.sessions);
+                    // Unique across restarts, like the real adapter's ids.
+                    let session_id = format!("fake-{}-{}", std::process::id(), self.sessions);
                     let cwd = params["cwd"].as_str().unwrap_or_default().to_owned();
                     self.cwds.insert(session_id.clone(), cwd);
-                    json!({
-                        "sessionId": session_id,
-                        "modes": {
-                            "currentModeId": self.script.initial_mode,
-                            "availableModes": [
-                                { "id": "default", "name": "Manual" },
-                                { "id": "acceptEdits", "name": "Accept edits" },
-                                { "id": "plan", "name": "Plan" },
-                                { "id": "auto", "name": "Auto" }
-                            ]
-                        }
-                    })
+                    let mut created = self.modes();
+                    created["sessionId"] = json!(session_id);
+                    created
+                }
+                // Picks a (closed or earlier process's) session back up, without replaying it.
+                "session/resume" if self.script.fail_resume => {
+                    if let Some(id) = id {
+                        send(
+                            json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32002, "message": "Session not found" } }),
+                        );
+                    }
+                    continue;
+                }
+                "session/resume" => {
+                    let session_id = params["sessionId"].as_str().unwrap_or_default().to_owned();
+                    let cwd = params["cwd"].as_str().unwrap_or_default().to_owned();
+                    self.cwds.insert(session_id, cwd);
+                    self.modes()
                 }
                 "session/set_mode" => json!({}),
                 "session/close" => {
@@ -213,6 +230,21 @@ impl Agent {
                 send(json!({ "jsonrpc": "2.0", "id": id, "result": result }));
             }
         }
+    }
+
+    /// The modes part of a `session/new` or `session/resume` result.
+    fn modes(&self) -> Value {
+        json!({
+            "modes": {
+                "currentModeId": self.script.initial_mode,
+                "availableModes": [
+                    { "id": "default", "name": "Manual" },
+                    { "id": "acceptEdits", "name": "Accept edits" },
+                    { "id": "plan", "name": "Plan" },
+                    { "id": "auto", "name": "Auto" }
+                ]
+            }
+        })
     }
 
     fn prompt(&mut self, params: &Value) -> Value {
