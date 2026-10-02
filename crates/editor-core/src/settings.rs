@@ -16,6 +16,7 @@ use crate::worktrees;
 #[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
 pub struct Settings {
     pub notifications: Notifications,
+    pub agents: AgentSettings,
     /// Per-repo settings, keyed by the repo's `origin` URL or its main checkout's path.
     pub repos: BTreeMap<String, RepoSettings>,
 }
@@ -25,6 +26,29 @@ pub struct Settings {
 pub struct Notifications {
     /// Notify when a Tab you're not looking at finishes its turn (off by default).
     pub turn_finished: bool,
+}
+
+/// Limits on the Agents' processes (ticket 12).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
+pub struct AgentSettings {
+    /// When the `claude` processes together use more than this many MiB, the longest-Idle
+    /// sessions are Suspended until they're under it (0: no limit).
+    pub memory_limit_mb: u64,
+    /// Suspend sessions Idle longer than `idle_suspend_minutes` (off by default).
+    pub idle_suspend: bool,
+    /// How long a session may be Idle before idle auto-suspend takes it (0: never).
+    pub idle_suspend_minutes: u64,
+}
+
+impl Default for AgentSettings {
+    fn default() -> Self {
+        Self {
+            memory_limit_mb: 4096,
+            idle_suspend: false,
+            idle_suspend_minutes: 30,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -206,6 +230,14 @@ const FILE_HEADER: &str = "\
 [notifications]
 # Notify when a Tab you're not looking at finishes its turn.
 turn_finished = false
+
+[agents]
+# When the claude processes together use more than this (in MB; 0 = no limit), the
+# longest-Idle sessions are Suspended until they're under it.
+memory_limit_mb = 4096
+# Suspend sessions Idle longer than idle_suspend_minutes (off by default).
+idle_suspend = false
+idle_suspend_minutes = 30
 ";
 
 /// Adds a section for the repo keyed `key` to the file (creating it if need be). Appends text, so the

@@ -124,6 +124,7 @@ export interface SetupInfo {
 
 export interface Settings {
   notifications: { turnFinished: boolean };
+  agents: { memoryLimitMb: number; idleSuspend: boolean; idleSuspendMinutes: number };
 }
 
 export interface LoadedSettings {
@@ -196,6 +197,12 @@ export type TranscriptDelta =
   | { kind: "textAppended"; index: number; text: string }
   | { kind: "itemUpdated"; index: number; item: TranscriptItem };
 
+/** Why Idle sessions were Suspended automatically. */
+export type AutoSuspendReason =
+  | { kind: "memoryLimit"; usedBytes: number; limitBytes: number }
+  | { kind: "lowMemory"; availableBytes: number }
+  | { kind: "idle"; minutes: number };
+
 export type CoreEvent =
   | { kind: "sessionCreated"; session: SessionInfo }
   | { kind: "sessionStateChanged"; sessionId: SessionId; state: SessionState }
@@ -203,6 +210,7 @@ export type CoreEvent =
   | { kind: "sessionUnreadChanged"; sessionId: SessionId; unread: number }
   | { kind: "worktreesChanged"; worktrees: WorktreeInfo[] }
   | { kind: "sessionClosed"; sessionId: SessionId }
+  | { kind: "autoSuspended"; suspended: { session: SessionInfo; reason: AutoSuspendReason }[] }
   | { kind: "recentSessionsChanged"; worktree: string; sessions: RecentSession[] }
   | { kind: "settingsChanged"; settings: LoadedSettings }
   | { kind: "setupChanged"; worktree: string; commands: string[]; status: SetupStatus }

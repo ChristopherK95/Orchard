@@ -196,6 +196,11 @@ impl Connection {
         self.capabilities.lock().expect("capabilities lock")["loadSession"] == true
     }
 
+    /// The adapter's process id (while it runs).
+    pub(crate) fn pid(&self) -> Option<u32> {
+        self._child.id()
+    }
+
     pub(crate) fn is_closed(&self) -> bool {
         self.pending.lock().expect("pending lock").is_none()
     }

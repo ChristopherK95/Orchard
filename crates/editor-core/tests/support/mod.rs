@@ -217,10 +217,59 @@ impl FakeAgent {
 }
 
 pub fn core_with(agent: &FakeAgent) -> Core {
+    Core::new(CoreConfig::new(agent.command()))
+}
+
+/// A memory reading tests set by hand.
+#[derive(Default)]
+pub struct FakeMemory(std::sync::Mutex<editor_core::MemorySample>);
+
+impl FakeMemory {
+    pub fn set(&self, sample: editor_core::MemorySample) {
+        *self.0.lock().unwrap() = sample;
+    }
+}
+
+impl editor_core::MemoryProbe for FakeMemory {
+    fn sample(&self, _adapter_pid: Option<u32>) -> editor_core::MemorySample {
+        *self.0.lock().unwrap()
+    }
+}
+
+/// A clock tests move by hand.
+pub struct FakeClock(std::sync::Mutex<std::time::Instant>);
+
+impl Default for FakeClock {
+    fn default() -> Self {
+        Self(std::sync::Mutex::new(std::time::Instant::now()))
+    }
+}
+
+impl FakeClock {
+    pub fn advance(&self, by: Duration) {
+        *self.0.lock().unwrap() += by;
+    }
+}
+
+impl editor_core::Clock for FakeClock {
+    fn now(&self) -> std::time::Instant {
+        *self.0.lock().unwrap()
+    }
+}
+
+/// A core whose memory reading and clock the test controls, with `settings` as its settings file.
+pub fn core_with_memory(
+    agent: &FakeAgent,
+    settings: &str,
+    memory: &std::sync::Arc<FakeMemory>,
+    clock: &std::sync::Arc<FakeClock>,
+) -> Core {
+    std::fs::write(agent.settings_path(), settings).expect("write settings");
     Core::new(CoreConfig {
-        adapter: agent.command(),
-        settings_path: None,
-        state_path: None,
+        settings_path: Some(agent.settings_path()),
+        memory_probe: Some(memory.clone()),
+        clock: Some(clock.clone()),
+        ..CoreConfig::new(agent.command())
     })
 }
 
@@ -228,9 +277,8 @@ pub fn core_with(agent: &FakeAgent) -> Core {
 /// is the editor after a restart.
 pub fn core_with_state(agent: &FakeAgent) -> Core {
     Core::new(CoreConfig {
-        adapter: agent.command(),
-        settings_path: None,
         state_path: Some(agent.state_path()),
+        ..CoreConfig::new(agent.command())
     })
 }
 
@@ -238,9 +286,8 @@ pub fn core_with_state(agent: &FakeAgent) -> Core {
 pub fn core_with_settings(agent: &FakeAgent, settings: &str) -> Core {
     std::fs::write(agent.settings_path(), settings).expect("write settings");
     Core::new(CoreConfig {
-        adapter: agent.command(),
         settings_path: Some(agent.settings_path()),
-        state_path: None,
+        ..CoreConfig::new(agent.command())
     })
 }
 

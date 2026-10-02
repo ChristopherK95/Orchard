@@ -87,6 +87,9 @@ struct Turn {
     /// Exit the process (after sending `chunks`) instead of finishing the turn.
     #[serde(default)]
     exit: bool,
+    /// Keep the turn going (Working) until the client sends `session/cancel` (or goes away).
+    #[serde(default)]
+    until_cancelled: bool,
 }
 
 #[derive(Deserialize)]
@@ -234,14 +237,7 @@ impl Agent {
                     self.modes()
                 }
                 "session/set_mode" => json!({}),
-                "session/close" => {
-                    let cwd = params["sessionId"]
-                        .as_str()
-                        .and_then(|id| self.cwds.get(id));
-                    let exists = cwd.is_some_and(|cwd| std::path::Path::new(cwd).exists());
-                    self.record(&json!({ "closedWhileCwdExists": exists }));
-                    json!({})
-                }
+                "session/close" => self.close(&params),
                 "session/prompt" => self.prompt(&params),
                 _ => {
                     if let Some(id) = id {
@@ -256,6 +252,15 @@ impl Agent {
                 send(json!({ "jsonrpc": "2.0", "id": id, "result": result }));
             }
         }
+    }
+
+    fn close(&mut self, params: &Value) -> Value {
+        let cwd = params["sessionId"]
+            .as_str()
+            .and_then(|id| self.cwds.get(id));
+        let exists = cwd.is_some_and(|cwd| std::path::Path::new(cwd).exists());
+        self.record(&json!({ "closedWhileCwdExists": exists }));
+        json!({})
     }
 
     /// The modes part of a `session/new` or `session/resume` result.
@@ -337,6 +342,10 @@ impl Agent {
         if turn.exit {
             std::process::exit(1);
         }
+        if turn.until_cancelled {
+            self.wait_for_cancel();
+            return json!({ "stopReason": "cancelled" });
+        }
         let reply: String = chunks.iter().chain(&turn.messages).cloned().collect();
         let prompt = params["prompt"][0]["text"].as_str().unwrap_or_default();
         let mut history = read_history();
@@ -387,6 +396,37 @@ impl Agent {
         request_id
     }
 
+    /// Waits for `session/cancel`, answering other sessions' quick requests meanwhile.
+    fn wait_for_cancel(&mut self) {
+        loop {
+            let Some(msg) = self.read() else {
+                std::process::exit(0) // the client went away
+            };
+            if msg["method"] == "session/cancel" {
+                return;
+            }
+            self.answer_quick(&msg);
+        }
+    }
+
+    /// While a turn blocks (on a permission answer, or until cancelled): answers another session's
+    /// quick request, and refuses anything else rather than leave it hanging.
+    fn answer_quick(&mut self, msg: &Value) {
+        let (Some(method), Some(id)) = (msg["method"].as_str(), msg.get("id")) else {
+            return;
+        };
+        match method {
+            "session/close" => {
+                let reply = self.close(&msg["params"]);
+                send(json!({ "jsonrpc": "2.0", "id": id, "result": reply }));
+            }
+            "session/set_mode" => send(json!({ "jsonrpc": "2.0", "id": id, "result": {} })),
+            _ => send(json!({ "jsonrpc": "2.0", "id": id, "error": {
+                "code": -32000, "message": format!("the fake agent is mid-turn and can't take {method}")
+            } })),
+        }
+    }
+
     /// Waits for every request's answer (in any order); returns the chosen option ids (or
     /// `"cancelled"`) in request order.
     fn await_answers(&mut self, request_ids: &[String]) -> Vec<String> {
@@ -396,6 +436,7 @@ impl Agent {
                 std::process::exit(0)
             }; // the client went away
             if msg.get("method").is_some() {
+                self.answer_quick(&msg);
                 continue;
             }
             if let Some(i) = request_ids.iter().position(|id| msg["id"] == json!(id)) {

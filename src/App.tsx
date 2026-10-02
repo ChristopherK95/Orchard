@@ -6,6 +6,7 @@ import {
   core,
   type LoadedSettings,
   type MissingPrerequisite,
+  type AutoSuspendReason,
   type PermissionMode,
   type RecentSession,
   type SessionId,
@@ -326,6 +327,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         setSessions(produce((all) => void delete all[id]));
         // Back to what's left of its Worktree, or to the main checkout if the Worktree's gone.
         if (activeId() === id && path) selectWorktree(worktrees().some((w) => w.path === path) ? path : props.workspace.root);
+      } else if (event.kind === "autoSuspended") {
+        setNotice(autoSuspendNotice(event.suspended));
       } else if (event.kind === "recentSessionsChanged") {
         setRecent(event.worktree, event.sessions);
       } else if (event.kind === "settingsChanged") {
@@ -545,6 +548,30 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       </Show>
     </div>
   );
+}
+
+const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+
+const andList = (names: string[]) =>
+  names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+
+/** The toast after Idle sessions were Suspended automatically (one check's, by reason). */
+function autoSuspendNotice(suspended: { session: SessionInfo; reason: AutoSuspendReason }[]): string {
+  const why = (reason: AutoSuspendReason) =>
+    reason.kind === "memoryLimit"
+      ? `to free memory: the Agents were using ${gb(reason.usedBytes)}, over the ${gb(reason.limitBytes)} limit`
+      : reason.kind === "lowMemory"
+        ? `because the computer is low on memory (${gb(reason.availableBytes)} free)`
+        : `after ${reason.minutes} minutes Idle`;
+  const byReason = new Map<string, { reason: AutoSuspendReason; names: string[] }>();
+  for (const { session, reason } of suspended) {
+    const key = JSON.stringify(reason);
+    const entry = byReason.get(key) ?? { reason, names: [] };
+    entry.names.push(session.name);
+    byReason.set(key, entry);
+  }
+  const parts = [...byReason.values()].map(({ reason, names }) => `${andList(names)} ${why(reason)}`);
+  return `Suspended ${parts.join("; and ")}. Sending a message resumes a session.`;
 }
 
 function RecentList(props: { sessions: RecentSession[]; onReopen: (session: RecentSession) => void }) {

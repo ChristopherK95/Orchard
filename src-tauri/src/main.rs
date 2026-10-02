@@ -312,7 +312,6 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let core = Core::new(CoreConfig {
-                adapter: adapter_command(),
                 settings_path: app
                     .path()
                     .app_config_dir()
@@ -325,6 +324,7 @@ fn main() {
                     .ok()
                     .filter(|_| !bench_mode())
                     .map(|dir| dir.join("state.json")),
+                ..CoreConfig::new(adapter_command())
             });
             let mut events = core.subscribe();
             let handle = app.handle().clone();

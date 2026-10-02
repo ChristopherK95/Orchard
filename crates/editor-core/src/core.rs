@@ -12,6 +12,9 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::acp::{AcpError, AdapterCommand, Connection, Incoming, Responder, PROTOCOL_VERSION};
 use crate::app_state::{self, AppState, SavedSession, WorkspaceState};
+use crate::auto_suspend::{
+    self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, SystemClock, SystemProbe,
+};
 use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 use crate::git;
 use crate::permissions;
@@ -96,6 +99,38 @@ pub struct CoreConfig {
     pub settings_path: Option<PathBuf>,
     /// Where open Tabs and Recent sessions are kept between runs (ticket 11); `None` keeps nothing.
     pub state_path: Option<PathBuf>,
+    /// How memory is read for auto-suspend (ticket 12); `None` reads the OS's.
+    pub memory_probe: Option<Arc<dyn MemoryProbe>>,
+    /// The clock Idle time is measured by; `None` is the real one.
+    pub clock: Option<Arc<dyn Clock>>,
+}
+
+impl CoreConfig {
+    /// A config that runs `adapter`, with no settings file or saved state, on the real OS.
+    pub fn new(adapter: AdapterCommand) -> Self {
+        Self {
+            adapter,
+            settings_path: None,
+            state_path: None,
+            memory_probe: None,
+            clock: None,
+        }
+    }
+}
+
+/// How often the memory monitor checks the Agents' memory and Idle times.
+const MONITOR_INTERVAL: Duration = Duration::from_secs(10);
+
+/// After auto-suspending, memory isn't acted on for this long: the reading may still include the
+/// processes being closed.
+const AUTO_SUSPEND_COOLDOWN: Duration = Duration::from_secs(20);
+
+/// A session auto-suspend stopped, and why.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoSuspension {
+    pub session: SessionInfo,
+    pub reason: AutoSuspendReason,
 }
 
 /// A closed Tab in a Worktree's Recent sessions.
@@ -213,6 +248,11 @@ pub enum CoreEvent {
     SessionClosed {
         session_id: SessionId,
     },
+    /// Idle sessions were Suspended to free memory or because they'd been Idle a long time (all
+    /// of one check's, together).
+    AutoSuspended {
+        suspended: Vec<AutoSuspension>,
+    },
     /// A Worktree's Recent sessions changed (a Tab was closed or reopened).
     RecentSessionsChanged {
         worktree: PathBuf,
@@ -275,6 +315,12 @@ struct Inner {
     state_writable: bool,
     /// Serialises saves, so an older snapshot can't be written over a newer one.
     persist_lock: Mutex<()>,
+    memory_probe: Arc<dyn MemoryProbe>,
+    clock: Arc<dyn Clock>,
+    /// The memory monitor runs once a Workspace is open.
+    monitoring: AtomicBool,
+    /// When auto-suspend last stopped something (by `clock`), for its cooldown.
+    last_auto_suspend: Mutex<Option<std::time::Instant>>,
 }
 
 #[derive(Default)]
@@ -355,6 +401,9 @@ struct Session {
     replaying: AtomicBool,
     /// Woken whenever a suspend, resume or load settles, for whoever waits on that.
     settled: tokio::sync::Notify,
+    /// Since when it's been Idle (by `clock`), for auto-suspend's longest-Idle-first.
+    idle_since: Mutex<Option<std::time::Instant>>,
+    clock: Arc<dyn Clock>,
     /// Every tool call the Agent announced, merged with its updates, keyed by ACP tool call id.
     tool_calls: Mutex<HashMap<String, KnownToolCall>>,
     control: Mutex<Control>,
@@ -386,6 +435,8 @@ struct Control {
     loaded: bool,
     /// A restored Tab's conversation is being loaded to show it (it stays Suspended).
     loading: bool,
+    /// Auto-suspend couldn't stop it; it isn't tried again until its next turn or resume.
+    auto_suspend_failed: bool,
     /// Loading it to show it failed and the Tab says so (once).
     load_failed: bool,
     /// Permission questions the Agent is waiting on, oldest first.
@@ -428,6 +479,14 @@ struct OpenQuestion {
 impl Core {
     pub fn new(config: CoreConfig) -> Self {
         let (events, _) = broadcast::channel(1024);
+        let memory_probe: Arc<dyn MemoryProbe> = config
+            .memory_probe
+            .clone()
+            .unwrap_or_else(|| Arc::new(SystemProbe::default()));
+        let clock: Arc<dyn Clock> = config
+            .clock
+            .clone()
+            .unwrap_or_else(|| Arc::new(SystemClock));
         // A state file that's there but can't be read is never saved over (it would lose it).
         let (saved_state, state_writable) = match config.state_path.as_deref().map(app_state::load)
         {
@@ -458,6 +517,10 @@ impl Core {
             app_state: Mutex::new(saved_state),
             state_writable,
             persist_lock: Mutex::new(()),
+            memory_probe,
+            clock,
+            monitoring: AtomicBool::new(false),
+            last_auto_suspend: Mutex::new(None),
         });
         if let Some(path) = &inner.config.settings_path {
             let weak = Arc::downgrade(&inner);
@@ -690,9 +753,142 @@ impl Core {
         }
         self.inner.restore(&workspace.root);
         self.inner.watch_worktrees(&workspace.root).await;
+        self.start_monitor();
         Ok(workspace)
     }
 
+    /// Checks the Agents' memory and Idle times every `MONITOR_INTERVAL` from now on.
+    fn start_monitor(&self) {
+        if self.inner.monitoring.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let weak = Arc::downgrade(&self.inner);
+        tokio::spawn(async move {
+            let mut ticks = tokio::time::interval(MONITOR_INTERVAL);
+            ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            ticks.tick().await; // (the first tick is immediate)
+            loop {
+                ticks.tick().await;
+                let Some(inner) = weak.upgrade() else {
+                    return; // the core is gone
+                };
+                Core { inner }.check_auto_suspend().await;
+            }
+        });
+    }
+
+    /// One tick of the memory monitor (run every 10 s; public so a check can be run on demand):
+    /// suspends Idle sessions as the settings say, longest-Idle first while the `claude` processes
+    /// are over the memory limit or the OS is low on memory, and any Idle past the idle
+    /// auto-suspend time. Working and Needs you sessions are never touched. Announces what it did
+    /// with one `AutoSuspended`.
+    pub async fn check_auto_suspend(&self) {
+        let (candidates, running) = {
+            let state = self.inner.state.lock().expect("state lock");
+            let mut candidates = vec![];
+            let mut running = 0;
+            for session in state.sessions.values() {
+                let info = session.info.lock().expect("info lock");
+                if matches!(
+                    info.state,
+                    SessionState::Idle | SessionState::Working | SessionState::NeedsYou
+                ) {
+                    running += 1;
+                }
+                let blocked = session
+                    .control
+                    .lock()
+                    .expect("control lock")
+                    .auto_suspend_failed;
+                let idle_since = *session.idle_since.lock().expect("idle lock");
+                if let (SessionState::Idle, Some(idle_since), false) =
+                    (info.state, idle_since, blocked)
+                {
+                    candidates.push(Candidate {
+                        id: info.id,
+                        idle_since,
+                    });
+                }
+            }
+            (candidates, running)
+        };
+        if candidates.is_empty() {
+            return;
+        }
+        // Not while the adapter is starting (that can take a while): next time.
+        let Ok(adapter) = self.inner.adapter.try_lock() else {
+            return;
+        };
+        let adapter_pid = adapter
+            .as_ref()
+            .filter(|c| !c.is_closed())
+            .and_then(|c| c.pid());
+        drop(adapter);
+        let probe = self.inner.memory_probe.clone();
+        let Ok(sample) = tokio::task::spawn_blocking(move || probe.sample(adapter_pid)).await
+        else {
+            return;
+        };
+        let now = self.inner.clock.now();
+        // Just after suspending, the reading may still include the processes being closed.
+        let cooling_down = self
+            .inner
+            .last_auto_suspend
+            .lock()
+            .expect("auto-suspend lock")
+            .is_some_and(|at| now.saturating_duration_since(at) < AUTO_SUSPEND_COOLDOWN);
+        let agents = self.settings().settings.agents;
+        let limits = Limits {
+            // 0 means no limit, as does an idle time of 0 (rather than suspending everything).
+            memory_limit_bytes: (agents.memory_limit_mb > 0 && !cooling_down)
+                .then(|| agents.memory_limit_mb.saturating_mul(1024 * 1024)),
+            low_memory: !cooling_down,
+            idle_after: (agents.idle_suspend && agents.idle_suspend_minutes > 0)
+                .then(|| Duration::from_secs(agents.idle_suspend_minutes.saturating_mul(60))),
+        };
+        let chosen = auto_suspend::choose(&candidates, running, sample, limits, now);
+        let mut suspended = vec![];
+        for (id, reason) in chosen {
+            let idle_since = candidates.iter().find(|c| c.id == id).map(|c| c.idle_since);
+            if let Some(session) = self.auto_suspend(id, idle_since).await {
+                suspended.push(AutoSuspension { session, reason });
+            }
+        }
+        if !suspended.is_empty() {
+            *self
+                .inner
+                .last_auto_suspend
+                .lock()
+                .expect("auto-suspend lock") = Some(now);
+            let _ = self
+                .inner
+                .events
+                .send(CoreEvent::AutoSuspended { suspended });
+        }
+    }
+
+    /// Suspends a session chosen while Idle since `idle_since`, if it still is (not used since);
+    /// its info if it did. A session whose Agent wouldn't stop isn't tried again until its next
+    /// turn, so a failing suspend can't repeat every tick.
+    async fn auto_suspend(
+        &self,
+        id: SessionId,
+        idle_since: Option<std::time::Instant>,
+    ) -> Option<SessionInfo> {
+        let session = self.session(id).ok()?;
+        if *session.idle_since.lock().expect("idle lock") != idle_since {
+            return None;
+        }
+        let stopped = self.suspend_session(id).await;
+        let info = session.info.lock().expect("info lock").clone();
+        if info.state == SessionState::Suspended {
+            return Some(info);
+        }
+        if stopped.is_err() {
+            session.update(|control| control.auto_suspend_failed = true);
+        }
+        None
+    }
     /// The Workspace's Worktrees, main checkout first.
     pub fn worktrees(&self) -> Vec<WorktreeInfo> {
         self.inner
@@ -1273,6 +1469,7 @@ impl Core {
             }
         })?;
         let start_turn = |control: &mut Control| {
+            control.auto_suspend_failed = false;
             session.record(|t| {
                 t.push(TranscriptItem::User {
                     text: text.to_owned(),
@@ -1617,6 +1814,8 @@ impl Inner {
             visible: AtomicBool::new(false),
             replaying: AtomicBool::new(false),
             settled: tokio::sync::Notify::new(),
+            idle_since: Mutex::new((!stopped).then(|| self.clock.now())),
+            clock: self.clock.clone(),
             tool_calls: Mutex::default(),
             control: Mutex::new(Control {
                 suspended: stopped,
@@ -1794,6 +1993,7 @@ impl Inner {
                     *session.connection.lock().expect("connection lock") = Some(connection);
                     control.suspended = false;
                     control.exited = false;
+                    control.auto_suspend_failed = false;
                     then(control);
                     Ok(())
                 }
@@ -2279,6 +2479,7 @@ impl Session {
     /// now imply. Lock order: control, then transcript, then info.
     fn update<R>(&self, change: impl FnOnce(&mut Control) -> R) -> R {
         let mut control = self.control.lock().expect("control lock");
+        let suspending_before = control.suspending;
         let result = change(&mut control);
         if !control.in_transition() {
             self.settled.notify_waiters();
@@ -2287,6 +2488,12 @@ impl Session {
         let mut info = self.info.lock().expect("info lock");
         if info.state != state {
             info.state = state;
+            let mut idle_since = self.idle_since.lock().expect("idle lock");
+            if !(control.suspending || suspending_before) {
+                *idle_since = (state == SessionState::Idle).then(|| self.clock.now());
+            } else if state == SessionState::Suspended {
+                *idle_since = None;
+            } // (a suspend in progress, or one that failed, leaves its Idle time as it was)
             let _ = self.events.send(CoreEvent::SessionStateChanged {
                 session_id: info.id,
                 state,
