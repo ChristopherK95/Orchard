@@ -3,7 +3,10 @@
 // Worktree's files changed.
 import { createEffect, createResource, createSignal, Index, on, Show } from "solid-js";
 import { core, type DirEntry } from "./core";
-import { ChevronDown, ChevronRight, FileIcon, Folder as FolderIcon, FolderOpen, GitBranch, X } from "./icons";
+import { ChevronDown, ChevronRight, FileIcon, Folder as FolderIcon, FolderOpen, GitBranch, Pin, PinOff, X } from "./icons";
+
+/** The Columns view's "Pin to this Worktree": the drawer stays on one Worktree instead of following focus. */
+export type DrawerPin = { pinned: boolean; onToggle: () => void };
 
 /** The drawer's head, shared by its two tabs: whose files these are, Files / Git, and close. */
 export function DrawerHead(props: {
@@ -12,6 +15,7 @@ export function DrawerHead(props: {
   colour: string;
   tab: "files" | "git";
   onTab: (tab: "files" | "git") => void;
+  pin?: DrawerPin;
   onClose: () => void;
 }) {
   return (
@@ -26,6 +30,19 @@ export function DrawerHead(props: {
           Git
         </button>
       </div>
+      <Show when={props.pin}>
+        {(pin) => (
+          <button
+            class="ghost icon"
+            classList={{ on: pin().pinned }}
+            onClick={() => pin().onToggle()}
+            title={pin().pinned ? "Pinned to this Worktree: follow the focused column again" : "Pin to this Worktree (it follows the focused column)"}
+            aria-label={pin().pinned ? "Follow the focused column" : "Pin to this Worktree"}
+          >
+            {pin().pinned ? <Pin /> : <PinOff />}
+          </button>
+        )}
+      </Show>
       <button class="ghost icon" onClick={() => props.onClose()} title="Close the drawer" aria-label="Close the drawer">
         <X />
       </button>
@@ -43,6 +60,7 @@ export function FilesDrawer(props: {
   onOpenFile: (path: string) => void;
   label: string;
   colour: string;
+  pin?: DrawerPin;
   onGit: () => void;
   onClose: () => void;
 }) {
@@ -73,7 +91,7 @@ export function FilesDrawer(props: {
 
   return (
     <aside class="files-drawer">
-      <DrawerHead label={props.label} colour={props.colour} tab="files" onTab={(tab) => tab === "git" && props.onGit()} onClose={props.onClose} />
+      <DrawerHead label={props.label} colour={props.colour} tab="files" onTab={(tab) => tab === "git" && props.onGit()} pin={props.pin} onClose={props.onClose} />
       <div class="drawer-tree">
         <Folder worktree={props.worktree} dir="" depth={0} open={open()} revision={props.revision} reveal={props.reveal?.path ?? null} onToggle={toggle} onOpenFile={props.onOpenFile} />
       </div>

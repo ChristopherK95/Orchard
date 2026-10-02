@@ -45,7 +45,10 @@ export function PermissionCard(props: {
   sessionId: SessionId;
   request: PermissionRequest;
   outcome: PermissionOutcome | null;
+  /** Whether Y / N answer this card's transcript (in the Columns view: only the focused column's). */
+  keys?: () => boolean;
 }) {
+  const keys = () => props.keys?.() ?? true;
   const [error, setError] = createSignal("");
   const [sending, setSending] = createSignal(false);
   const pending = () => props.outcome === null;
@@ -66,7 +69,7 @@ export function PermissionCard(props: {
   };
 
   // Bring the question into view (and move focus off the disabled composer).
-  onMount(() => pending() && card.focus());
+  onMount(() => pending() && keys() && card.focus());
 
   const chosen = () => {
     const outcome = props.outcome;
@@ -144,16 +147,16 @@ export function PermissionCard(props: {
             {(option) => (
               <button class={option.kind === "allowOnce" ? "primary" : ""} disabled={sending()} onClick={() => void answer(option)}>
                 {option.name}
-                <Show when={option === yesOption(props.request)}>
+                <Show when={keys() && option === yesOption(props.request)}>
                   <kbd>Y</kbd>
                 </Show>
-                <Show when={option === noOption(props.request)}>
+                <Show when={keys() && option === noOption(props.request)}>
                   <kbd>N</kbd>
                 </Show>
               </button>
             )}
           </For>
-          <span class="hint">Y / N answer the oldest open card</span>
+          <span class="hint">{keys() ? "Y / N answer the oldest open card" : "focus this column to answer with Y / N"}</span>
         </div>
       </Show>
       <Show when={error()}>

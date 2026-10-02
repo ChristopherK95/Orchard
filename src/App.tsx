@@ -1,19 +1,17 @@
 // Walking skeleton view (ticket 01): prerequisite gate → open a Workspace → one Tab with a
 // streaming transcript and a composer. It only renders core state and sends commands (ADR 0003).
-import { batch, createEffect, createSignal, For, type JSX, lazy, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
-import { createStore, produce, reconcile } from "solid-js/store";
+import { batch, createEffect, createSignal, For, lazy, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
+import { createStore, produce } from "solid-js/store";
 import {
   core,
   type LoadedSettings,
   type MissingPrerequisite,
   type AutoSuspendReason,
-  type PermissionMode,
   type RecentSession,
   type SessionId,
   type SessionInfo,
   type SessionState,
-  type TranscriptDelta,
-  type TranscriptItem,
+  TABS_SLOT,
   type WorkspaceInfo,
   type WorktreeInfo,
 } from "./core";
@@ -22,7 +20,6 @@ import { answerByKey } from "./PermissionCard";
 import { NewWorktreeDialog } from "./NewWorktreeDialog";
 import { RemoveWorktreeDialog } from "./RemoveWorktreeDialog";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
-import { EditNotes } from "./EditNotes";
 import { FilesDrawer } from "./FilesDrawer";
 import { GitDrawer } from "./GitDrawer";
 import type { OpenRequest } from "./ManualEditor";
@@ -34,31 +31,10 @@ import { ContextBar, removedWorktree, worktreeColour, worktreeLabel, WorktreeRow
 import { notify, onNotificationClicked } from "./notify";
 import { keepOutput, Setup, type SetupView } from "./Setup";
 import { StateDot } from "./StateDot";
-import {
-  BookOpen,
-  ChevronDown,
-  CirclePlay,
-  GitBranch,
-  Info,
-  Loader,
-  PanelRight,
-  Plus,
-  Search,
-  Settings,
-  ShieldQuestion,
-  Sparkles,
-  TriangleAlert,
-  X,
-  Zap,
-} from "./icons";
-
-const STATE_LABEL: Record<SessionState, string> = {
-  working: "Working",
-  needsYou: "Needs you",
-  idle: "Idle",
-  suspended: "Suspended",
-  exited: "Exited",
-};
+import { Banner, Composer, RecentList, STATE_LABEL } from "./Chat";
+import { Columns, COLUMNS_MIN_WIDTH } from "./Columns";
+import { createTabView, type TabView } from "./TabView";
+import { ChevronDown, GitBranch, Loader, PanelRight, Plus, Search, Settings, Sparkles, X } from "./icons";
 
 export function App() {
   const [problems, setProblems] = createSignal<MissingPrerequisite[] | null>(null);
@@ -166,27 +142,67 @@ function OpenWorkspace(props: { onOpened: (w: WorkspaceInfo) => void }) {
 }
 
 function WorkspaceView(props: { workspace: WorkspaceInfo }) {
-  // Sessions as the core reports them; one of them is the visible Tab.
+  // Sessions as the core reports them; one of them is the Tabs view's visible Tab.
   const [sessions, setSessions] = createStore<Record<SessionId, SessionInfo>>({});
   const [order, setOrder] = createSignal<SessionId[]>([]);
-  const [activeId, setActiveId] = createSignal<SessionId | null>(null);
+  /** The Tabs view's visible Tab and its transcript (each column has its own; see Columns.tsx). */
+  const tabs = createTabView(TABS_SLOT);
+  const activeId = tabs.shown;
   const session = () => {
     const id = activeId();
     return id === null ? undefined : sessions[id];
   };
-  // The visible Tab's transcript from `start` on (the core sends the latest page first).
-  const [items, setItems] = createStore<TranscriptItem[]>([]);
-  const [start, setStart] = createSignal(0);
   const [error, setError] = createSignal("");
 
   // Worktrees as the core reports them, the one whose sessions are shown, and the session last
   // used in each (so switching back returns to it).
   const [worktrees, setWorktrees] = createSignal<WorktreeInfo[]>([]);
+  // In the Columns view the active Worktree is the focused column's.
   const [activeWorktree, setActiveWorktree] = createSignal(props.workspace.root);
-  const lastSessionIn = new Map<string, SessionId>();
+  const [lastSessionIn, setLastSessionIn] = createStore<Record<string, SessionId>>({});
   const [creatingWorktree, setCreatingWorktree] = createSignal(false);
-  /** Tabs, or the Board of every session by state (the Tabs stay as they are underneath). */
-  const [view, setView] = createSignal<"tabs" | "board">("tabs");
+  /** Tabs or Columns, with the Board of every session by state over either (they stay as they are
+   *  underneath). */
+  const [mainView, setMainView] = createSignal<"tabs" | "columns">("tabs");
+  const [boardOpen, setBoardOpen] = createSignal(false);
+  const view = () => (boardOpen() ? "board" : mainView());
+  /** The Worktrees pinned as columns, and those in Worktree row order. */
+  const [pinned, setPinnedList] = createSignal<string[]>([]);
+  const pinnedRow = () => rowWorktrees().filter((w) => pinned().includes(w.path));
+  const togglePin = (path: string) =>
+    core
+      .setPinned(path, !pinned().includes(path))
+      .then(setPinnedList)
+      .catch((err) => setError(String(err)));
+  /** The Columns view is offered from COLUMNS_MIN_WIDTH up. */
+  const [wide, setWide] = createSignal(window.innerWidth >= COLUMNS_MIN_WIDTH);
+  /** Each column's view slot, by Worktree (Y / N answer the focused one's card). */
+  const columnViews = new Map<string, TabView>();
+  /** The session a column shows: its last-used one, else its first. */
+  const shownIn = (path: string) => {
+    const here = sessionsIn(path);
+    const last = lastSessionIn[path];
+    return here.some((s) => s.id === last) ? last : here[0]?.id;
+  };
+  /** Whether a session's transcript is on screen (so it shouldn't notify). */
+  const onScreen = (id: SessionId) =>
+    mainView() === "columns" ? pinnedRow().some((w) => shownIn(w.path) === id) : id === activeId();
+  /** Switches between the Tabs and Columns views (closing the Board). */
+  const chooseView = (next: "tabs" | "columns") => {
+    setBoardOpen(false);
+    if (next === mainView()) return;
+    setMainView(next);
+    if (next === "columns") {
+      tabs.hide(); // (its columns stream instead)
+      setRecentOpen(false);
+      const focus = pinnedRow().find((w) => w.path === activeWorktree()) ?? pinnedRow()[0];
+      if (focus) setActiveWorktree(focus.path);
+    } else selectWorktree(activeWorktree());
+  };
+  /** The drawer can be parked on one Worktree in the Columns view; otherwise it follows focus. */
+  const [drawerPin, setDrawerPin] = createSignal<string | null>(null);
+  const drawerWorktree = () => (mainView() === "columns" && drawerPin()) || activeWorktree();
+  const drawerTab = () => rowWorktrees().find((w) => w.path === drawerWorktree());
   /** The Board's Worktree filter (null: all), kept between visits. */
   const [boardOnly, setBoardOnly] = createSignal<string | null>(null);
   let titlebar!: HTMLElement;
@@ -223,7 +239,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   /** The drawer the title bar's button opens: the one last shown. */
   let lastDrawer: "files" | "git" = "files";
   const toggleDrawer = (which: "files" | "git") => {
-    setView("tabs"); // (the drawers are the Tabs view's)
+    setBoardOpen(false); // (the drawers are beside the Tabs or columns)
     lastDrawer = which;
     setDrawer((now) => (now === which ? null : which));
   };
@@ -238,7 +254,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   const [editorRequests, setEditorRequests] = createSignal<{ open: OpenRequest; n: number }[]>([]);
   let requested = 0;
   const openInEditor = (open: OpenRequest) => {
-    setView("tabs"); // (the Manual editor is the Tabs view's)
+    setBoardOpen(false); // (the Manual editor is beside the Tabs or columns)
     setEditorOpen(true);
     setEditorRequests((all) => [...all.slice(-20), { open, n: ++requested }]);
   };
@@ -250,11 +266,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       .catch((err) => setError(String(err)));
   /** A file of the active Worktree, by its `/`-separated relative path (joined the way the
    *  Worktree's own path is written, which matters for `\\?\UNC\…` paths). */
-  const worktreePath = (rel: string) => {
-    const root = activeWorktree();
+  const worktreePath = (rel: string, root = activeWorktree()) => {
     return root.includes("\\") ? `${root.replace(/\\$/, "")}\\${rel.replaceAll("/", "\\")}` : `${root}/${rel}`;
   };
-  const openWorktreeFile = (rel: string) => openInEditor({ kind: "file", path: worktreePath(rel) });
+  const openWorktreeFile = (rel: string, root = activeWorktree()) => openInEditor({ kind: "file", path: worktreePath(rel, root) });
   const runCommand = (command: PaletteCommand) =>
     command.kind === "newSessionHere" ? void newSession() : setCreatingWorktree(true);
   /** The Worktree whose removal dialog is open. */
@@ -284,42 +299,21 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   };
   const worktree = () => rowWorktrees().find((w) => w.path === activeWorktree());
 
-  // Each show() gets a token; batches from an earlier stream (even of the same session) are dropped.
-  let currentShow = 0;
-  const applyFor = (token: number) => (batch: TranscriptDelta[]) => {
-    if (token !== currentShow) return;
-    for (const delta of batch) {
-      if (delta.kind === "reset") {
-        setStart(delta.start);
-        setItems(reconcile(delta.items));
-        continue;
-      }
-      const at = delta.index - start();
-      if (at < 0) continue; // a change to an item before the loaded page
-      if (delta.kind === "itemAdded" || delta.kind === "itemUpdated") setItems(at, delta.item);
-      else
-        setItems(
-          produce((all) => {
-            const item = all[at];
-            if (item?.kind === "agent") item.text += delta.text;
-          }),
-        );
-    }
-  };
-
+  /** Shows a session: in its column if the Columns view is up and its Worktree is pinned, else as
+   *  the Tabs view's visible Tab (a notification, a reopened Tab, the palette, the Board). */
   const show = async (id: SessionId) => {
-    setView("tabs"); // (a notification, a reopened Tab, the palette: shown in the Tabs view)
-    const token = ++currentShow;
     const path = sessions[id]?.worktree;
-    if (path) {
+    if (path) setLastSessionIn(path, id);
+    if (path && mainView() === "columns" && pinned().includes(path)) {
+      setBoardOpen(false);
       setActiveWorktree(path);
-      lastSessionIn.set(path, id);
+      return;
     }
-    setActiveId(id);
-    setItems([]);
-    setStart(0);
+    if (mainView() === "columns") setMainView("tabs"); // (its columns go, and stop streaming)
+    setBoardOpen(false);
+    if (path) setActiveWorktree(path);
     try {
-      await core.showSession(id, applyFor(token));
+      await tabs.show(id);
     } catch (err) {
       setError(String(err));
     }
@@ -328,15 +322,17 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   /** Shows a Worktree: its last-used session, else its first, else an empty Tab row. */
   const selectWorktree = (path: string) => {
     setRecentOpen(false);
-    const here = sessionsIn(path);
-    const last = lastSessionIn.get(path);
-    const id = here.some((s) => s.id === last) ? last : here[0]?.id;
+    if (mainView() === "columns" && pinned().includes(path)) return void setActiveWorktree(path);
+    const id = shownIn(path);
     if (id !== undefined) return void show(id);
-    ++currentShow; // nothing should stream into an empty Worktree's view
+    if (mainView() === "columns") setMainView("tabs");
     setActiveWorktree(path);
-    setActiveId(null);
-    setItems([]);
-    void core.hideTabs();
+    tabs.hide(); // nothing should stream into an empty Worktree's view
+  };
+  /** A Worktree tab clicked: in the Columns view it focuses its column (pinning it first). */
+  const onWorktreeTab = (path: string) => {
+    if (mainView() !== "columns" || pinned().includes(path)) return selectWorktree(path);
+    void togglePin(path).then(() => setActiveWorktree(path));
   };
 
   /** Brings a closed session back in a new Tab and shows it. */
@@ -381,6 +377,17 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       openInEditor({ kind: "file", path });
       await new Promise((resolve) => setTimeout(resolve, 1500)); // (opened, grammar loaded)
     },
+    newWorktree: async (name) => (await core.createWorktree({ kind: "newBranch", name, startPoint: null })).worktree.path,
+    newSessionIn: async (worktree) => {
+      const id = await newSession(worktree);
+      if (id === undefined) throw new Error(error());
+      return id;
+    },
+    showColumns: async (paths) => {
+      for (const path of [props.workspace.root, ...paths]) if (!pinned().includes(path)) setPinnedList(await core.setPinned(path, true));
+      chooseView("columns");
+      await new Promise((resolve) => setTimeout(resolve, 1500)); // (each column shown and streaming)
+    },
     turn: (id, text) =>
       new Promise((resolve, reject) => {
         turnWaiters.set(id, { sawWorking: false, resolve, reject });
@@ -400,36 +407,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     if (state !== "working") turnWaiters.delete(id);
   };
 
-  /** Prepends the page before the loaded items; returns how many items were added. */
-  let loadingEarlier = false;
-  const loadEarlier = async (): Promise<number> => {
-    const id = activeId();
-    const before = start();
-    if (id === null || before === 0 || loadingEarlier) return 0;
-    loadingEarlier = true;
-    const token = currentShow;
-    try {
-      const page = await core.transcriptPageBefore(id, before);
-      // Only prepend if nothing moved underneath us (another Tab shown, or a Reset).
-      if (token !== currentShow || start() !== before) return 0;
-      // Items and start change together, so row keys (start + index) never point at the wrong item.
-      batch(() => {
-        setItems((current) => [...page.items, ...current]);
-        setStart(page.start);
-      });
-      return page.items.length;
-    } finally {
-      loadingEarlier = false;
-    }
-  };
-
   // A session you're not looking at (another Tab is visible, or the window is in the background)
   // raises an OS notification when it needs you (spec story 25).
   const onStateChanged = (id: SessionId, state: SessionState) => {
     const { name, state: previous } = sessions[id]; // read before the store updates
     setSessions(id, "state", state);
     onBenchState(id, state);
-    const unseen = id !== activeId() || !document.hasFocus();
+    const unseen = !onScreen(id) || boardOpen() || !document.hasFocus();
     if (!unseen) return;
     if (state === "needsYou") void notify(id, `${name} needs you`, "The Agent is waiting for your answer.");
     else if (settings()?.settings.notifications.turnFinished && previous === "working" && state === "idle")
@@ -472,7 +456,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         const { worktree, commands, status } = event;
         updateSetup(worktree, (s) => Object.assign(s, { commands, status }));
         // Setup finished while you watched it: on to its session.
-        if (status.kind === "done" && activeWorktree() === worktree && activeId() === null) void show(status.sessionId);
+        if (status.kind === "done" && mainView() === "tabs" && activeWorktree() === worktree && activeId() === null) void show(status.sessionId);
       } else if (event.kind === "setupOutput") {
         const { text } = event;
         updateSetup(event.worktree, (s) => (s.output = keepOutput(s.output, text)));
@@ -495,7 +479,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     });
     onCleanup(unlisten);
     // Clicking a notification opens the session it was about.
-    const unlistenClicks = await onNotificationClicked((id) => sessions[id] && id !== activeId() && void show(id));
+    const unlistenClicks = await onNotificationClicked((id) => sessions[id] && (boardOpen() || !onScreen(id)) && void show(id));
     onCleanup(unlistenClicks);
     // Y/N answer the oldest open permission card anywhere in the Tab (outside text fields).
     const onKey = (e: KeyboardEvent) => {
@@ -523,19 +507,34 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       // (Ctrl+B is the editor's own when it takes it.)
       if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "b" && !e.defaultPrevented) {
         e.preventDefault();
-        if (!e.repeat) setView((now) => (now === "board" ? "tabs" : "board"));
+        if (!e.repeat) setBoardOpen((open) => !open);
         return;
       }
-      if (view() === "board") {
-        if (e.key === "Escape") setView("tabs");
+      if (boardOpen()) {
+        if (e.key === "Escape") setBoardOpen(false);
         return; // (Y/N answer the Tab's card, which isn't showing)
       }
       if (e.key === "Escape") setRecentOpen(false);
-      const s = session();
-      if (s?.state === "needsYou" && answerByKey(e, s.id, items)) e.preventDefault();
+      // Alt+arrows: ←/→ the column on the left / right (Columns view), ↑/↓ the previous / next session.
+      if (e.altKey && !e.ctrlKey && !e.shiftKey && e.key.startsWith("Arrow") && !e.defaultPrevented) {
+        e.preventDefault();
+        return void altArrow(e.key);
+      }
+      // Y/N answer the oldest open card of the Tab on screen (in the Columns view: the focused column's).
+      const shown = mainView() === "columns" ? columnViews.get(activeWorktree()) : tabs;
+      const id = shown?.shown();
+      const s = id === null || id === undefined ? undefined : sessions[id];
+      if (s?.state === "needsYou" && shown && answerByKey(e, s.id, shown.items)) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     onCleanup(() => window.removeEventListener("keydown", onKey));
+    // Narrower than the Columns view allows: back to the Tabs.
+    const onResize = () => {
+      setWide(window.innerWidth >= COLUMNS_MIN_WIDTH);
+      if (!wide() && mainView() === "columns") chooseView("tabs");
+    };
+    window.addEventListener("resize", onResize);
+    onCleanup(() => window.removeEventListener("resize", onResize));
     // The Recent menu closes on a click anywhere else.
     const onClick = (e: MouseEvent) => !(e.target as Element | null)?.closest?.(".recent-menu, .menu") && setRecentOpen(false);
     window.addEventListener("click", onClick);
@@ -551,6 +550,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     for (const setup of await core.setups()) if (!setups[setup.worktree]) setSetups(setup.worktree, setup);
     const snapshot = await core.worktrees();
     if (!sawWorktreesEvent) setWorktrees(snapshot);
+    setPinnedList(await core.pinnedWorktrees());
     // The Tabs open when the editor last closed come back (Suspended until used).
     const restored = (await core.sessions()).filter((s) => !sessions[s.id]);
     batch(() => {
@@ -564,6 +564,30 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     const first = await newSession();
     if (first !== undefined && (await core.benchMode())) void runBenchmark(benchDriver, first).catch((err) => setError(`Benchmark failed: ${err}`));
   });
+
+  /** Alt+←/→ move focus between columns; Alt+↑/↓ show the previous / next session of the focused
+   *  column (or the Tabs view's Worktree). */
+  const altArrow = (key: string) => {
+    const path = activeWorktree();
+    if (key === "ArrowLeft" || key === "ArrowRight") {
+      if (mainView() !== "columns") return;
+      const row = pinnedRow();
+      const at = row.findIndex((w) => w.path === path);
+      const next = row[at + (key === "ArrowLeft" ? -1 : 1)];
+      if (next) setActiveWorktree(next.path);
+      return;
+    }
+    const here = sessionsIn(path);
+    const at = here.findIndex((s) => s.id === (mainView() === "columns" ? shownIn(path) : activeId()));
+    const next = here[at + (key === "ArrowUp" ? -1 : 1)];
+    if (next) void show(next.id);
+  };
+
+  /** The drawer head's "Pin to this Worktree" (Columns view only). */
+  const drawerPinControl = () =>
+    mainView() === "columns"
+      ? { pinned: drawerPin() !== null, onToggle: () => setDrawerPin((now) => (now === null ? activeWorktree() : null)) }
+      : undefined;
 
   const sharing = () => {
     const s = session();
@@ -579,15 +603,23 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         </span>
         <span class="grow" />
         <div class="segmented">
-          <button classList={{ on: view() === "tabs" }} onClick={() => setView("tabs")} title="One session at a time (Esc)">
+          <button classList={{ on: view() === "tabs" }} onClick={() => chooseView("tabs")} title="One session at a time">
             Tabs
           </button>
-          <button classList={{ on: view() === "board" }} onClick={() => setView("board")} title="Every session by state (Ctrl+B)">
+          <button
+            classList={{ on: view() === "columns" }}
+            onClick={() => chooseView("columns")}
+            disabled={!wide()}
+            title={wide() ? "A column per pinned Worktree, side by side (Alt+←/→ move between them)" : "Columns needs a window at least 1 600 px wide"}
+          >
+            Columns
+          </button>
+          <button classList={{ on: view() === "board" }} onClick={() => setBoardOpen(true)} title="Every session by state (Ctrl+B)">
             Board
           </button>
         </div>
         <Show when={needYou() > 0}>
-          <button class="needs-you-button" onClick={() => setView("board")} title="See them on the Board">
+          <button class="needs-you-button" onClick={() => setBoardOpen(true)} title="See them on the Board">
             {needYou()} need{needYou() === 1 ? "s" : ""} you
           </button>
         </Show>
@@ -631,8 +663,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
             </>
           }
           onOpen={(id) => {
-            setView("tabs");
-            if (id !== activeId()) void show(id);
+            setBoardOpen(false);
+            if (mainView() === "columns" || id !== activeId()) void show(id);
           }}
         />
       </Show>
@@ -641,7 +673,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         active={activeWorktree()}
         sessionsIn={sessionsIn}
         settingUp={(path) => !!setups[path] && setups[path].status.kind !== "done"}
-        onSelect={selectWorktree} onNewSession={(path) => void newSession(path)} onNewWorktree={() => setCreatingWorktree(true)} />
+        columns={mainView() === "columns"}
+        pinned={(path) => pinned().includes(path)}
+        onPin={(path) => void togglePin(path)}
+        onSelect={onWorktreeTab}
+        onNewSession={(path) => void newSession(path)}
+        onNewWorktree={() => setCreatingWorktree(true)}
+      />
       <Show when={creatingWorktree()}>
         <NewWorktreeDialog
           activeBranch={worktree()?.branch ?? null}
@@ -670,6 +708,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           }}
         />
       </Show>
+      <Show when={mainView() === "tabs"}>
       <nav class="tabs" style={{ "--c": worktreeColour(activeWorktree()) }}>
         <For each={sessionsIn(activeWorktree()).map((s) => s.id)}>
           {(id) => (
@@ -739,6 +778,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         onSuspend={(s) => core.suspendSession(s.id).catch((err) => setError(String(err)))}
         onResume={(s) => core.resumeSession(s.id).catch((err) => setError(String(err)))}
       />
+      </Show>
       <Show when={paletteOpen()}>
         <CommandPalette
           worktree={activeWorktree()}
@@ -765,13 +805,16 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
               setRemoving(null);
               setNotice(warning ?? "");
               setSetups(produce((all) => void delete all[path]));
-              selectWorktree(props.workspace.root);
+              // In the Columns view, focus moves to another column rather than leaving the view.
+              const other = mainView() === "columns" ? pinnedRow().find((p) => p.path !== path) : undefined;
+              if (other) setActiveWorktree(other.path);
+              else selectWorktree(props.workspace.root);
             }}
             onClose={() => setRemoving(null)}
           />
         )}
       </Show>
-      <Show when={sharing() > 1}>
+      <Show when={mainView() === "tabs" && sharing() > 1}>
         <Banner tone="warn">{sharing()} Agent sessions share this Worktree, so they can edit the same files.</Banner>
       </Show>
       <Show when={notice()}>
@@ -799,6 +842,32 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         </Banner>
       </Show>
       <div class="main-row">
+      <Show when={mainView() === "columns"}>
+        <Columns
+          worktrees={pinnedRow()}
+          focused={activeWorktree()}
+          sessionsIn={sessionsIn}
+          shownIn={shownIn}
+          setupOf={(path) => setups[path]}
+          recentIn={(path) => recent[path] ?? []}
+          register={(path, v) => (v ? columnViews.set(path, v) : columnViews.delete(path))}
+          onFocus={setActiveWorktree}
+          onShow={(path, id) => {
+            setLastSessionIn(path, id);
+            setActiveWorktree(path);
+          }}
+          onNewSession={(path) => void newSession(path)}
+          onCloseTab={(id) => void closeTab(id)}
+          onReopen={(r) => void reopen(core.reopenSession(r.acpId))}
+          onSuspend={(s) => core.suspendSession(s.id).catch((err) => setError(String(err)))}
+          onResume={(s) => core.resumeSession(s.id).catch((err) => setError(String(err)))}
+          onRemove={setRemoving}
+          onOpenSettings={openRepoSettings}
+          onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })}
+          onError={setError}
+        />
+      </Show>
+      <Show when={mainView() === "tabs"}>
       <div class="main-col">
       <Show
         when={session()}
@@ -828,12 +897,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       >
         {(s) => (
           <>
-            <Transcript sessionId={s.id} items={items} start={start()} onLoadEarlier={loadEarlier} onError={setError} onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })} />
+            <Transcript sessionId={s.id} items={tabs.items} start={tabs.start()} onLoadEarlier={tabs.loadEarlier} onError={setError} onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })} />
             <Composer session={s} />
           </>
         )}
       </Show>
       </div>
+      </Show>
       <Show when={editorOpen()}>
         <ManualEditor
           requests={editorRequests()}
@@ -844,20 +914,21 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       </Show>
       <Show when={filesOpen()}>
         <FilesDrawer
-          worktree={activeWorktree()}
-          revision={filesRevision[activeWorktree()] ?? 0}
-          reveal={revealed()}
-          onOpenFile={openWorktreeFile}
-          label={worktree() ? worktreeLabel(worktree()!) : ""}
-          colour={worktreeColour(activeWorktree())}
+          worktree={drawerWorktree()}
+          revision={filesRevision[drawerWorktree()] ?? 0}
+          reveal={drawerWorktree() === activeWorktree() ? revealed() : null}
+          onOpenFile={(rel) => openWorktreeFile(rel, drawerWorktree())}
+          label={drawerTab() ? worktreeLabel(drawerTab()!) : ""}
+          colour={worktreeColour(drawerWorktree())}
+          pin={drawerPinControl()}
           onGit={() => toggleDrawer("git")}
           onClose={() => setFilesOpen(false)}
         />
       </Show>
       <Show when={gitOpen()}>
         <GitDrawer
-          worktree={activeWorktree()}
-          onOpenFile={openWorktreeFile}
+          worktree={drawerWorktree()}
+          onOpenFile={(rel) => openWorktreeFile(rel, drawerWorktree())}
           onGoToWorktree={selectWorktree}
           onOpenDiff={(diff) =>
             openInEditor({
@@ -865,7 +936,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
               key: [diff.worktree, diff.file.path, diff.split].join("\n"),
               title: `${diff.file.path.split("/").pop()} vs ${diff.base}`,
               name: diff.file.path,
-              path: diff.file.change === "deleted" ? null : worktreePath(diff.file.path),
+              path: diff.file.change === "deleted" ? null : worktreePath(diff.file.path, diff.worktree),
               base: diff.base,
               renamedFrom: diff.file.renamedFrom,
               lines: diff.lines,
@@ -875,8 +946,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
             setCreatingFrom(branch);
             setCreatingWorktree(true);
           }}
-          label={worktree() ? worktreeLabel(worktree()!) : ""}
-          colour={worktreeColour(activeWorktree())}
+          label={drawerTab() ? worktreeLabel(drawerTab()!) : ""}
+          colour={worktreeColour(drawerWorktree())}
+          pin={drawerPinControl()}
           onFiles={() => toggleDrawer("files")}
           onClose={() => setDrawer(null)}
         />
@@ -910,163 +982,3 @@ function autoSuspendNotice(suspended: { session: SessionInfo; reason: AutoSuspen
   return `Suspended ${parts.join("; and ")}. Sending a message resumes a session.`;
 }
 
-function RecentList(props: { sessions: RecentSession[]; onReopen: (session: RecentSession) => void }) {
-  return (
-    <div class="list-box">
-      <div class="section-label">
-        Recent sessions
-        <span class="note">closing a Tab is never destructive</span>
-      </div>
-      <For each={props.sessions}>
-        {(s) => (
-          <div class="recent-row">
-            <Sparkles />
-            <span class="grow">{s.name}</span>
-            <button class="link" onClick={() => props.onReopen(s)} title="Reopen with its conversation">
-              Reopen
-            </button>
-          </div>
-        )}
-      </For>
-    </div>
-  );
-}
-
-/** One line between the context bar and the content: a standing fact, a notice or an error. */
-function Banner(props: { tone: "warn" | "info" | "error"; children: JSX.Element; action?: JSX.Element; onDismiss?: () => void }) {
-  return (
-    <div class={`banner ${props.tone}`} role={props.tone === "error" ? "alert" : "status"}>
-      {props.tone === "info" ? <Info /> : <TriangleAlert />}
-      <span class="text">{props.children}</span>
-      {props.action}
-      <Show when={props.onDismiss}>
-        <button class="dismiss" onClick={() => props.onDismiss!()} aria-label="Dismiss" title="Dismiss">
-          <X />
-        </button>
-      </Show>
-    </div>
-  );
-}
-
-const MODE_LABEL: Record<PermissionMode, string> = {
-  askForEdits: "Ask for edits",
-  acceptEdits: "Accept edits",
-  plan: "Plan",
-};
-
-function Composer(props: { session: SessionInfo }) {
-  const [text, setText] = createSignal("");
-  const [error, setError] = createSignal("");
-  // A Suspended session takes a message too: sending it resumes the session.
-  const disabled = () => props.session.state !== "idle" && props.session.state !== "suspended";
-  let input!: HTMLTextAreaElement;
-  onMount(() => input.focus());
-  // Back to the composer once a turn (or a permission question) is over.
-  createEffect(() => props.session.state === "idle" && input.focus());
-
-  const setMode = async (select: HTMLSelectElement) => {
-    setError("");
-    try {
-      await core.setPermissionMode(props.session.id, select.value as PermissionMode);
-    } catch (err) {
-      setError(String(err));
-      select.value = props.session.permissionMode; // back to the mode it's really in
-    }
-  };
-
-  const resume = async () => {
-    setError("");
-    try {
-      await core.resumeSession(props.session.id);
-    } catch (err) {
-      setError(String(err));
-    }
-  };
-
-  const send = async () => {
-    const prompt = text().trim();
-    if (!prompt || disabled()) return;
-    setError("");
-    try {
-      await core.sendPrompt(props.session.id, prompt);
-      setText("");
-      input.focus();
-    } catch (err) {
-      setError(String(err));
-    }
-  };
-
-  const locked = () => props.session.state === "exited" || props.session.state === "needsYou";
-
-  return (
-    <div class="composer" style={{ "--c": worktreeColour(props.session.worktree) }}>
-      <EditNotes sessionId={props.session.id} />
-      <Show when={error()}>
-        <p class="error">
-          <TriangleAlert />
-          {error()}
-        </p>
-      </Show>
-      <div class="composer-box" classList={{ locked: locked() }}>
-        <div class="composer-inner">
-          <textarea
-            ref={input}
-            value={text()}
-            onInput={(e) => setText(e.currentTarget.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-            placeholder={
-              props.session.state === "exited"
-                ? "The Agent exited."
-                : props.session.state === "needsYou"
-                  ? "Answer the permission card above first (Y / N)."
-                  : "Message the Agent (Enter to send, Shift+Enter for a newline)"
-            }
-            disabled={locked()}
-          />
-          <div class="composer-bar">
-            <label class={`mode-pill ${props.session.permissionMode}`} title="Permission mode">
-              <Switch fallback={<ShieldQuestion />}>
-                <Match when={props.session.permissionMode === "acceptEdits"}>
-                  <Zap />
-                </Match>
-                <Match when={props.session.permissionMode === "plan"}>
-                  <BookOpen />
-                </Match>
-              </Switch>
-              {MODE_LABEL[props.session.permissionMode]}
-              <ChevronDown class="chev" />
-              <select value={props.session.permissionMode} onChange={(e) => void setMode(e.currentTarget)}>
-                <For each={Object.keys(MODE_LABEL) as PermissionMode[]}>{(mode) => <option value={mode}>{MODE_LABEL[mode]}</option>}</For>
-              </select>
-            </label>
-            <Show when={props.session.state === "suspended"}>
-              <span class="hint">Sending resumes this session</span>
-            </Show>
-            <Show when={props.session.state === "working"}>
-              <span class="hint">The Agent is working; send once its turn is done.</span>
-            </Show>
-            <span class="grow" />
-            <Show
-              when={props.session.state === "exited"}
-              fallback={
-                <button class="primary send" onClick={send} disabled={disabled() || !text().trim()}>
-                  Send <kbd>Enter</kbd>
-                </button>
-              }
-            >
-              <button class="primary send" onClick={() => void resume()} title="Bring the Agent back with this conversation">
-                <CirclePlay />
-                Resume
-              </button>
-            </Show>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}

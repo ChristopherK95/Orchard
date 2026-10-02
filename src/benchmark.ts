@@ -12,6 +12,9 @@ export const PHASES = {
   /** Then a long transcript streamed into Tab 1, a visit to every Tab and a file open in the Manual
    *  editor, idle: the total and idle CPU. */
   longTranscript: "long-transcript",
+  /** Then the Columns view (ticket 28): 3 new Worktrees, each with a session after a short turn,
+   *  pinned with the main checkout, so 4 columns stream at once, idle. */
+  columns: "columns",
   /** The script may stop the app. */
   done: "done",
 } as const;
@@ -23,6 +26,11 @@ export interface BenchDriver {
   turn(id: SessionId, text: string): Promise<void>;
   /** Opens a file of the Workspace in the Manual editor. */
   openFile(): Promise<void>;
+  /** Creates a Worktree on a new branch; resolves to its path. */
+  newWorktree(name: string): Promise<string>;
+  newSessionIn(worktree: string): Promise<SessionId>;
+  /** Pins the main checkout and these Worktrees and shows the Columns view (whatever the width). */
+  showColumns(worktrees: string[]): Promise<void>;
 }
 
 /** How long each measured phase holds still, so the script can sample it (incl. a 20 s CPU window). */
@@ -58,5 +66,15 @@ export async function runBenchmark(driver: BenchDriver, first: SessionId) {
   await driver.show(first);
   await driver.openFile();
   await phase(PHASES.longTranscript);
+
+  const worktrees: string[] = [];
+  for (let i = 1; i <= 3; i++) {
+    const worktree = await driver.newWorktree(`bench/column-${i}`);
+    const id = await driver.newSessionIn(worktree);
+    await driver.turn(id, "short reply please");
+    worktrees.push(worktree);
+  }
+  await driver.showColumns(worktrees);
+  await phase(PHASES.columns);
   await core.benchMark(PHASES.done);
 }

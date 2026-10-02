@@ -2,7 +2,7 @@
 // Agent sessions in the row below, and a bar saying exactly where your next prompt goes.
 import { For, Match, Show, Switch } from "solid-js";
 import type { SessionInfo, SessionState, WorktreeInfo } from "./core";
-import { CirclePause, CirclePlay, GitBranch, House, Loader, Plus, Sparkles, Trash2 } from "./icons";
+import { CirclePause, CirclePlay, GitBranch, House, Loader, Pin, PinOff, Plus, Sparkles, Trash2 } from "./icons";
 import { StateDot } from "./StateDot";
 
 /** The design's eight Worktree colours (wt-1 … wt-8): muted, so state colours stay louder. */
@@ -34,6 +34,10 @@ export function WorktreeRow(props: {
   sessionsIn: (path: string) => SessionInfo[];
   /** A Worktree setup is running there (its first session hasn't started yet). */
   settingUp: (path: string) => boolean;
+  /** The Columns view is up: each tab has a pin control (pinned Worktrees get a column). */
+  columns: boolean;
+  pinned: (path: string) => boolean;
+  onPin: (path: string) => void;
   onSelect: (path: string) => void;
   onNewSession: (path: string) => void;
   onNewWorktree: () => void;
@@ -48,7 +52,12 @@ export function WorktreeRow(props: {
             return (
               <button
                 class="worktree-tab"
-                classList={{ on: w.path === props.active, dimmed: sessions().length === 0 && !props.settingUp(w.path), removed: !!w.removed }}
+                classList={{
+                  on: w.path === props.active && (!props.columns || props.pinned(w.path)),
+                  dimmed: sessions().length === 0 && !props.settingUp(w.path),
+                  removed: !!w.removed,
+                  pinned: props.columns && props.pinned(w.path),
+                }}
                 style={{ "--c": worktreeColour(w.path) }}
                 title={w.removed ? `${w.path}: no longer a Worktree; its sessions still run` : w.path}
                 onClick={() => props.onSelect(w.path)}
@@ -93,11 +102,31 @@ export function WorktreeRow(props: {
                     session
                   </span>
                 </Show>
+                <Show when={props.columns && !w.removed}>
+                  <span
+                    class="pin"
+                    classList={{ on: props.pinned(w.path) }}
+                    role="button"
+                    aria-label={props.pinned(w.path) ? "Unpin this Worktree's column" : "Pin this Worktree as a column"}
+                    title={props.pinned(w.path) ? "Unpin: close its column" : "Pin: give it a column"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      props.onPin(w.path);
+                    }}
+                  >
+                    {props.pinned(w.path) ? <Pin /> : <PinOff />}
+                  </span>
+                </Show>
               </button>
             );
           }}
         </For>
       </div>
+      <Show when={props.columns}>
+        <span class="pinned-count">
+          {props.worktrees.filter((w) => props.pinned(w.path)).length} of {props.worktrees.length} pinned
+        </span>
+      </Show>
       <button class="add-worktree" onClick={() => props.onNewWorktree()} title="New Worktree with an Agent session">
         <Plus />
         worktree

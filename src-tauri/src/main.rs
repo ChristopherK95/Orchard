@@ -380,6 +380,23 @@ async fn close_tab(core: State<'_, Core>, session_id: SessionId) -> CommandResul
     core.close_tab(session_id).await.map_err(|e| e.to_string())
 }
 
+/// The Worktrees pinned as columns of the Columns view.
+#[tauri::command]
+fn pinned_worktrees(core: State<'_, Core>) -> Vec<PathBuf> {
+    core.pinned_worktrees()
+}
+
+/// Pins or unpins a Worktree as a column; returns the pinned Worktrees now.
+#[tauri::command]
+fn set_pinned(
+    core: State<'_, Core>,
+    worktree: String,
+    pinned: bool,
+) -> CommandResult<Vec<PathBuf>> {
+    core.set_pinned(worktree.as_ref(), pinned)
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn recent_sessions(core: State<'_, Core>, worktree: String) -> Vec<RecentSession> {
     core.recent_sessions(worktree.as_ref())
@@ -678,21 +695,30 @@ async fn transcript_page_before(
         .map_err(|e| e.to_string())
 }
 
-/// No Tab visible (a Worktree without sessions is selected): the previous Tab stops streaming.
+/// No Tab visible in view `slot` (a Worktree without sessions is selected there, or a column
+/// closed), or in any slot without one: the Tab shown there stops streaming.
 #[tauri::command]
-fn hide_tabs(core: State<'_, Core>) {
-    core.hide_tabs();
+fn hide_tabs(core: State<'_, Core>, slot: Option<String>) {
+    match slot {
+        Some(slot) => core.hide_tab_in(&slot),
+        None => core.hide_tabs(),
+    }
 }
 
-/// Makes a session the visible Tab and streams its transcript over a dedicated channel; the
-/// previously visible Tab's stream ends. Async so the core's streaming task runs on Tauri's runtime.
+/// Makes a session the visible Tab of view `slot` (default: the Tabs view's) and streams its
+/// transcript over a dedicated channel; the Tab that slot showed stops streaming. Async so the
+/// core's streaming task runs on Tauri's runtime.
 #[tauri::command]
 async fn show_session(
     core: State<'_, Core>,
     session_id: SessionId,
+    slot: Option<String>,
     on_batch: Channel<Vec<TranscriptDelta>>,
 ) -> CommandResult<()> {
-    let mut stream = core.show_session(session_id).map_err(|e| e.to_string())?;
+    let slot = slot.as_deref().unwrap_or(editor_core::TABS_SLOT);
+    let mut stream = core
+        .show_session_in(slot, session_id)
+        .map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn(async move {
         while let Some(batch) = stream.next().await {
             if on_batch.send(batch).is_err() {
@@ -820,7 +846,9 @@ fn main() {
             bench_mode,
             bench_mark,
             show_session,
-            hide_tabs
+            hide_tabs,
+            pinned_worktrees,
+            set_pinned
         ])
         .run(tauri::generate_context!())
         .expect("error while running the editor");

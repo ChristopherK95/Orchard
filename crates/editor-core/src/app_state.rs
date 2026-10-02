@@ -32,6 +32,9 @@ pub(crate) struct WorkspaceState {
     /// Each Worktree's Base, where it isn't the default.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) bases: BTreeMap<PathBuf, String>,
+    /// The Worktrees pinned as columns of the Columns view.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) pinned: Vec<PathBuf>,
 }
 
 /// An Agent session as it's remembered: enough to show its Tab and resume it.
@@ -130,6 +133,10 @@ mod tests {
             recent: vec![saved("c", "C:/repo")],
             active: Some("b".into()),
             bases: [(PathBuf::from("C:/repo.worktrees/x"), "wip".to_owned())].into(),
+            pinned: vec![
+                PathBuf::from("C:/repo"),
+                PathBuf::from("C:/repo.worktrees/x"),
+            ],
         };
         let other = WorkspaceState {
             tabs: vec![saved("d", "C:/other")],

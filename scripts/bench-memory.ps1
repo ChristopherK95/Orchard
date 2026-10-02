@@ -12,6 +12,8 @@
     one-tab         1 Tab after a short turn
     five-tabs       5 Tabs, each after a short turn          -> per-extra-Tab cost
     long-transcript then a long transcript in Tab 1, every Tab visited, idle -> total and idle CPU
+    columns         then 3 new Worktrees with a session each, and the Columns view with 4 columns
+                    streaming at once (ticket 28)            -> total in the Columns view
 
   Windows has no PSS, so memory is each process's private working set (pages only it uses), the
   closest Windows equivalent. Budget (ADR 0002): <= 250 MB total, <= 15 MB per extra Tab, near 0%
@@ -98,7 +100,7 @@ try {
     git -C $repo -c user.name=Bench -c user.email=bench@example.com commit --quiet --allow-empty -m init
     $paragraph = 'The Agent explains a change in a sentence or two, the way real replies read, so the transcript has realistic weight. '
     $short = @{ chunks = @('Short reply.') }
-    $turns = @($short, $short, $short, $short, $short, @{ messages = @(1..$Messages | ForEach-Object { "Message $_. $paragraph" }) })
+    $turns = @($short, $short, $short, $short, $short, @{ messages = @(1..$Messages | ForEach-Object { "Message $_. $paragraph" }) }, $short, $short, $short)
     $agentScript = Join-Path $work 'script.json'
     [System.IO.File]::WriteAllText($agentScript, (@{ turns = $turns } | ConvertTo-Json -Depth 4 -Compress), (New-Object System.Text.UTF8Encoding $false))
 
@@ -125,6 +127,8 @@ try {
     Wait-Phase 'long-transcript'
     $full = Measure-Memory $app.Id
     $idleCpu = Measure-IdleCpu $app.Id $CpuWindowSeconds
+    Wait-Phase 'columns'
+    $columns = Measure-Memory $app.Id
 } finally {
     if ($app -and -not $app.HasExited) { taskkill /T /F /PID $app.Id 2>&1 | Out-Null }
     # The fake agent can outlive a crashed editor; stop any instance of this build.
@@ -139,12 +143,14 @@ $results = @(
     [pscustomobject]@{ Check = 'Total, 5 Tabs + long transcript (private MB)'; Value = $full.PrivateMB; Budget = "<= $($budget.TotalMB)"; Pass = $full.PrivateMB -le $budget.TotalMB }
     [pscustomobject]@{ Check = 'Per extra Tab (private MB)'; Value = $perTab; Budget = "<= $($budget.PerTabMB)"; Pass = $perTab -le $budget.PerTabMB }
     [pscustomobject]@{ Check = "Idle CPU over $CpuWindowSeconds s (% of one core)"; Value = $idleCpu; Budget = "<= $($budget.IdleCpuPercent)"; Pass = $idleCpu -le $budget.IdleCpuPercent }
+    [pscustomobject]@{ Check = 'Total, Columns view with 4 columns (private MB)'; Value = $columns.PrivateMB; Budget = "<= $($budget.TotalMB)"; Pass = $columns.PrivateMB -le $budget.TotalMB }
 )
 ""
 "Agent Editor memory benchmark (Windows, $Messages-message transcript, $([Environment]::ProcessorCount) logical cores; 1 Manual editor in the last phase)"
 "  1 Tab           : $($one.PrivateMB) MB private ($($one.WorkingSetMB) MB working set)  [$($one.Processes)]"
 "  5 Tabs          : $($five.PrivateMB) MB private ($($five.WorkingSetMB) MB working set)  [$($five.Processes)]"
 "  + long transcript: $($full.PrivateMB) MB private ($($full.WorkingSetMB) MB working set)  [$($full.Processes)]"
+"  Columns, 4 cols: $($columns.PrivateMB) MB private ($($columns.WorkingSetMB) MB working set)  [$($columns.Processes)]"
 $results | Format-Table -AutoSize | Out-String
 if ($results.Pass -contains $false) { "MISS against ADR 0002's budget."; exit 1 }
 "Within ADR 0002's budget."

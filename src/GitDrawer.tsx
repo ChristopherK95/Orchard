@@ -8,7 +8,7 @@
 import { createEffect, createMemo, createResource, createSignal, For, on, onCleanup, Show } from "solid-js";
 import { core, type BaseChange, type BaseChanges, type BranchInfo, type CommitRequest, type DiffLine, type GitFile, type GitStatus } from "./core";
 import { hasUnsavedChangesUnder } from "./documents";
-import { DrawerHead } from "./FilesDrawer";
+import { DrawerHead, type DrawerPin } from "./FilesDrawer";
 import { ArrowDown, ArrowUp, ChevronDown, CircleMinus, CirclePlus, GitBranch, RefreshCw, TriangleAlert, Undo2 } from "./icons";
 
 /** A path as the rows show it: the file name, then its folder, muted. */
@@ -47,6 +47,7 @@ export function GitDrawer(props: {
   onOpenDiff: (diff: { worktree: string; file: BaseChange; base: string; split: string; lines: DiffLine[] }) => void;
   label: string;
   colour: string;
+  pin?: DrawerPin;
   onFiles: () => void;
   onClose: () => void;
 }) {
@@ -313,7 +314,7 @@ export function GitDrawer(props: {
 
   return (
     <aside class="files-drawer git-drawer">
-      <DrawerHead label={props.label} colour={props.colour} tab="git" onTab={(tab) => tab === "files" && props.onFiles()} onClose={props.onClose} />
+      <DrawerHead label={props.label} colour={props.colour} tab="git" onTab={(tab) => tab === "files" && props.onFiles()} pin={props.pin} onClose={props.onClose} />
       <Show when={status()} fallback={<p class="muted center small">{error() || "Reading the status…"}</p>}>
         {(s) => (
           <>

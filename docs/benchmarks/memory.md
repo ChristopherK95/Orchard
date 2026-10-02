@@ -11,6 +11,8 @@ webview processes), not the fake ACP agent, Node or `claude`.
 | 2026-10-01 | Windows 11 (16 logical cores) | release, ticket 02 (markdown, Lezer, virtualised list, CSP) | same as above | 82.4 MB | 89.2 MB (98.7 MB after the transcript) | 1.7 MB | 0.31% of one core (20 s) | Pass |
 | 2026-10-02 | Windows 11 (16 logical cores) | release, ticket 14 (Manual editor, auto-suspend, file watching) | same, plus `src/main.rs` open in the Manual editor in the last phase | 90.4 MB | 98.9 MB (116.4 MB after the transcript, with the file open) | 2.1 MB | 0.39% of one core (20 s) | Pass |
 | 2026-10-02 | Windows 11 (16 logical cores) | release, tickets 15–22 (pop-out, conflicts, Edit notes, Git drawer, push/pull, branches, Changes vs base, Board) | same as ticket 14 | 91.5 MB | 99.5 MB (116.1 MB after the transcript, with the file open) | 2.0 MB | 0.08% of one core (20 s) | Pass |
+| 2026-10-03 | Windows 11 (16 logical cores) | release, design refresh (Inter + JetBrains Mono bundled, Lucide icons) | same as ticket 14 | 92.6 MB | 104.9 MB (116.8 MB after the transcript, with the file open) | 3.1 MB | 0% of one core (20 s) | Pass |
+| 2026-10-03 | Windows 11 (16 logical cores) | release, ticket 28 (Columns view) | same, then 3 new Worktrees with a session each and the Columns view with 4 columns streaming | — | 104.1 MB (116.4 MB after the transcript; **128.7 MB in the Columns view**) | 2.4 MB | 0.08% of one core (20 s) | Pass** |
 | — | Arch Linux (Wayland) | — | — | — | — | — | — | Pending: needs a Linux run (PSS) |
 
 \* The first version measured per-Tab cost as (5 Tabs − 1 Tab) / 4, with Tab 1's 2,000-message transcript
@@ -33,3 +35,8 @@ runtime pages shared with other processes.
 - WebView2 processes: 29.3, 1.6, 22.0, 6.4, 3.0, 21.8
 
 The largest WebView2 process is the renderer. It grew from 14.2 to 21.8 MB with the 2,000-message transcript.
+
+\*\* **Ticket 28:** the first run after the release build measured 8.52% idle CPU (a miss), with the Columns
+phase at 152.1 MB. A re-run of the same binary (`-SkipBuild`) measured 0.08% and 128.7 MB. The idle window is in
+the Tabs view, before any column exists, so the first figure is first-launch noise (a new binary's first run),
+not the change. Four streaming columns cost about 12 MB over the Tabs view: the renderer grows by about 9 MB.

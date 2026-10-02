@@ -11,6 +11,9 @@ export interface WorkspaceInfo {
   name: string;
 }
 
+/** The Tabs view's view slot (each Columns view column has its own). */
+export const TABS_SLOT = "tabs";
+
 export interface SessionInfo {
   id: SessionId;
   name: string;
@@ -487,15 +490,21 @@ export const core = {
     invoke<void>("answer_permission", { sessionId, toolCallId, optionId }),
   setPermissionMode: (sessionId: SessionId, mode: PermissionMode) =>
     invoke<void>("set_permission_mode", { sessionId, mode }),
-  /** Makes the session the visible Tab; its transcript streams to `onBatch` until another is shown. */
-  showSession: (sessionId: SessionId, onBatch: (batch: TranscriptDelta[]) => void) => {
+  /** Makes the session the visible Tab of view `slot` (the Tabs view's by default, or a column's);
+   *  its transcript streams to `onBatch` until another is shown there. Slots stream side by side. */
+  showSession: (sessionId: SessionId, onBatch: (batch: TranscriptDelta[]) => void, slot: string = TABS_SLOT) => {
     const channel = new Channel<TranscriptDelta[]>();
     channel.onmessage = onBatch;
-    return invoke<void>("show_session", { sessionId, onBatch: channel });
+    return invoke<void>("show_session", { sessionId, slot, onBatch: channel });
   },
+  /** No Tab visible in `slot` (an empty Worktree is selected there, or a column went away): the
+   *  Tab it showed stops streaming. */
+  hideTabs: (slot: string = TABS_SLOT) => invoke<void>("hide_tabs", { slot }),
+  /** The Worktrees pinned as columns of the Columns view. */
+  pinnedWorktrees: () => invoke<string[]>("pinned_worktrees"),
+  /** Pins or unpins a Worktree as a column; resolves to the pinned Worktrees now. */
+  setPinned: (worktree: string, pinned: boolean) => invoke<string[]>("set_pinned", { worktree, pinned }),
   /** Up to a page of items just before index `before` (for scrolling back). */
-  /** No Tab visible (an empty Worktree is selected): the previous Tab's stream ends. */
-  hideTabs: () => invoke<void>("hide_tabs"),
   transcriptPageBefore: (sessionId: SessionId, before: number) =>
     invoke<TranscriptPage>("transcript_page_before", { sessionId, before }),
   /** True when launched by the memory benchmark (ticket 05). */

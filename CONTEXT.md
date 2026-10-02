@@ -41,8 +41,18 @@ The record of the user's saved manual changes to a file, attached to the next pr
 _Avoid_: File-change notification, sync
 
 **Board**:
-The overview of every Agent session in the Workspace, grouped by Agent session state. It's the alternative to the Tabs view; toggle between them.
+The overview of every Agent session in the Workspace, grouped by Agent session state. It opens over the Tabs view or the Columns view; toggle it with either.
 _Avoid_: Dashboard, overview
+
+**Columns view**:
+The wide-display alternative to the Tabs view (offered from 1,600 px): each pinned Worktree side by side as a column, each column showing one of its Agent sessions at a time. More columns than fit scroll sideways.
+_Avoid_: Split view, panes
+
+**Pinned Worktree**:
+A Worktree that has a column in the Columns view. Pins are kept per Workspace across restarts; the columns follow the Worktree row's order.
+
+**Focused column**:
+The one column of the Columns view that takes input: the next prompt, Y / N, the Files/Git drawer and Ctrl+P all go to its Worktree. Only it has the full composer.
 
 **Manual editor**:
 Where the user views and hand-edits a file in a Worktree (or the settings file, or an unsaved snippet copied from a chat code block). It opens as a pane beside the chat, with a file tab per file, and can be popped out into its own window. When a file it has open changes on disk, a file tab with no unsaved changes reloads; one with unsaved changes asks (show the diff, reload and drop mine, or keep mine and overwrite on the next save).

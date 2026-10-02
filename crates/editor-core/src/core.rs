@@ -38,6 +38,9 @@ use crate::settings::{self, LoadedSettings, WindowsShell};
 use crate::setup::{self, SetupInfo, SetupStatus};
 use crate::worktrees::{self, Discovery, WorktreeInfo};
 
+/// The Tabs view's view slot: its one visible Tab (the Columns view has a slot per column).
+pub const TABS_SLOT: &str = "tabs";
+
 /// How long streamed transcript changes are gathered before being flushed to the visible Tab.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(16);
 
@@ -389,8 +392,9 @@ struct Inner {
     state: Mutex<State>,
     /// The single shared ACP adapter; serialised so concurrent callers never start two.
     adapter: tokio::sync::Mutex<Option<Arc<Connection>>>,
-    /// The session whose Tab is visible, and the switch that ends its stream when another is shown.
-    visible_tab: Mutex<Option<(Arc<Session>, oneshot::Sender<()>)>>,
+    /// The visible Tabs by view slot (the Tabs view's, or a column's), each with the switch that
+    /// ends its stream when another is shown there.
+    visible_tabs: Mutex<HashMap<String, (Arc<Session>, oneshot::Sender<()>)>>,
     /// Watches for Worktrees added or removed outside the editor.
     discovery: Mutex<Option<Arc<Discovery>>>,
     /// Serialises Worktree refreshes.
@@ -450,6 +454,8 @@ struct State {
     active: Option<String>,
     /// Each Worktree's Base, where it isn't the default (its start point, or one set for it).
     bases: BTreeMap<PathBuf, String>,
+    /// The Worktrees pinned as columns of the Columns view (shown in Worktree row order).
+    pinned: Vec<PathBuf>,
     sessions: HashMap<SessionId, Arc<Session>>,
     by_acp_id: HashMap<String, SessionId>,
     next_session: u64,
@@ -623,7 +629,7 @@ impl Core {
             events,
             state: Mutex::default(),
             adapter: tokio::sync::Mutex::new(None),
-            visible_tab: Mutex::new(None),
+            visible_tabs: Mutex::new(HashMap::new()),
             discovery: Mutex::new(None),
             refresh_lock: tokio::sync::Mutex::new(()),
             settings: Mutex::new(loaded),
@@ -1338,14 +1344,11 @@ impl Core {
             state.sessions.remove(&id);
             state.by_acp_id.remove(&session.acp_id);
         }
-        let mut visible = self.inner.visible_tab.lock().expect("visible tab lock");
-        if visible
-            .as_ref()
-            .is_some_and(|(shown, _)| Arc::ptr_eq(shown, session))
-        {
-            visible.take(); // ends its stream
-        }
-        drop(visible);
+        self.inner
+            .visible_tabs
+            .lock()
+            .expect("visible tab lock")
+            .retain(|_, (shown, _)| !Arc::ptr_eq(shown, session)); // ends its streams
         let _ = self
             .inner
             .events
@@ -1488,6 +1491,31 @@ impl Core {
             .collect();
         sessions.sort_by_key(|s| s.id);
         sessions
+    }
+
+    /// The Worktrees pinned as columns of the Columns view (ones that are gone aren't listed).
+    pub fn pinned_worktrees(&self) -> Vec<PathBuf> {
+        let state = self.inner.state.lock().expect("state lock");
+        state
+            .pinned
+            .iter()
+            .filter(|p| state.worktrees.iter().any(|w| &&w.path == p))
+            .cloned()
+            .collect()
+    }
+
+    /// Pins or unpins a Worktree as a column of the Columns view; remembered across restarts.
+    pub fn set_pinned(&self, worktree: &Path, pinned: bool) -> Result<Vec<PathBuf>, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        {
+            let mut state = self.inner.state.lock().expect("state lock");
+            state.pinned.retain(|p| *p != worktree);
+            if pinned {
+                state.pinned.push(worktree);
+            }
+        }
+        self.inner.persist();
+        Ok(self.pinned_worktrees())
     }
 
     /// The Worktree being looked at: its files are indexed and watched (as are those of
@@ -2526,23 +2554,45 @@ impl Core {
             .page_before(before))
     }
 
-    /// Makes no Tab visible (e.g. a Worktree with no sessions is selected): ends the visible Tab's
-    /// stream, and its new output counts as unread again.
+    /// Makes no Tab visible in any view slot: ends every stream, and new output counts as unread.
     pub fn hide_tabs(&self) {
-        let previous = self
+        let previous: Vec<_> = self
             .inner
-            .visible_tab
+            .visible_tabs
             .lock()
             .expect("visible tab lock")
-            .take();
-        if let Some((previous, _stop_previous)) = previous {
+            .drain()
+            .collect();
+        for (_, (previous, _stop_previous)) in previous {
             previous.set_visible(false);
         } // dropping `_stop_previous` ends that stream
     }
 
-    /// Makes `id` the visible Tab: ends the previous visible Tab's stream, marks this session read,
-    /// and streams its transcript: a `Reset` with the latest page, then batched changes.
+    /// Makes no Tab visible in `slot` (e.g. a Worktree with no sessions is selected there): ends
+    /// that stream, and the session's new output counts as unread again unless another slot shows it.
+    pub fn hide_tab_in(&self, slot: &str) {
+        let mut visible = self.inner.visible_tabs.lock().expect("visible tab lock");
+        if let Some((previous, _stop_previous)) = visible.remove(slot) {
+            if !visible.values().any(|(s, _)| Arc::ptr_eq(s, &previous)) {
+                previous.set_visible(false);
+            }
+        } // dropping `_stop_previous` ends that stream
+    }
+
+    /// Makes `id` the visible Tab of the Tabs view (`TABS_SLOT`). See `show_session_in`.
     pub fn show_session(&self, id: SessionId) -> Result<TranscriptStream, CoreError> {
+        self.show_session_in(TABS_SLOT, id)
+    }
+
+    /// Makes `id` the visible Tab in view `slot` (the Tabs view, or one column of the Columns view):
+    /// ends the stream that slot had, marks this session read, and streams its transcript: a
+    /// `Reset` with the latest page, then batched changes. Slots stream independently, so several
+    /// Tabs can be visible at once; a session is visible while any slot shows it.
+    pub fn show_session_in(
+        &self,
+        slot: &str,
+        id: SessionId,
+    ) -> Result<TranscriptStream, CoreError> {
         let session = self.session(id)?;
         // A restored Tab's conversation comes in when it's first looked at.
         self.inner.load_for_view(session.clone());
@@ -2557,15 +2607,15 @@ impl Core {
             self.inner.persist(); // to show it again after a restart
         }
         let (stop, mut stopped) = oneshot::channel::<()>();
-        let previous = self
-            .inner
-            .visible_tab
-            .lock()
-            .expect("visible tab lock")
-            .replace((session.clone(), stop));
-        if let Some((previous, _stop_previous)) = previous {
-            previous.set_visible(false);
-        } // dropping `_stop_previous` ends that stream
+        {
+            let mut visible = self.inner.visible_tabs.lock().expect("visible tab lock");
+            let previous = visible.insert(slot.to_owned(), (session.clone(), stop));
+            if let Some((previous, _stop_previous)) = previous {
+                if !visible.values().any(|(s, _)| Arc::ptr_eq(s, &previous)) {
+                    previous.set_visible(false);
+                }
+            } // dropping `_stop_previous` ends that stream
+        }
 
         let (tx, rx) = mpsc::channel(64);
         let (initial, mut deltas) = {
@@ -3015,6 +3065,7 @@ impl Inner {
                 recent: state.recent.clone(),
                 active: state.active.clone(),
                 bases: state.bases.clone(),
+                pinned: state.pinned.clone(),
             };
             (workspace.root.clone(), saved)
         };
@@ -3057,6 +3108,13 @@ impl Inner {
                 .filter(|s| live(&state, s))
                 .collect();
             state.active = saved.active;
+            state.pinned = saved
+                .pinned
+                .into_iter()
+                .filter(|worktree| {
+                    listing_failed || state.worktrees.iter().any(|w| &w.path == worktree)
+                })
+                .collect();
             state.bases = saved
                 .bases
                 .into_iter()

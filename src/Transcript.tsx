@@ -30,6 +30,8 @@ export function Transcript(props: {
   onError: (message: string) => void;
   /** "Open in editor" on a code block. */
   onOpenSnippet: (code: string, label: string) => void;
+  /** Whether Y / N answer this transcript's open card (in the Columns view: only the focused column's). */
+  answerKeys?: () => boolean;
 }) {
   let scroller!: HTMLDivElement;
   let following = true;
@@ -113,7 +115,7 @@ export function Transcript(props: {
                 ref={(el) => queueMicrotask(() => el.isConnected && virtualizer.measureElement(el))}
                 style={{ transform: `translateY(${row()?.start ?? 0}px)` }}
               >
-                {renderItem(props.sessionId, props.items[key - props.start])}
+                {renderItem(props.sessionId, props.items[key - props.start], props.answerKeys ?? always)}
               </div>
             );
           }}
@@ -123,13 +125,15 @@ export function Transcript(props: {
   );
 }
 
-function renderItem(sessionId: SessionId, item: TranscriptItem | undefined): JSX.Element {
+const always = () => true;
+
+function renderItem(sessionId: SessionId, item: TranscriptItem | undefined, answerKeys: () => boolean): JSX.Element {
   if (!item) return null;
   switch (item.kind) {
     case "agent":
       return <div class="msg agent markdown" innerHTML={renderMarkdown(item.text)} />;
     case "permission":
-      return <PermissionCard sessionId={sessionId} request={item.request} outcome={item.outcome} />;
+      return <PermissionCard sessionId={sessionId} request={item.request} outcome={item.outcome} keys={answerKeys} />;
     case "toolCall":
       return <ToolCallRow item={item} />;
     case "user":

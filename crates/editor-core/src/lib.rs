@@ -25,7 +25,7 @@ pub use crate::acp::{AcpError, AdapterCommand, PROTOCOL_VERSION};
 pub use crate::auto_suspend::{AutoSuspendReason, Clock, MemoryProbe, MemorySample};
 pub use crate::core::{
     AutoSuspension, Core, CoreConfig, CoreError, CoreEvent, RecentSession, TranscriptStream,
-    WorkspaceInfo,
+    WorkspaceInfo, TABS_SLOT,
 };
 pub use crate::create_worktree::{BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 pub use crate::documents::{FileContent, OpenDocument, OpenedFile, PoppedOutFile, SaveOver};
