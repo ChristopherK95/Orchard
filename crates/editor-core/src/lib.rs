@@ -31,7 +31,9 @@ pub use crate::create_worktree::{BranchInfo, BranchList, CreatedWorktree, NewWor
 pub use crate::documents::{FileContent, OpenDocument, OpenedFile, PoppedOutFile, SaveOver};
 pub use crate::edit_notes::EditNote;
 pub use crate::files::{DirEntry, FileMatch, FileWatchConfig, IndexStats, WatchStatus};
-pub use crate::git_status::{CommitOutcome, CommitRequest, GitFile, GitStatus, LastCommit};
+pub use crate::git_status::{
+    CommitOutcome, CommitRequest, GitFile, GitStatus, LastCommit, PullOutcome, PushOutcome,
+};
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};
 pub use crate::remove_worktree::{CommitSummary, RemovalCheck, RemoveWorktree, RemovedWorktree};
 pub use crate::session::{

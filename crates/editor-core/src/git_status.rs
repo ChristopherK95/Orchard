@@ -68,6 +68,37 @@ pub enum CommitOutcome {
     AlreadyPushed,
 }
 
+/// What a push did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PushOutcome {
+    /// To `remote/branch`.
+    Pushed { to: String },
+    /// The remote has commits this branch hasn't: pull first (or, if it has diverged, merge or
+    /// rebase, which the editor leaves to an Agent or a terminal).
+    Rejected,
+}
+
+/// What a pull did. It only ever fast-forwards.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PullOutcome {
+    /// Sessions in the Worktree are mid-turn (a pull rewrites files under them): ask first.
+    SessionsWorking {
+        sessions: Vec<String>,
+    },
+    UpToDate,
+    FastForwarded {
+        commits: u32,
+    },
+    /// Both sides have commits the other hasn't: that takes a merge or a rebase, which the editor
+    /// leaves to an Agent or a terminal.
+    Diverged {
+        ahead: u32,
+        behind: u32,
+    },
+}
+
 /// Parses `git status --porcelain=v2 --branch -z`.
 pub(crate) fn parse(out: &str) -> GitStatus {
     let mut status = GitStatus::default();

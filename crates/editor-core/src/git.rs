@@ -39,17 +39,18 @@ async fn run(cwd: &Path, args: &[&str]) -> Result<String, String> {
     if out.status.success() {
         return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
     }
-    // (Some messages go to stdout: `commit` with nothing staged says so there.)
-    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
-    Err(match stderr.is_empty() {
-        true => String::from_utf8_lossy(&out.stdout).trim().to_owned(),
-        false => stderr,
-    })
+    Err(failure(&out))
 }
 
-/// How long a fetch may take before the editor gives up and uses what was fetched last (a login
-/// prompt from a credential helper would otherwise hang it).
-const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+/// What a git that failed said: its stderr, or its stdout when that's empty (`commit` with nothing
+/// staged says so there).
+fn failure(out: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+    match stderr.is_empty() {
+        true => String::from_utf8_lossy(&out.stdout).trim().to_owned(),
+        false => stderr,
+    }
+}
 
 async fn has_origin(repo: &Path) -> bool {
     run(repo, &["remote"])
@@ -62,10 +63,9 @@ pub(crate) async fn fetch_origin(repo: &Path) -> Result<(), String> {
     if !has_origin(repo).await {
         return Ok(());
     }
-    match tokio::time::timeout(FETCH_TIMEOUT, run(repo, &["fetch", "--quiet", "origin"])).await {
-        Ok(result) => result.map(|_| ()),
-        Err(_) => Err(format!("timed out after {} s", FETCH_TIMEOUT.as_secs())),
-    }
+    run_remote(repo, &["fetch", "--quiet", "origin"])
+        .await
+        .map(drop)
 }
 
 /// `origin`'s URL, which a repo's settings section can be keyed by.
@@ -188,7 +188,9 @@ pub(crate) async fn worktree_add_new_branch(
     name: &str,
     start: &str,
 ) -> Result<(), String> {
-    worktree_add(repo, &["-b", name], path, &[start]).await
+    // (Not tracking where it starts: an Agent's branch made from `origin/main` would otherwise
+    // compare, pull and push against `main`. It tracks its own name once it's pushed.)
+    worktree_add(repo, &["--no-track", "-b", name], path, &[start]).await
 }
 
 /// Adds a Worktree at `path` on the existing local branch `name`.
@@ -642,9 +644,7 @@ pub(crate) async fn commit(worktree: &Path, message: &str, amend: bool) -> Resul
         })?
         .map_err(|e| format!("could not run git: {e}"))?;
     if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
-        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-        return Err(if stderr.is_empty() { stdout } else { stderr });
+        return Err(failure(&out));
     }
     Ok(run(worktree, &["rev-parse", "--short", "HEAD"])
         .await?
@@ -704,4 +704,187 @@ pub(crate) async fn discard(worktree: &Path, path: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// How long a push, fetch or pull may take before it's stopped (a dead network; logins fail at once,
+/// prompts being off). Generous: a first push of a big branch takes a while.
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// What to tell the user when git couldn't log in by itself.
+pub(crate) const LOGIN_HINT: &str =
+    "If git needs you to log in, run `git push` in a terminal once, then try again here.";
+
+/// Signs, in git's (or ssh's, or a credential helper's) words, that it needed a login.
+const LOGIN_SIGNS: &[&str] = &[
+    "terminal prompts disabled",
+    "could not read username",
+    "could not read password",
+    "authentication failed",
+    "permission denied (publickey",
+    "host key verification failed",
+    "returned error: 401",
+    "returned error: 403",
+    "user interactivity has been disabled",
+    "passphrase",
+];
+
+/// Runs a git command that talks to a remote: the user's own credential helpers and SSH setup, but
+/// never a prompt or a login window (SSH in batch mode unless the user has an SSH command of their
+/// own; Git Credential Manager non-interactive), and never longer than `NETWORK_TIMEOUT`, after
+/// which git and everything it started are stopped. A failure that looks like a login problem
+/// gets `LOGIN_HINT`.
+async fn run_remote(worktree: &Path, args: &[&str]) -> Result<String, String> {
+    let mut cmd = git(worktree);
+    // (Nobody's askpass either: a terminal's, VS Code's, inherited from wherever the editor started.)
+    cmd.args(["-c", "core.askPass="])
+        .args(args)
+        .env_remove("GIT_ASKPASS")
+        .env_remove("SSH_ASKPASS")
+        .env("GCM_INTERACTIVE", "never")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let own_ssh = std::env::var_os("GIT_SSH_COMMAND").is_some()
+        || std::env::var_os("GIT_SSH").is_some()
+        || output(worktree, &["config", "core.sshCommand"])
+            .await
+            .is_some_and(|c| !c.trim().is_empty());
+    // (Someone's own SSH command is theirs to keep: a passphrase it asks for then fails only at
+    // the timeout.)
+    if !own_ssh {
+        cmd.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
+    }
+    crate::process::ProcessTree::own_group(&mut cmd);
+    let child = cmd.spawn().map_err(|e| format!("could not run git: {e}"))?;
+    // (Dropped on the way out, it stops whatever git left running: ssh, a credential helper.)
+    let _tree = crate::process::ProcessTree::attach(&child);
+    let out = match tokio::time::timeout(NETWORK_TIMEOUT, child.wait_with_output()).await {
+        Err(_) => {
+            return Err(format!(
+                "git {} took over {} s and was stopped. {LOGIN_HINT}",
+                args[0],
+                NETWORK_TIMEOUT.as_secs()
+            ))
+        }
+        Ok(out) => out.map_err(|e| format!("could not run git: {e}"))?,
+    };
+    if out.status.success() {
+        return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
+    }
+    let message = failure(&out);
+    let lower = message.to_lowercase();
+    Err(match LOGIN_SIGNS.iter().any(|sign| lower.contains(sign)) {
+        true => format!("{message}\n{LOGIN_HINT}"),
+        false => message,
+    })
+}
+
+/// Fetches the branch's remote (or `origin`), pruning branches gone from it.
+pub(crate) async fn fetch(worktree: &Path) -> Result<(), String> {
+    run_remote(worktree, &["fetch", "--quiet", "--prune"])
+        .await
+        .map(drop)
+}
+
+/// The checked-out branch, if HEAD isn't detached.
+async fn current_branch(worktree: &Path) -> Option<String> {
+    let out = output(worktree, &["symbolic-ref", "--quiet", "--short", "HEAD"]).await?;
+    Some(out.trim().to_owned()).filter(|b| !b.is_empty())
+}
+
+async fn config(worktree: &Path, key: &str) -> Option<String> {
+    let value = output(worktree, &["config", "--get", key]).await?;
+    Some(value.trim().to_owned()).filter(|v| !v.is_empty())
+}
+
+/// The remote a branch pushes to: its `pushRemote`, the repo's `pushDefault`, the remote it tracks,
+/// the only remote there is, or `origin`.
+async fn push_remote(worktree: &Path, branch: &str) -> String {
+    for key in [
+        format!("branch.{branch}.pushRemote"),
+        "remote.pushDefault".to_owned(),
+        format!("branch.{branch}.remote"),
+    ] {
+        if let Some(remote) = config(worktree, &key).await.filter(|r| r != ".") {
+            return remote;
+        }
+    }
+    let remotes = output(worktree, &["remote"]).await.unwrap_or_default();
+    let remotes: Vec<&str> = remotes
+        .lines()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .collect();
+    match remotes[..] {
+        [only] => only.to_owned(),
+        _ => "origin".to_owned(),
+    }
+}
+
+/// Pushes the branch to the branch of the same name on its remote, which becomes its upstream.
+/// Always by name: a branch tracking another (an Agent's branch made from `origin/main`) never
+/// pushes onto that one, whatever `push.default` says. A push the remote turns down because it has
+/// commits this branch hasn't is `Rejected`, not an error.
+pub(crate) async fn push(worktree: &Path) -> Result<crate::git_status::PushOutcome, String> {
+    use crate::git_status::PushOutcome;
+    let branch = current_branch(worktree)
+        .await
+        .ok_or("HEAD is detached: check out a branch to push.")?;
+    let remote = push_remote(worktree, &branch).await;
+    let target = format!("HEAD:refs/heads/{branch}");
+    match run_remote(
+        worktree,
+        &["push", "--quiet", "--set-upstream", &remote, &target],
+    )
+    .await
+    {
+        Ok(_) => Ok(PushOutcome::Pushed {
+            to: format!("{remote}/{branch}"),
+        }),
+        Err(message)
+            if ["[rejected]", "non-fast-forward", "fetch first"]
+                .iter()
+                .any(|sign| message.contains(sign)) =>
+        {
+            Ok(PushOutcome::Rejected)
+        }
+        Err(message) => Err(message),
+    }
+}
+
+/// Commits ahead of and behind the upstream (`None` without one, or when it's gone).
+pub(crate) async fn ahead_behind(worktree: &Path) -> Option<(u32, u32)> {
+    let out = output(
+        worktree,
+        &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+    )
+    .await?;
+    let mut counts = out.split_whitespace().map(|n| n.parse().ok());
+    Some((counts.next()??, counts.next()??))
+}
+
+/// Whether the branch is set to track something (even if it's gone from the remote).
+pub(crate) async fn has_upstream_set(worktree: &Path) -> bool {
+    match current_branch(worktree).await {
+        Some(branch) => config(worktree, &format!("branch.{branch}.merge"))
+            .await
+            .is_some(),
+        None => false,
+    }
+}
+
+/// Fast-forwards the branch to its upstream (already fetched). Never merges or rebases, and never
+/// stashes local changes to do it.
+pub(crate) async fn fast_forward(worktree: &Path) -> Result<(), String> {
+    run(
+        worktree,
+        &[
+            "merge",
+            "--ff-only",
+            "--no-autostash",
+            "--quiet",
+            "@{upstream}",
+        ],
+    )
+    .await
+    .map(drop)
 }

@@ -10,6 +10,7 @@ type Ask = { worktree: string } & (
   | { kind: "discard"; file: GitFile }
   | { kind: "working"; sessions: string[]; request: CommitRequest }
   | { kind: "pushed"; request: CommitRequest }
+  | { kind: "pullWorking"; sessions: string[] }
 );
 
 const LETTER_KIND: Record<string, string> = { "?": "added", A: "added", D: "deleted", U: "conflicted" };
@@ -20,7 +21,11 @@ export function GitDrawer(props: { worktree: string; onOpenFile: (path: string) 
   const [message, setMessage] = createSignal("");
   const [amend, setAmend] = createSignal(false);
   const [ask, setAsk] = createSignal<Ask | null>(null);
-  const [busy, setBusy] = createSignal(false);
+  /** The Worktree an operation is running in (another one shown meanwhile isn't held up by it). */
+  const [busyIn, setBusyIn] = createSignal<string | null>(null);
+  const busy = () => busyIn() === props.worktree;
+  /** What the last push, fetch or pull said, under their buttons. */
+  const [notice, setNotice] = createSignal<{ text: string; tone: "ok" | "warn" | "error" } | null>(null);
 
   /** Status requests in flight: only the latest one's answer is shown. */
   let asked = 0;
@@ -30,8 +35,7 @@ export function GitDrawer(props: { worktree: string; onOpenFile: (path: string) 
     try {
       const next = await core.gitStatus(worktree);
       if (n !== asked || worktree !== props.worktree) return;
-      setStatus(next);
-      setError("");
+      setStatus(next); // (an operation's error stays up: the status is read after every one)
     } catch (err) {
       if (n === asked) setError(String(err));
     }
@@ -44,6 +48,7 @@ export function GitDrawer(props: { worktree: string; onOpenFile: (path: string) 
         setAsk(null);
         setAmend(false);
         setError("");
+        setNotice(null);
         void refresh();
       },
     ),
@@ -58,18 +63,24 @@ export function GitDrawer(props: { worktree: string; onOpenFile: (path: string) 
     .onEvent((event) => event.kind === "gitStatusChanged" && event.worktree === props.worktree && void refresh())
     .then((unlisten) => (alive ? (stop = unlisten) : unlisten()));
 
-  /** Runs a git operation, then shows the status after it. */
-  const run = async (operation: () => Promise<unknown>) => {
-    if (busy()) return;
-    setBusy(true);
+  /** Runs a git operation in the shown Worktree, then shows the status after it. A remote one's
+   *  failure goes under the Fetch/Pull/Push buttons; others' by the commit box. What comes back
+   *  after another Worktree is shown is dropped. */
+  const run = async (operation: (worktree: string) => Promise<unknown>, remote = false) => {
+    const worktree = props.worktree;
+    if (busyIn() !== null) return;
+    setBusyIn(worktree);
     setError("");
+    setNotice(null);
     try {
-      await operation();
+      await operation(worktree);
     } catch (err) {
-      setError(String(err));
+      if (worktree !== props.worktree) return;
+      if (remote) setNotice({ text: String(err), tone: "error" });
+      else setError(String(err));
     } finally {
-      setBusy(false);
-      void refresh();
+      setBusyIn(null);
+      if (worktree === props.worktree) void refresh();
     }
   };
 
@@ -93,6 +104,38 @@ export function GitDrawer(props: { worktree: string; onOpenFile: (path: string) 
         setAmend(false);
       }
     });
+
+  const commits = (n: number) => `${n} commit${n === 1 ? "" : "s"}`;
+  const pull = (evenIfWorking = false) =>
+    run(async (worktree) => {
+      setAsk(null);
+      const outcome = await core.gitPull(worktree, evenIfWorking);
+      if (worktree !== props.worktree) return;
+      if (outcome.kind === "sessionsWorking") setAsk({ kind: "pullWorking", sessions: outcome.sessions, worktree });
+      else if (outcome.kind === "upToDate") setNotice({ text: "Already up to date.", tone: "ok" });
+      else if (outcome.kind === "fastForwarded") setNotice({ text: `Pulled ${commits(outcome.commits)}.`, tone: "ok" });
+      else
+        setNotice({
+          text: `This branch and its upstream have diverged (${commits(outcome.ahead)} here, ${commits(outcome.behind)} there). Pulling would take a merge or a rebase, which the editor leaves to you: ask an Agent, or do it in a terminal.`,
+          tone: "warn",
+        });
+    }, true);
+  const push = () =>
+    run(async (worktree) => {
+      const outcome = await core.gitPush(worktree);
+      if (worktree !== props.worktree) return;
+      if (outcome.kind === "pushed") setNotice({ text: `Pushed to ${outcome.to}.`, tone: "ok" });
+      else
+        setNotice({
+          text: "The remote has commits this branch hasn't, so it turned the push down. Pull first; if the branch has diverged, ask an Agent to merge or rebase, or do it in a terminal.",
+          tone: "warn",
+        });
+    }, true);
+  const fetch = () =>
+    run(async (worktree) => {
+      await core.gitFetch(worktree);
+      if (worktree === props.worktree) setNotice({ text: "Fetched.", tone: "ok" });
+    }, true);
 
   const canCommit = () => !busy() && (amend() || (staged().length > 0 && message().trim() !== ""));
   const deleted = (file: GitFile) => file.staged === "D" || file.unstaged === "D";
@@ -125,7 +168,7 @@ export function GitDrawer(props: { worktree: string; onOpenFile: (path: string) 
           class="ghost row-action"
           title={side === "staged" ? "Unstage" : "Stage"}
           disabled={busy()}
-          onClick={() => run(() => (side === "staged" ? core.gitUnstage : core.gitStage)(props.worktree, [file.path]))}
+          onClick={() => run((worktree) => (side === "staged" ? core.gitUnstage : core.gitStage)(worktree, [file.path]))}
         >
           {side === "staged" ? "−" : "+"}
         </button>
@@ -154,12 +197,30 @@ export function GitDrawer(props: { worktree: string; onOpenFile: (path: string) 
                   </span>
                 </Show>
               </Show>
+              <span class="grow" />
+              <button class="ghost" disabled={busy()} onClick={() => void fetch()} title="Fetch from the remote">
+                Fetch
+              </button>
+              <button
+                class="ghost"
+                disabled={busy() || s().ahead === null}
+                onClick={() => void pull()}
+                title={s().ahead === null ? "Nothing to pull from: no upstream (or it's gone)" : "Fast-forward to the upstream (never merges or rebases)"}
+              >
+                Pull
+              </button>
+              <button class="ghost" disabled={busy() || !s().branch} onClick={() => void push()} title={`Push ${s().branch ?? ""} to the branch of its name on the remote`}>
+                Push
+              </button>
             </div>
+            <Show when={notice()}>
+              {(n) => <p class={`git-notice ${n().tone === "ok" ? "muted" : n().tone}`}>{n().text}</p>}
+            </Show>
             <div class="drawer-tree">
               <div class="git-section">
                 <span class="grow">Staged ({staged().length})</span>
                 <Show when={staged().length > 0}>
-                  <button class="ghost" disabled={busy()} onClick={() => run(() => core.gitUnstageAll(props.worktree))} title="Unstage everything">
+                  <button class="ghost" disabled={busy()} onClick={() => run((worktree) => core.gitUnstageAll(worktree))} title="Unstage everything">
                     Unstage all
                   </button>
                 </Show>
@@ -168,7 +229,7 @@ export function GitDrawer(props: { worktree: string; onOpenFile: (path: string) 
               <div class="git-section">
                 <span class="grow">Changes ({unstaged().length})</span>
                 <Show when={unstaged().length > 0}>
-                  <button class="ghost" disabled={busy()} onClick={() => run(() => core.gitStageAll(props.worktree))} title="Stage everything">
+                  <button class="ghost" disabled={busy()} onClick={() => run((worktree) => core.gitStageAll(worktree))} title="Stage everything">
                     Stage all
                   </button>
                 </Show>
@@ -223,6 +284,24 @@ export function GitDrawer(props: { worktree: string; onOpenFile: (path: string) 
                 <div class="actions">
                   <button class="primary" ref={(el) => queueMicrotask(() => el.focus())} onClick={() => void commit({ ...w().request, evenIfWorking: true }, w().worktree)}>
                     Commit anyway
+                  </button>
+                  <button class="ghost" onClick={() => setAsk(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
+          </Show>
+          <Show when={asking("pullWorking")}>
+            {(w) => (
+              <>
+                <span>
+                  {w().sessions.join(", ")} {w().sessions.length === 1 ? "is" : "are"} in the middle of a turn in this Worktree, and
+                  pulling changes files under {w().sessions.length === 1 ? "it" : "them"}. Pull anyway?
+                </span>
+                <div class="actions">
+                  <button class="primary" ref={(el) => queueMicrotask(() => el.focus())} onClick={() => void pull(true)}>
+                    Pull anyway
                   </button>
                   <button class="ghost" onClick={() => setAsk(null)}>
                     Cancel

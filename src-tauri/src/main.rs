@@ -479,6 +479,43 @@ async fn git_commit(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn git_fetch(core: State<'_, Core>, worktree: String) -> CommandResult<()> {
+    core.fetch(worktree.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn git_push(
+    core: State<'_, Core>,
+    worktree: String,
+) -> CommandResult<editor_core::PushOutcome> {
+    core.push(worktree.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Fast-forward only: says so when the branch has diverged instead (or asks first while a session
+/// there is mid-turn).
+#[tauri::command]
+async fn git_pull(
+    core: State<'_, Core>,
+    worktree: String,
+    even_if_working: bool,
+) -> CommandResult<editor_core::PullOutcome> {
+    core.pull(worktree.as_ref(), even_if_working)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The window got focus: the Worktrees are listed again, and fetched if due (5 minutes at most).
+#[tauri::command]
+async fn window_focused(core: State<'_, Core>) -> CommandResult<()> {
+    core.window_focused().await;
+    Ok(())
+}
+
 /// Throws away every change to one file (the drawer has asked).
 #[tauri::command]
 async fn git_discard(core: State<'_, Core>, worktree: String, path: String) -> CommandResult<()> {
@@ -693,6 +730,10 @@ fn main() {
             git_unstage_all,
             git_commit,
             git_discard,
+            git_fetch,
+            git_push,
+            git_pull,
+            window_focused,
             set_permission_mode,
             transcript_page_before,
             notify_session,

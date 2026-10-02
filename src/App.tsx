@@ -453,8 +453,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     const onClick = (e: MouseEvent) => !(e.target as Element | null)?.closest?.(".recent-menu") && setRecentOpen(false);
     window.addEventListener("click", onClick);
     onCleanup(() => window.removeEventListener("click", onClick));
-    // Worktrees may have changed while the editor was in the background (the watcher covers the rest).
-    const onFocus = () => void core.refreshWorktrees();
+    // Worktrees may have changed while the editor was in the background (the watcher covers the rest),
+    // and they're fetched if it's due (the core keeps it to every 5 minutes at most).
+    const onFocus = () => void core.windowFocused().catch(() => {});
     window.addEventListener("focus", onFocus);
     onCleanup(() => window.removeEventListener("focus", onFocus));
     const loaded = await core.settings();

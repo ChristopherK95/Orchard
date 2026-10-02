@@ -24,7 +24,7 @@ use crate::files::{
     ActorNews, DirEntry, FileMatch, FileWatchConfig, IndexStats, WatchStatus, WorktreeActor,
 };
 use crate::git;
-use crate::git_status::{CommitOutcome, CommitRequest, GitStatus};
+use crate::git_status::{CommitOutcome, CommitRequest, GitStatus, PullOutcome, PushOutcome};
 use crate::permissions;
 use crate::remove_worktree::{self, RemovalCheck, RemoveWorktree, RemovedWorktree};
 use crate::session::{
@@ -141,6 +141,8 @@ type ActorSlot = Arc<tokio::sync::OnceCell<Arc<WorktreeActor>>>;
 
 /// How long after a burst of file news a Worktree's branch status is refreshed.
 const STATUS_SETTLE: Duration = Duration::from_millis(200);
+/// A fetch on window focus waits at least this long since the Worktree was last fetched.
+const FOCUS_FETCH_EVERY: Duration = Duration::from_secs(5 * 60);
 /// A disk check that raced the editor's own save (or an open) is done again after this.
 const RECHECK_AFTER: Duration = Duration::from_millis(150);
 /// Diffs longer than this are cut short in the Manual editor's diff view.
@@ -320,7 +322,8 @@ pub enum CoreEvent {
         path: PathBuf,
     },
     /// A Worktree's git status may have changed (files changed, staged, committed by an Agent or
-    /// anyone): for the Git drawer to look again. Once a burst of changes has settled.
+    /// anyone, once a burst of changes has settled; or its remote refs, by a fetch, push or pull):
+    /// for the Git drawer to look again.
     GitStatusChanged {
         worktree: PathBuf,
     },
@@ -413,6 +416,11 @@ struct Inner {
     fallback_told: Mutex<HashSet<PathBuf>>,
     /// The Worktree being looked at.
     shown_worktree: Mutex<Option<PathBuf>>,
+    /// When the Workspace's repo was last fetched (by `clock`), so a fetch on focus waits its turn.
+    last_fetch: Mutex<Option<std::time::Instant>>,
+    /// One push, fetch or pull at a time: every Worktree shares the repo's remote refs, and two
+    /// fetches would fight over them.
+    remote_op: tokio::sync::Mutex<()>,
     /// Files open in Manual editors, and popped-out files held for their windows.
     documents: Mutex<DocumentTracker>,
 }
@@ -623,6 +631,8 @@ impl Core {
             status_due: Mutex::default(),
             fallback_told: Mutex::default(),
             shown_worktree: Mutex::new(None),
+            last_fetch: Mutex::default(),
+            remote_op: tokio::sync::Mutex::new(()),
             documents: Mutex::default(),
         });
         if let Some(path) = &inner.config.settings_path {
@@ -1616,14 +1626,7 @@ impl Core {
             return Err(CoreError::Git("A commit needs a message.".into()));
         }
         if !request.even_if_working {
-            // (Needs you is mid-turn too: it edits once it's answered.)
-            let working: Vec<String> = self
-                .sessions_in(&worktree)
-                .iter()
-                .map(|s| s.info.lock().expect("info lock").clone())
-                .filter(|info| matches!(info.state, SessionState::Working | SessionState::NeedsYou))
-                .map(|info| info.name)
-                .collect();
+            let working = self.mid_turn(&worktree);
             if !working.is_empty() {
                 return Ok(CommitOutcome::SessionsWorking { sessions: working });
             }
@@ -1638,6 +1641,95 @@ impl Core {
         Ok(CommitOutcome::Committed { id: done? })
     }
 
+    /// Fetches the Worktree's remote (which every Worktree of the repo shares). Fails fast (with a
+    /// hint) if git would need a login prompt.
+    pub async fn fetch(&self, worktree: &Path) -> Result<(), CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let _one_at_a_time = self.inner.remote_op.lock().await;
+        self.inner.fetch(&worktree).await.map_err(CoreError::Git)
+    }
+
+    /// Pushes the Worktree's branch to the branch of its name on its remote, which it then tracks.
+    pub async fn push(&self, worktree: &Path) -> Result<PushOutcome, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let _one_at_a_time = self.inner.remote_op.lock().await;
+        let pushed = git::push(&worktree).await.map_err(CoreError::Git);
+        self.inner.git_changed(worktree);
+        pushed
+    }
+
+    /// Fetches, then fast-forwards the branch to its upstream if it can. Never merges or rebases:
+    /// a branch that has diverged is left as it is (`Diverged`). Asks first while a session there is
+    /// mid-turn (the pull rewrites files under it), unless `even_if_working`.
+    pub async fn pull(
+        &self,
+        worktree: &Path,
+        even_if_working: bool,
+    ) -> Result<PullOutcome, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        if !even_if_working {
+            let working = self.mid_turn(&worktree);
+            if !working.is_empty() {
+                return Ok(PullOutcome::SessionsWorking { sessions: working });
+            }
+        }
+        let _one_at_a_time = self.inner.remote_op.lock().await;
+        self.inner.fetch(&worktree).await.map_err(CoreError::Git)?;
+        let Some((ahead, behind)) = git::ahead_behind(&worktree).await else {
+            return Err(CoreError::Git(match git::has_upstream_set(&worktree).await {
+                true => "The branch this one tracks is gone from the remote (deleted after a merge?), so there's nothing to pull.".into(),
+                false => "This branch has no upstream to pull from: push it first.".into(),
+            }));
+        };
+        let outcome = match (ahead, behind) {
+            (_, 0) => PullOutcome::UpToDate,
+            (0, commits) => {
+                let pulled = git::fast_forward(&worktree).await.map_err(CoreError::Git);
+                self.inner.git_changed(worktree);
+                pulled?;
+                PullOutcome::FastForwarded { commits }
+            }
+            (ahead, behind) => PullOutcome::Diverged { ahead, behind },
+        };
+        Ok(outcome)
+    }
+
+    /// The window got focus: the Worktree list may have moved on while it was in the background,
+    /// and the shown Worktrees (the one looked at, and those with sessions) are fetched if the repo
+    /// hasn't been for `FOCUS_FETCH_EVERY`. The Worktrees fetched for (failures are quiet: a manual
+    /// fetch says what went wrong).
+    pub async fn window_focused(&self) -> Vec<PathBuf> {
+        self.refresh_worktrees().await;
+        let live = self.inner.live_worktrees();
+        let shown = self
+            .inner
+            .shown_worktree
+            .lock()
+            .expect("shown worktree lock")
+            .clone();
+        let Some(from) = shown
+            .filter(|s| live.contains(s))
+            .or_else(|| live.first().cloned())
+        else {
+            return vec![];
+        };
+        // Due, and claimed, under one lock (two focus events can't both go).
+        let now = self.inner.clock.now();
+        {
+            let mut last_fetch = self.inner.last_fetch.lock().expect("last fetch lock");
+            if last_fetch.is_some_and(|last| now.duration_since(last) < FOCUS_FETCH_EVERY) {
+                return vec![];
+            }
+            *last_fetch = Some(now);
+        }
+        // (A push, fetch or pull already talking to the remote: no need for another.)
+        let Ok(_one_at_a_time) = self.inner.remote_op.try_lock() else {
+            return vec![];
+        };
+        let _ = self.inner.fetch(&from).await;
+        live
+    }
+
     /// Throws away every change to the file (staged or not): back to the last commit's version,
     /// or deleted if it's new. The drawer asks first.
     pub async fn discard(&self, worktree: &Path, path: &str) -> Result<(), CoreError> {
@@ -1645,6 +1737,17 @@ impl Core {
         let done = git::discard(&worktree, path).await.map_err(CoreError::Git);
         self.inner.status_due(worktree);
         done
+    }
+
+    /// The names of the sessions in `worktree` in the middle of a turn (Needs you too: it edits once
+    /// it's answered).
+    fn mid_turn(&self, worktree: &Path) -> Vec<String> {
+        self.sessions_in(worktree)
+            .iter()
+            .map(|s| s.info.lock().expect("info lock").clone())
+            .filter(|info| matches!(info.state, SessionState::Working | SessionState::NeedsYou))
+            .map(|info| info.name)
+            .collect()
     }
 
     /// `worktree`, as the core lists it, if it's one of the Workspace's and isn't being removed.
@@ -2552,6 +2655,44 @@ impl Inner {
                 });
             }
         }
+    }
+
+    /// The Worktrees being followed: the one looked at, and those with sessions (their actors run).
+    fn live_worktrees(&self) -> Vec<PathBuf> {
+        let mut live: Vec<PathBuf> = self
+            .actors
+            .lock()
+            .expect("actors lock")
+            .keys()
+            .cloned()
+            .collect();
+        live.sort();
+        live
+    }
+
+    /// Fetches the repo's remote from `worktree` (under `remote_op`) and notes when (a failed fetch
+    /// counts too: focus doesn't retry it at once). Every followed Worktree shares the remote refs,
+    /// so they all look again.
+    async fn fetch(self: &Arc<Self>, worktree: &Path) -> Result<(), String> {
+        *self.last_fetch.lock().expect("last fetch lock") = Some(self.clock.now());
+        let fetched = git::fetch(worktree).await;
+        let mut changed = self.live_worktrees();
+        if !changed.iter().any(|w| w == worktree) {
+            changed.push(worktree.to_owned());
+        }
+        for worktree in changed {
+            self.git_changed(worktree);
+        }
+        fetched
+    }
+
+    /// Something the editor did changed `worktree`'s refs (a fetch, push or pull): the drawer and
+    /// the Worktree list look again.
+    fn git_changed(self: &Arc<Self>, worktree: PathBuf) {
+        let _ = self.events.send(CoreEvent::GitStatusChanged {
+            worktree: worktree.clone(),
+        });
+        self.status_due(worktree);
     }
 
     /// Tells the frontend the open files after a change to them.

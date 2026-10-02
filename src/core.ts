@@ -262,6 +262,21 @@ export type CommitOutcome =
   /** Amending would rewrite a pushed commit: ask first. */
   | { kind: "alreadyPushed" };
 
+/** What a push did. */
+export type PushOutcome =
+  | { kind: "pushed"; to: string }
+  /** The remote has commits this branch hasn't. */
+  | { kind: "rejected" };
+
+/** What a pull did: it only ever fast-forwards. */
+export type PullOutcome =
+  /** Sessions in the Worktree are mid-turn: ask first. */
+  | { kind: "sessionsWorking"; sessions: string[] }
+  | { kind: "upToDate" }
+  | { kind: "fastForwarded"; commits: number }
+  /** A merge or rebase would be needed: left to an Agent or a terminal. */
+  | { kind: "diverged"; ahead: number; behind: number };
+
 /** A hand edit to a file the session read or edited, waiting for its next prompt. */
 export interface EditNote {
   path: string;
@@ -422,6 +437,12 @@ export const core = {
   gitStageAll: (worktree: string) => invoke<void>("git_stage_all", { worktree }),
   gitUnstageAll: (worktree: string) => invoke<void>("git_unstage_all", { worktree }),
   gitCommit: (worktree: string, request: CommitRequest) => invoke<CommitOutcome>("git_commit", { worktree, request }),
+  gitFetch: (worktree: string) => invoke<void>("git_fetch", { worktree }),
+  gitPush: (worktree: string) => invoke<PushOutcome>("git_push", { worktree }),
+  /** Fast-forward only. */
+  gitPull: (worktree: string, evenIfWorking = false) => invoke<PullOutcome>("git_pull", { worktree, evenIfWorking }),
+  /** The window got focus: the core lists the Worktrees again, and fetches if it's due. */
+  windowFocused: () => invoke<void>("window_focused"),
   /** Throws away every change to the file (ask first). */
   gitDiscard: (worktree: string, path: string) => invoke<void>("git_discard", { worktree, path }),
   /** The session's Edit notes (sent with its next prompt). */
