@@ -49,7 +49,7 @@ The wide-display alternative to the Tabs view (offered from 1,600 px): each pinn
 _Avoid_: Split view, panes
 
 **Pinned Worktree**:
-A Worktree that has a column in the Columns view. Pins are kept per Workspace across restarts; the columns follow the Worktree row's order.
+A Worktree that has a column in the Columns view ("+ column" adds one, a column's × closes it). Pins are kept per Workspace across restarts; the columns follow the Worktree row's order, though the Columns view itself has no Worktree row.
 
 **Focused column**:
 The one column of the Columns view that takes input: the next prompt, Y / N, the Files/Git drawer and Ctrl+P all go to its Worktree. Only it has the full composer.

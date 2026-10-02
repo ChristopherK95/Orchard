@@ -169,11 +169,26 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   /** The Worktrees pinned as columns, and those in Worktree row order. */
   const [pinned, setPinnedList] = createSignal<string[]>([]);
   const pinnedRow = () => rowWorktrees().filter((w) => pinned().includes(w.path));
-  const togglePin = (path: string) =>
+  const setPinned = (path: string, on: boolean) =>
     core
-      .setPinned(path, !pinned().includes(path))
+      .setPinned(path, on)
       .then(setPinnedList)
       .catch((err) => setError(String(err)));
+  /** Gives a Worktree a column and focuses it. */
+  const pin = async (path: string) => {
+    await setPinned(path, true);
+    setActiveWorktree(path);
+  };
+  /** Closes a Worktree's column; focus moves to a neighbour. */
+  const unpin = (path: string) => {
+    const row = pinnedRow();
+    const at = row.findIndex((w) => w.path === path);
+    const next = row[at + 1] ?? row[at - 1];
+    if (path === activeWorktree() && next) setActiveWorktree(next.path);
+    void setPinned(path, false);
+  };
+  /** The title bar's "+ column" menu. */
+  const [addColumnAt, setAddColumnAt] = createSignal<{ left: number; top: number } | null>(null);
   /** The Columns view is offered from COLUMNS_MIN_WIDTH up. */
   const [wide, setWide] = createSignal(window.innerWidth >= COLUMNS_MIN_WIDTH);
   /** Each column's view slot, by Worktree (Y / N answer the focused one's card). */
@@ -329,11 +344,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     setActiveWorktree(path);
     tabs.hide(); // nothing should stream into an empty Worktree's view
   };
-  /** A Worktree tab clicked: in the Columns view it focuses its column (pinning it first). */
-  const onWorktreeTab = (path: string) => {
-    if (mainView() !== "columns" || pinned().includes(path)) return selectWorktree(path);
-    void togglePin(path).then(() => setActiveWorktree(path));
-  };
+
 
   /** Brings a closed session back in a new Tab and shows it. */
   const reopen = async (opening: Promise<SessionId | null>) => {
@@ -536,7 +547,11 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     window.addEventListener("resize", onResize);
     onCleanup(() => window.removeEventListener("resize", onResize));
     // The Recent menu closes on a click anywhere else.
-    const onClick = (e: MouseEvent) => !(e.target as Element | null)?.closest?.(".recent-menu, .menu") && setRecentOpen(false);
+    const onClick = (e: MouseEvent) => {
+      if ((e.target as Element | null)?.closest?.(".recent-menu, .menu")) return;
+      setRecentOpen(false);
+      setAddColumnAt(null);
+    };
     window.addEventListener("click", onClick);
     onCleanup(() => window.removeEventListener("click", onClick));
     // Worktrees may have changed while the editor was in the background (the watcher covers the rest),
@@ -618,6 +633,56 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
             Board
           </button>
         </div>
+        <Show when={mainView() === "columns"}>
+          <span class="recent-menu">
+            <button
+              class="add-worktree"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                setAddColumnAt((now) => (now ? null : { left: r.left, top: r.bottom + 4 }));
+              }}
+              title="Give another Worktree a column"
+            >
+              <Plus />
+              column
+            </button>
+            <Show when={addColumnAt()}>
+              {(at) => (
+                <div class="menu" style={{ left: `${at().left}px`, top: `${at().top}px` }}>
+                  <For each={rowWorktrees().filter((w) => !w.removed && !pinned().includes(w.path))}>
+                    {(w) => (
+                      <button
+                        class="menu-item"
+                        style={{ "--c": worktreeColour(w.path) }}
+                        onClick={() => {
+                          setAddColumnAt(null);
+                          void pin(w.path);
+                        }}
+                      >
+                        <GitBranch class="wt-glyph" />
+                        <span class="mono">{worktreeLabel(w)}</span>
+                        <Show when={sessionsIn(w.path).some((s) => s.state === "needsYou")}>
+                          <span class="badge needs">{sessionsIn(w.path).filter((s) => s.state === "needsYou").length}</span>
+                        </Show>
+                      </button>
+                    )}
+                  </For>
+                  <div class="menu-sep" />
+                  <button
+                    class="menu-item"
+                    onClick={() => {
+                      setAddColumnAt(null);
+                      setCreatingWorktree(true);
+                    }}
+                  >
+                    <Plus />
+                    New Worktree…
+                  </button>
+                </div>
+              )}
+            </Show>
+          </span>
+        </Show>
         <Show when={needYou() > 0}>
           <button class="needs-you-button" onClick={() => setBoardOpen(true)} title="See them on the Board">
             {needYou()} need{needYou() === 1 ? "s" : ""} you
@@ -668,29 +733,31 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           }}
         />
       </Show>
-      <WorktreeRow
-        worktrees={rowWorktrees()}
-        active={activeWorktree()}
-        sessionsIn={sessionsIn}
-        settingUp={(path) => !!setups[path] && setups[path].status.kind !== "done"}
-        columns={mainView() === "columns"}
-        pinned={(path) => pinned().includes(path)}
-        onPin={(path) => void togglePin(path)}
-        onSelect={onWorktreeTab}
-        onNewSession={(path) => void newSession(path)}
-        onNewWorktree={() => setCreatingWorktree(true)}
-      />
+      {/* (The Columns view has no Worktree row: its column headers say which Worktree is where.) */}
+      <Show when={mainView() === "tabs"}>
+        <WorktreeRow
+          worktrees={rowWorktrees()}
+          active={activeWorktree()}
+          sessionsIn={sessionsIn}
+          settingUp={(path) => !!setups[path] && setups[path].status.kind !== "done"}
+          onSelect={selectWorktree}
+          onNewSession={(path) => void newSession(path)}
+          onNewWorktree={() => setCreatingWorktree(true)}
+        />
+      </Show>
       <Show when={creatingWorktree()}>
         <NewWorktreeDialog
           activeBranch={worktree()?.branch ?? null}
           existing={creatingFrom()}
-          onCreated={(created) => {
+          onCreated={async (created) => {
             // The Worktree exists now: close, and start its session in the main view, where a
             // failure leaves the (empty) Worktree selected with "＋ session" to retry. With a
-            // setup, show it running; the core starts the session once it's done.
+            // setup, show it running; the core starts the session once it's done. In the Columns
+            // view it gets a column first.
             setCreatingWorktree(false);
             setCreatingFrom(undefined);
             setNotice(created.warning ?? "");
+            if (mainView() === "columns") await pin(created.worktree.path);
             const setup = created.setup;
             if (!setup) return void newSession(created.worktree.path);
             // Events may have got here first: keep their status and output.
@@ -845,6 +912,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       <Show when={mainView() === "columns"}>
         <Columns
           worktrees={pinnedRow()}
+          unpinned={rowWorktrees().filter((w) => !w.removed && !pinned().includes(w.path))}
+          onPin={(path) => void pin(path)}
+          onUnpin={unpin}
           focused={activeWorktree()}
           sessionsIn={sessionsIn}
           shownIn={shownIn}

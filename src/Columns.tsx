@@ -18,6 +18,10 @@ export const COLUMNS_MIN_WIDTH = 1600;
 export interface ColumnsProps {
   /** The pinned Worktrees, in Worktree row order. */
   worktrees: WorktreeTab[];
+  /** The Worktrees without a column (offered when none has one). */
+  unpinned: WorktreeTab[];
+  onPin: (path: string) => void;
+  onUnpin: (path: string) => void;
   /** The focused column's Worktree. */
   focused: string;
   sessionsIn: (path: string) => SessionInfo[];
@@ -47,8 +51,24 @@ export function Columns(props: ColumnsProps) {
       fallback={
         <div class="center empty-worktree">
           <Pin />
-          <p>No Worktrees are pinned yet.</p>
-          <span class="muted small">Pin Worktrees in the Worktree row to give each one a column.</span>
+          <p>No Worktrees have a column yet.</p>
+          <div class="list-box">
+            <div class="section-label">
+              Worktrees
+              <span class="note">more later with “+ column” in the title bar</span>
+            </div>
+            <For each={props.unpinned}>
+              {(w) => (
+                <div class="recent-row" style={{ "--c": worktreeColour(w.path) }}>
+                  <GitBranch class="wt-glyph" />
+                  <span class="grow mono">{worktreeLabel(w)}</span>
+                  <button class="link" onClick={() => props.onPin(w.path)}>
+                    Open as a column
+                  </button>
+                </div>
+              )}
+            </For>
+          </div>
         </div>
       }
     >
@@ -177,6 +197,7 @@ function ColumnHeader(props: ColumnsProps & { worktree: WorktreeTab; isFocused: 
           worktree={props.worktree}
           session={props.session}
           stateLabel={STATE_LABEL}
+          onUnpin={() => props.onUnpin(props.worktree.path)}
           onRemove={() => props.onRemove(props.worktree)}
           onSuspend={props.onSuspend}
           onResume={props.onResume}
@@ -207,6 +228,9 @@ function ColumnHeader(props: ColumnsProps & { worktree: WorktreeTab; isFocused: 
           >
             <span class="badge needs">{needYou()} need{needYou() === 1 ? "s" : ""} you</span>
           </Show>
+          <button class="icon" onClick={() => props.onUnpin(props.worktree.path)} title="Close this column (its sessions keep running)" aria-label="Close this column">
+            <X />
+          </button>
         </span>
       </div>
     </Show>

@@ -7,7 +7,7 @@
 **Status:** done (Windows; Arch pending)
 
 - [x] Below 1,600 px the Columns segment is disabled, not hidden, and its hover says "Columns needs a window at least 1 600 px wide". A window that shrinks below that while in Columns goes back to Tabs.
-- [x] Each Worktree tab carries a pin control; pinned Worktrees get a column, in Worktree-row order. Pins are kept per Workspace across restarts.
+- [x] Pinned Worktrees get a column, in Worktree-row order; pins are kept per Workspace across restarts. (Changed 2026-10-03, see notes: the Columns view has no Worktree row.)
 - [x] An unfocused column's header shows the branch, its counts and a Needs-you badge; the focused column's header expands into the full context line (branch · path · counts · changed › session · state).
 - [x] Only the focused column has the full composer. Every other column shows a 32 px line, "Message ⎇ agent/docs", dimmed, that focuses the column when clicked.
 - [x] Y / N answer the focused column only. A pending card in an unfocused column still renders with working Allow / Deny buttons but no key caps, and a line reading "focus this column to answer with Y / N".
@@ -29,7 +29,8 @@ Notes:
 - Pins are in the app state per Workspace (`pinned`), via `pinned_worktrees` / `set_pinned`; gone Worktrees are dropped on restore and not listed.
 - The frontend's transcript state is `createTabView(slot)` (TabView.ts): the Tabs view has one, each column makes its own and hides its slot when it goes. The focused column *is* the active Worktree, so the drawer, Ctrl+P and Y / N follow it with no extra wiring.
 - **Deviation:** the Manual editor stays one pane beside the columns, not inside the focused column. It holds the CodeMirror instances and unsaved buffers, and moving it between columns on every focus change would remount it.
-- In the Columns view, clicking an unpinned Worktree tab pins it and focuses its column. Showing a session that's in an unpinned Worktree (a notification, the palette, the Board) switches to the Tabs view.
+- In the Columns view, showing a session that's in an unpinned Worktree (a notification, the palette, the Board) switches to the Tabs view.
+- **Changed after review (2026-10-03):** the Columns view hides the Worktree row; the column headers are enough. Columns are added with "+ column" in the title bar (a menu of the Worktrees without one, and "New Worktree…") and closed with the × in each column header (sessions keep running). With none open, the view lists the Worktrees to open as columns. A Worktree created in the Columns view gets a column straight away.
 - The composer keeps a draft per session, so typing survives focus moving between columns (and switching Tabs).
 - Alt+↑/↓ also switch sessions in the Tabs view.
 - Checked in the real app at 1920 px through WebView2's DevTools protocol (no OS input): 3 columns streaming, focus and Y / N per column, drafts, Alt+arrows, drawer follow and pin, Board over Columns and back, and the fallback to Tabs below 1,600 px. Core tests: `tests/columns.rs`. Benchmark: 128.7 MB with 4 columns (docs/benchmarks/memory.md).
