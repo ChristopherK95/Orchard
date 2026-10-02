@@ -420,6 +420,73 @@ async fn resume_session(core: State<'_, Core>, session_id: SessionId) -> Command
         .map_err(|e| e.to_string())
 }
 
+/// The Git drawer: the Worktree's branch, upstream standing and changed files.
+#[tauri::command]
+async fn git_status(
+    core: State<'_, Core>,
+    worktree: String,
+) -> CommandResult<editor_core::GitStatus> {
+    core.git_status(worktree.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn git_stage(
+    core: State<'_, Core>,
+    worktree: String,
+    paths: Vec<String>,
+) -> CommandResult<()> {
+    core.stage(worktree.as_ref(), &paths)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn git_unstage(
+    core: State<'_, Core>,
+    worktree: String,
+    paths: Vec<String>,
+) -> CommandResult<()> {
+    core.unstage(worktree.as_ref(), &paths)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn git_stage_all(core: State<'_, Core>, worktree: String) -> CommandResult<()> {
+    core.stage_all(worktree.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn git_unstage_all(core: State<'_, Core>, worktree: String) -> CommandResult<()> {
+    core.unstage_all(worktree.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Commits what's staged, or says what to ask the user first.
+#[tauri::command]
+async fn git_commit(
+    core: State<'_, Core>,
+    worktree: String,
+    request: editor_core::CommitRequest,
+) -> CommandResult<editor_core::CommitOutcome> {
+    core.commit(worktree.as_ref(), request)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Throws away every change to one file (the drawer has asked).
+#[tauri::command]
+async fn git_discard(core: State<'_, Core>, worktree: String, path: String) -> CommandResult<()> {
+    core.discard(worktree.as_ref(), &path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// The session's Edit notes waiting for its next prompt.
 #[tauri::command]
 fn edit_notes(
@@ -619,6 +686,13 @@ fn main() {
             answer_permission,
             edit_notes,
             remove_edit_note,
+            git_status,
+            git_stage,
+            git_unstage,
+            git_stage_all,
+            git_unstage_all,
+            git_commit,
+            git_discard,
             set_permission_mode,
             transcript_page_before,
             notify_session,

@@ -37,10 +37,14 @@ async fn run(cwd: &Path, args: &[&str]) -> Result<String, String> {
         .await
         .map_err(|e| format!("could not run git: {e}"))?;
     if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+        return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
     }
+    // (Some messages go to stdout: `commit` with nothing staged says so there.)
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+    Err(match stderr.is_empty() {
+        true => String::from_utf8_lossy(&out.stdout).trim().to_owned(),
+        false => stderr,
+    })
 }
 
 /// How long a fetch may take before the editor gives up and uses what was fetched last (a login
@@ -523,4 +527,181 @@ pub(crate) async fn check_ignored(
 pub(crate) async fn git_dir(worktree: &Path) -> Option<PathBuf> {
     let out = output(worktree, &["rev-parse", "--absolute-git-dir"]).await?;
     Some(PathBuf::from(out.trim()))
+}
+
+/// The Git drawer's status: branch, upstream standing, every changed (and untracked) file, and the
+/// last commit.
+pub(crate) async fn status(worktree: &Path) -> Result<crate::git_status::GitStatus, String> {
+    let out = run(
+        worktree,
+        &[
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "-z",
+            "--untracked-files=all",
+        ],
+    )
+    .await?;
+    let mut status = crate::git_status::parse(&out);
+    status.last_commit = last_commit(worktree)
+        .await
+        .map(|(id, subject)| crate::git_status::LastCommit { id, subject });
+    Ok(status)
+}
+
+/// Runs git on `paths` (relative, `/`-separated), as pathspecs that match only themselves. Never
+/// on none: an empty pathspec would mean everything.
+async fn run_on(worktree: &Path, args: &[&str], paths: &[String]) -> Result<String, String> {
+    if paths.is_empty() {
+        return Err("No files given.".into());
+    }
+    let paths: Vec<String> = paths.iter().map(|p| format!(":(literal){p}")).collect();
+    let mut all: Vec<&str> = args.to_vec();
+    all.push("--");
+    all.extend(paths.iter().map(String::as_str));
+    run(worktree, &all).await
+}
+
+async fn has_head(worktree: &Path) -> bool {
+    run(worktree, &["rev-parse", "--verify", "-q", "HEAD"])
+        .await
+        .is_ok()
+}
+
+/// `paths` with the originals of any staged renames among them: a rename is staged and unstaged
+/// as one.
+async fn with_rename_originals(worktree: &Path, paths: &[String]) -> Result<Vec<String>, String> {
+    let status = status(worktree).await?;
+    let mut all = paths.to_vec();
+    for file in status.files {
+        if let (true, Some(from)) = (paths.contains(&file.path), file.renamed_from) {
+            all.push(from);
+        }
+    }
+    Ok(all)
+}
+
+/// Out of the index only (`-f`: even a new file edited since it was staged; the file itself stays).
+const UNSTAGE_NEW: &[&str] = &["rm", "-q", "-r", "-f", "--cached", "--ignore-unmatch"];
+
+/// Stages whole files (changes, new files and deletions alike).
+pub(crate) async fn stage(worktree: &Path, paths: &[String]) -> Result<(), String> {
+    let paths = with_rename_originals(worktree, paths).await?;
+    run_on(worktree, &["add", "-A"], &paths).await.map(drop)
+}
+
+pub(crate) async fn stage_all(worktree: &Path) -> Result<(), String> {
+    run(worktree, &["add", "-A"]).await.map(drop)
+}
+
+/// Unstages whole files (before the first commit too, when there's no HEAD to reset to).
+pub(crate) async fn unstage(worktree: &Path, paths: &[String]) -> Result<(), String> {
+    let paths = with_rename_originals(worktree, paths).await?;
+    if has_head(worktree).await {
+        run_on(worktree, &["reset", "-q", "HEAD"], &paths)
+            .await
+            .map(drop)
+    } else {
+        run_on(worktree, UNSTAGE_NEW, &paths).await.map(drop)
+    }
+}
+
+pub(crate) async fn unstage_all(worktree: &Path) -> Result<(), String> {
+    if has_head(worktree).await {
+        run(worktree, &["reset", "-q"]).await.map(drop)
+    } else {
+        run_on(worktree, UNSTAGE_NEW, &[".".to_owned()])
+            .await
+            .map(drop)
+    }
+}
+
+/// How long a commit may take (its hooks included) before the editor gives up on it.
+const COMMIT_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Commits what's staged with `message` (amending the last commit if `amend`; an empty message
+/// then keeps its own). The new commit's short id.
+pub(crate) async fn commit(worktree: &Path, message: &str, amend: bool) -> Result<String, String> {
+    let mut args = vec!["commit", "-q"];
+    if amend {
+        args.push("--amend");
+    }
+    if message.trim().is_empty() && amend {
+        args.push("--no-edit");
+    } else {
+        args.extend(["-m", message]);
+    }
+    // (A hook or a signing prompt that never finishes: given up on, and the drawer is usable again.)
+    let mut cmd = git(worktree);
+    cmd.args(&args).kill_on_drop(true);
+    let out = tokio::time::timeout(COMMIT_TIMEOUT, cmd.output())
+        .await
+        .map_err(|_| {
+            "The commit took too long (a hook or signing prompt?) and was stopped.".to_owned()
+        })?
+        .map_err(|e| format!("could not run git: {e}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        return Err(if stderr.is_empty() { stdout } else { stderr });
+    }
+    Ok(run(worktree, &["rev-parse", "--short", "HEAD"])
+        .await?
+        .trim()
+        .to_owned())
+}
+
+/// The last commit's short id and subject, if there is one.
+pub(crate) async fn last_commit(worktree: &Path) -> Option<(String, String)> {
+    let out = output(worktree, &["log", "-1", "--format=%h%x00%s"]).await?;
+    let (id, subject) = out.trim_end().split_once('\0')?;
+    Some((id.to_owned(), subject.to_owned()))
+}
+
+/// Whether HEAD is on a remote branch already (so amending it rewrites pushed history). If git
+/// can't say, it's taken as not pushed.
+pub(crate) async fn head_pushed(worktree: &Path) -> bool {
+    output(
+        worktree,
+        &["branch", "-r", "--contains", "HEAD", "--format=%(refname)"],
+    )
+    .await
+    .is_some_and(|out| !out.trim().is_empty())
+}
+
+/// Throws away every change to `path` (staged or not): back to HEAD's version, or gone if HEAD
+/// hasn't got it (a new file). A staged rename's original comes back too.
+pub(crate) async fn discard(worktree: &Path, path: &str) -> Result<(), String> {
+    let has_head = has_head(worktree).await;
+    for path in with_rename_originals(worktree, &[path.to_owned()]).await? {
+        let in_head = has_head
+            && run(worktree, &["cat-file", "-e", &format!("HEAD:{path}")])
+                .await
+                .is_ok();
+        let paths = [path.clone()];
+        if in_head {
+            run_on(
+                worktree,
+                &["restore", "--source=HEAD", "--staged", "--worktree"],
+                &paths,
+            )
+            .await?;
+        } else {
+            run_on(worktree, UNSTAGE_NEW, &paths).await?;
+            let on_disk = worktree.join(&path);
+            if on_disk.is_dir() {
+                return Err(format!(
+                    "{path} is a folder (another repository?): delete it yourself if you mean to"
+                ));
+            }
+            match std::fs::remove_file(&on_disk) {
+                Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(format!("couldn't delete {path}: {err}"))
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }

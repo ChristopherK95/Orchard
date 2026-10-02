@@ -24,6 +24,7 @@ use crate::files::{
     ActorNews, DirEntry, FileMatch, FileWatchConfig, IndexStats, WatchStatus, WorktreeActor,
 };
 use crate::git;
+use crate::git_status::{CommitOutcome, CommitRequest, GitStatus};
 use crate::permissions;
 use crate::remove_worktree::{self, RemovalCheck, RemoveWorktree, RemovedWorktree};
 use crate::session::{
@@ -317,6 +318,11 @@ pub enum CoreEvent {
     DocumentBackOnDisk {
         window: String,
         path: PathBuf,
+    },
+    /// A Worktree's git status may have changed (files changed, staged, committed by an Agent or
+    /// anyone): for the Git drawer to look again. Once a burst of changes has settled.
+    GitStatusChanged {
+        worktree: PathBuf,
     },
     /// A session's Edit notes changed: a file it read or edited was saved by hand, a note was
     /// removed, or the notes went with a prompt (none left).
@@ -1563,6 +1569,99 @@ impl Core {
         saved
     }
 
+    /// The Git drawer: the Worktree's branch, upstream standing and changed files.
+    pub async fn git_status(&self, worktree: &Path) -> Result<GitStatus, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        git::status(&worktree).await.map_err(CoreError::Git)
+    }
+
+    /// Stages whole files (paths relative to the Worktree, `/`-separated).
+    pub async fn stage(&self, worktree: &Path, paths: &[String]) -> Result<(), CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let done = git::stage(&worktree, paths).await.map_err(CoreError::Git);
+        self.inner.status_due(worktree);
+        done
+    }
+
+    pub async fn unstage(&self, worktree: &Path, paths: &[String]) -> Result<(), CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let done = git::unstage(&worktree, paths).await.map_err(CoreError::Git);
+        self.inner.status_due(worktree);
+        done
+    }
+
+    pub async fn stage_all(&self, worktree: &Path) -> Result<(), CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let done = git::stage_all(&worktree).await.map_err(CoreError::Git);
+        self.inner.status_due(worktree);
+        done
+    }
+
+    pub async fn unstage_all(&self, worktree: &Path) -> Result<(), CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let done = git::unstage_all(&worktree).await.map_err(CoreError::Git);
+        self.inner.status_due(worktree);
+        done
+    }
+
+    /// Commits what's staged. Asks first (without committing) while a session in the Worktree is
+    /// Working, and before amending a commit that's already pushed, unless told to go ahead.
+    pub async fn commit(
+        &self,
+        worktree: &Path,
+        request: CommitRequest,
+    ) -> Result<CommitOutcome, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        if !request.amend && request.message.trim().is_empty() {
+            return Err(CoreError::Git("A commit needs a message.".into()));
+        }
+        if !request.even_if_working {
+            // (Needs you is mid-turn too: it edits once it's answered.)
+            let working: Vec<String> = self
+                .sessions_in(&worktree)
+                .iter()
+                .map(|s| s.info.lock().expect("info lock").clone())
+                .filter(|info| matches!(info.state, SessionState::Working | SessionState::NeedsYou))
+                .map(|info| info.name)
+                .collect();
+            if !working.is_empty() {
+                return Ok(CommitOutcome::SessionsWorking { sessions: working });
+            }
+        }
+        if request.amend && !request.even_if_pushed && git::head_pushed(&worktree).await {
+            return Ok(CommitOutcome::AlreadyPushed);
+        }
+        let done = git::commit(&worktree, &request.message, request.amend)
+            .await
+            .map_err(CoreError::Git);
+        self.inner.status_due(worktree);
+        Ok(CommitOutcome::Committed { id: done? })
+    }
+
+    /// Throws away every change to the file (staged or not): back to the last commit's version,
+    /// or deleted if it's new. The drawer asks first.
+    pub async fn discard(&self, worktree: &Path, path: &str) -> Result<(), CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let done = git::discard(&worktree, path).await.map_err(CoreError::Git);
+        self.inner.status_due(worktree);
+        done
+    }
+
+    /// `worktree`, as the core lists it, if it's one of the Workspace's and isn't being removed.
+    fn known_worktree(&self, worktree: &Path) -> Result<PathBuf, CoreError> {
+        let wanted = worktrees::normalize(worktree.to_owned());
+        let state = self.inner.state.lock().expect("state lock");
+        if state.removing.contains(&wanted) {
+            return Err(CoreError::BeingRemoved);
+        }
+        state
+            .worktrees
+            .iter()
+            .map(|w| w.path.clone())
+            .find(|w| *w == wanted)
+            .ok_or_else(|| CoreError::UnknownWorktree(worktree.to_owned()))
+    }
+
     /// The session's Edit notes waiting for its next prompt.
     pub fn edit_notes(&self, id: SessionId) -> Result<Vec<EditNote>, CoreError> {
         Ok(self
@@ -2322,7 +2421,13 @@ impl Inner {
                 ActorNews::Files => {
                     let _ = inner.events.send(CoreEvent::FilesChanged { worktree });
                 }
-                ActorNews::Status => inner.status_due(worktree),
+                ActorNews::Status => {
+                    // (The watcher has let the burst settle: the Git drawer looks again now.)
+                    let _ = inner.events.send(CoreEvent::GitStatusChanged {
+                        worktree: worktree.clone(),
+                    });
+                    inner.status_due(worktree);
+                }
                 ActorNews::Touched(paths) => inner.check_documents(&worktree, paths),
                 ActorNews::Fallback(message) => {
                     let first = inner

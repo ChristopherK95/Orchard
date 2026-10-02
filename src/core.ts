@@ -228,6 +228,40 @@ export interface PermissionRequest {
   options: PermissionOption[];
 }
 
+/** The Git drawer's view of a Worktree. */
+export interface GitStatus {
+  branch: string | null;
+  upstream: string | null;
+  ahead: number | null;
+  behind: number | null;
+  files: GitFile[];
+  lastCommit: { id: string; subject: string } | null;
+}
+
+/** A changed file: git's status letters for what's staged and what isn't (`?`: untracked). */
+export interface GitFile {
+  /** Relative to the Worktree, `/`-separated. */
+  path: string;
+  staged: string | null;
+  unstaged: string | null;
+  renamedFrom: string | null;
+  conflicted: boolean;
+}
+
+export interface CommitRequest {
+  message: string;
+  amend?: boolean;
+  evenIfWorking?: boolean;
+  evenIfPushed?: boolean;
+}
+
+export type CommitOutcome =
+  | { kind: "committed"; id: string }
+  /** Sessions in the Worktree are Working: ask first. */
+  | { kind: "sessionsWorking"; sessions: string[] }
+  /** Amending would rewrite a pushed commit: ask first. */
+  | { kind: "alreadyPushed" };
+
 /** A hand edit to a file the session read or edited, waiting for its next prompt. */
 export interface EditNote {
   path: string;
@@ -301,6 +335,8 @@ export type CoreEvent =
   | { kind: "documentBackOnDisk"; window: string; path: string }
   | { kind: "documentsChanged"; documents: OpenDocument[] }
   | { kind: "editNotesChanged"; sessionId: SessionId; notes: EditNote[] }
+  /** The Worktree's git status may have changed (coalesced). */
+  | { kind: "gitStatusChanged"; worktree: string }
   | { kind: "filesChanged"; worktree: string }
   | { kind: "fileWatchFallback"; worktree: string; message: string }
   | { kind: "autoSuspended"; suspended: { session: SessionInfo; reason: AutoSuspendReason }[] }
@@ -380,6 +416,14 @@ export const core = {
   suspendSession: (sessionId: SessionId) => invoke<void>("suspend_session", { sessionId }),
   /** Brings a Suspended or Exited session back. */
   resumeSession: (sessionId: SessionId) => invoke<void>("resume_session", { sessionId }),
+  gitStatus: (worktree: string) => invoke<GitStatus>("git_status", { worktree }),
+  gitStage: (worktree: string, paths: string[]) => invoke<void>("git_stage", { worktree, paths }),
+  gitUnstage: (worktree: string, paths: string[]) => invoke<void>("git_unstage", { worktree, paths }),
+  gitStageAll: (worktree: string) => invoke<void>("git_stage_all", { worktree }),
+  gitUnstageAll: (worktree: string) => invoke<void>("git_unstage_all", { worktree }),
+  gitCommit: (worktree: string, request: CommitRequest) => invoke<CommitOutcome>("git_commit", { worktree, request }),
+  /** Throws away every change to the file (ask first). */
+  gitDiscard: (worktree: string, path: string) => invoke<void>("git_discard", { worktree, path }),
   /** The session's Edit notes (sent with its next prompt). */
   editNotes: (sessionId: SessionId) => invoke<EditNote[]>("edit_notes", { sessionId }),
   /** Don't tell the Agent about this hand edit. */

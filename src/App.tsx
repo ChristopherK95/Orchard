@@ -24,6 +24,7 @@ import { RemoveWorktreeDialog } from "./RemoveWorktreeDialog";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
 import { EditNotes } from "./EditNotes";
 import { FilesDrawer } from "./FilesDrawer";
+import { GitDrawer } from "./GitDrawer";
 import type { OpenRequest } from "./ManualEditor";
 // CodeMirror loads with the first file opened, not at startup.
 const ManualEditor = lazy(() => import("./ManualEditor").then((m) => ({ default: m.ManualEditor })));
@@ -145,7 +146,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     if (!recent[path]) void core.recentSessions(path).then((list) => !recent[path] && setRecent(path, list));
   });
   /** The Files drawer and Ctrl+P; `revision` per Worktree, bumped when its files change. */
-  const [filesOpen, setFilesOpen] = createSignal(false);
+  /** The drawer on the right edge: the Worktree's files, or its git status (one at a time). */
+  const [drawer, setDrawer] = createSignal<"files" | "git" | null>(null);
+  const filesOpen = () => drawer() === "files";
+  const gitOpen = () => drawer() === "git";
+  const setFilesOpen = (open: boolean) => setDrawer(open ? "files" : null);
+  const toggleDrawer = (which: "files" | "git") => setDrawer((now) => (now === which ? null : which));
   const [paletteOpen, setPaletteOpen] = createSignal(false);
   const [filesRevision, setFilesRevision] = createStore<Record<string, number>>({});
   const [revealed, setRevealed] = createSignal<{ path: string; n: number } | null>(null);
@@ -401,9 +407,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         event.kind === "documentConflicted" ||
         event.kind === "documentBackOnDisk" ||
         event.kind === "documentsChanged" ||
-        event.kind === "editNotesChanged"
+        event.kind === "editNotesChanged" ||
+        event.kind === "gitStatusChanged"
       ) {
-        return; // (the Manual editors', permission cards' and Edit note chips' business)
+        return; // (the Manual editors', permission cards', Edit note chips' and Git drawer's business)
       } else if (!sessions[event.sessionId]) return;
       else if (event.kind === "sessionStateChanged") onStateChanged(event.sessionId, event.state);
       else if (event.kind === "permissionModeChanged") setSessions(event.sessionId, "permissionMode", event.mode);
@@ -424,7 +431,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       if (removing() || creatingWorktree() || paletteOpen()) return; // a dialog is open over the Tab
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
-        return void setFilesOpen((open) => !open);
+        return void toggleDrawer("files");
+      }
+      // (Not when the editor took it: there it's find-previous.)
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "g" && !e.defaultPrevented) {
+        e.preventDefault();
+        return void toggleDrawer("git");
       }
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "t") {
         e.preventDefault();
@@ -476,8 +488,11 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         <b>{props.workspace.name}</b>
         <span class="muted mono">{props.workspace.root}</span>
         <span class="grow" />
-        <button class="ghost" classList={{ on: filesOpen() }} onClick={() => setFilesOpen((open) => !open)} title="Files of this Worktree (Ctrl+Shift+E); Ctrl+P to find one">
+        <button class="ghost" classList={{ on: filesOpen() }} onClick={() => toggleDrawer("files")} title="Files of this Worktree (Ctrl+Shift+E); Ctrl+P to find one">
           Files
+        </button>
+        <button class="ghost" classList={{ on: gitOpen() }} onClick={() => toggleDrawer("git")} title="Git: stage, commit, discard (Ctrl+Shift+G)">
+          Git
         </button>
         <button class="ghost" onClick={openRepoSettings} title="Settings for this repo, e.g. its Worktree setup commands">
           Repo settings
@@ -650,6 +665,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           onOpenFile={openWorktreeFile}
           onClose={() => setFilesOpen(false)}
         />
+      </Show>
+      <Show when={gitOpen()}>
+        <GitDrawer worktree={activeWorktree()} onOpenFile={openWorktreeFile} onClose={() => setDrawer(null)} />
       </Show>
       </div>
     </div>
