@@ -608,6 +608,16 @@ fn remove_edit_note(
         .map_err(|e| e.to_string())
 }
 
+/// The oldest permission card waiting in the session (for the Board).
+#[tauri::command]
+fn pending_permission(
+    core: State<'_, Core>,
+    session_id: SessionId,
+) -> CommandResult<Option<editor_core::PermissionRequest>> {
+    core.pending_permission(session_id)
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn answer_permission(
     core: State<'_, Core>,
@@ -785,6 +795,7 @@ fn main() {
             suspend_session,
             resume_session,
             answer_permission,
+            pending_permission,
             edit_notes,
             remove_edit_note,
             git_status,

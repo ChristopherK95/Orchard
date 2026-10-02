@@ -1,6 +1,6 @@
 // Walking skeleton view (ticket 01): prerequisite gate → open a Workspace → one Tab with a
 // streaming transcript and a composer. It only renders core state and sends commands (ADR 0003).
-import { batch, createEffect, createSignal, For, lazy, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import { batch, createEffect, createSignal, For, lazy, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import {
   core,
@@ -28,6 +28,7 @@ import { GitDrawer } from "./GitDrawer";
 import type { OpenRequest } from "./ManualEditor";
 // CodeMirror loads with the first file opened, not at startup.
 const ManualEditor = lazy(() => import("./ManualEditor").then((m) => ({ default: m.ManualEditor })));
+import { Board } from "./Board";
 import { Transcript } from "./Transcript";
 import { ContextBar, removedWorktree, worktreeColour, worktreeLabel, WorktreeRow, type WorktreeTab } from "./Worktrees";
 import { notify, onNotificationClicked } from "./notify";
@@ -138,6 +139,24 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   const [activeWorktree, setActiveWorktree] = createSignal(props.workspace.root);
   const lastSessionIn = new Map<string, SessionId>();
   const [creatingWorktree, setCreatingWorktree] = createSignal(false);
+  /** Tabs, or the Board of every session by state (the Tabs stay as they are underneath). */
+  const [view, setView] = createSignal<"tabs" | "board">("tabs");
+  /** The Board's Worktree filter (null: all), kept between visits. */
+  const [boardOnly, setBoardOnly] = createSignal<string | null>(null);
+  let titlebar!: HTMLElement;
+  // Back on the Tabs, focus goes back where it was (the composer, say).
+  let focusedBefore: Element | null = null;
+  createEffect(
+    on(
+      view,
+      (now) => {
+        if (now === "board") focusedBefore = document.activeElement;
+        else if (focusedBefore instanceof HTMLElement && focusedBefore.isConnected) focusedBefore.focus();
+      },
+      { defer: true },
+    ),
+  );
+  const needYou = () => order().filter((id) => sessions[id]?.state === "needsYou").length;
   /** "New Worktree from this branch" (from the Git drawer's branch picker). */
   const [creatingFrom, setCreatingFrom] = createSignal<string | undefined>(undefined);
   /** Each Worktree's Recent sessions (closed Tabs), as the core last reported them. */
@@ -153,7 +172,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   const filesOpen = () => drawer() === "files";
   const gitOpen = () => drawer() === "git";
   const setFilesOpen = (open: boolean) => setDrawer(open ? "files" : null);
-  const toggleDrawer = (which: "files" | "git") => setDrawer((now) => (now === which ? null : which));
+  const toggleDrawer = (which: "files" | "git") => {
+    setView("tabs"); // (the drawers are the Tabs view's)
+    setDrawer((now) => (now === which ? null : which));
+  };
   const [paletteOpen, setPaletteOpen] = createSignal(false);
   const [filesRevision, setFilesRevision] = createStore<Record<string, number>>({});
   const [revealed, setRevealed] = createSignal<{ path: string; n: number } | null>(null);
@@ -165,6 +187,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   const [editorRequests, setEditorRequests] = createSignal<{ open: OpenRequest; n: number }[]>([]);
   let requested = 0;
   const openInEditor = (open: OpenRequest) => {
+    setView("tabs"); // (the Manual editor is the Tabs view's)
     setEditorOpen(true);
     setEditorRequests((all) => [...all.slice(-20), { open, n: ++requested }]);
   };
@@ -234,6 +257,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   };
 
   const show = async (id: SessionId) => {
+    setView("tabs"); // (a notification, a reopened Tab, the palette: shown in the Tabs view)
     const token = ++currentShow;
     const path = sessions[id]?.worktree;
     if (path) {
@@ -445,6 +469,16 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         if (!e.repeat) void reopen(core.reopenLastClosed());
         return;
       }
+      // (Ctrl+B is the editor's own when it takes it.)
+      if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "b" && !e.defaultPrevented) {
+        e.preventDefault();
+        if (!e.repeat) setView((now) => (now === "board" ? "tabs" : "board"));
+        return;
+      }
+      if (view() === "board") {
+        if (e.key === "Escape") setView("tabs");
+        return; // (Y/N answer the Tab's card, which isn't showing)
+      }
       if (e.key === "Escape") setRecentOpen(false);
       const s = session();
       if (s?.state === "needsYou" && answerByKey(e, s.id, items)) e.preventDefault();
@@ -486,10 +520,23 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   };
 
   return (
-    <div class="workspace">
-      <header class="titlebar">
+    <div class="workspace" classList={{ "board-open": view() === "board" }}>
+      <header class="titlebar" ref={titlebar}>
         <b>{props.workspace.name}</b>
         <span class="muted mono">{props.workspace.root}</span>
+        <div class="segmented">
+          <button classList={{ on: view() === "tabs" }} onClick={() => setView("tabs")} title="One session at a time (Esc)">
+            Tabs
+          </button>
+          <button classList={{ on: view() === "board" }} onClick={() => setView("board")} title="Every session by state (Ctrl+B)">
+            Board
+          </button>
+        </div>
+        <Show when={needYou() > 0}>
+          <button class="needs-you-button" onClick={() => setView("board")} title="See them on the Board">
+            {needYou()} need{needYou() === 1 ? "s" : ""} you
+          </button>
+        </Show>
         <span class="grow" />
         <button class="ghost" classList={{ on: filesOpen() }} onClick={() => toggleDrawer("files")} title="Files of this Worktree (Ctrl+Shift+E); Ctrl+P to find one">
           Files
@@ -501,6 +548,31 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           Repo settings
         </button>
       </header>
+      <Show when={view() === "board"}>
+        <Board
+          sessions={order().map((id) => sessions[id])}
+          worktrees={rowWorktrees()}
+          only={boardOnly()}
+          onOnly={setBoardOnly}
+          top={titlebar.offsetHeight}
+          banners={
+            <>
+              <Show when={error()}>
+                <p class="error banner">{error()}</p>
+              </Show>
+              <Show when={notice()}>
+                <p class="warning banner" onClick={() => setNotice("")} title="Click to dismiss">
+                  {notice()}
+                </p>
+              </Show>
+            </>
+          }
+          onOpen={(id) => {
+            setView("tabs");
+            if (id !== activeId()) void show(id);
+          }}
+        />
+      </Show>
       <WorktreeRow worktrees={rowWorktrees()} active={activeWorktree()} sessionsIn={sessionsIn} onSelect={selectWorktree} onNewSession={(path) => void newSession(path)} onNewWorktree={() => setCreatingWorktree(true)} />
       <Show when={creatingWorktree()}>
         <NewWorktreeDialog

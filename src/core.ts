@@ -481,6 +481,8 @@ export const core = {
   editNotes: (sessionId: SessionId) => invoke<EditNote[]>("edit_notes", { sessionId }),
   /** Don't tell the Agent about this hand edit. */
   removeEditNote: (sessionId: SessionId, path: string) => invoke<void>("remove_edit_note", { sessionId, path }),
+  /** The oldest permission card waiting in the session (for the Board). */
+  pendingPermission: (sessionId: SessionId) => invoke<PermissionRequest | null>("pending_permission", { sessionId }),
   answerPermission: (sessionId: SessionId, toolCallId: string, optionId: string) =>
     invoke<void>("answer_permission", { sessionId, toolCallId, optionId }),
   setPermissionMode: (sessionId: SessionId, mode: PermissionMode) =>

@@ -2355,6 +2355,25 @@ impl Core {
         });
         Ok(())
     }
+    /// The oldest permission card waiting for an answer in the session, if it's Needs you (for the
+    /// Board's cards, which answer it from there).
+    pub fn pending_permission(
+        &self,
+        id: SessionId,
+    ) -> Result<Option<crate::session::PermissionRequest>, CoreError> {
+        let session = self.session(id)?;
+        // (Lock order: control, then transcript.)
+        let control = session.control.lock().expect("control lock");
+        let Some(question) = control.questions.first() else {
+            return Ok(None);
+        };
+        let transcript = session.transcript.lock().expect("transcript lock");
+        Ok(match transcript.items().get(question.index) {
+            Some(TranscriptItem::Permission { request, .. }) => Some(request.clone()),
+            _ => None,
+        })
+    }
+
     /// Answers the permission card for `tool_call_id` with one of the options the Agent offered.
     pub async fn answer_permission(
         &self,
