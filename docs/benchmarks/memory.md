@@ -9,14 +9,14 @@ webview processes), not the fake ACP agent, Node or `claude`.
 | 2026-10-01 | Windows 11 (16 logical cores) | release, ticket 05 (first version) | 2,000-message transcript in Tab 1, no virtualisation, **no Manual editor yet** | 80.3 MB | 93.6 MB | 3.3 MB* | 0.78% of one core (10 s) | Pass |
 | 2026-10-01 | Windows 11 (16 logical cores) | release, ticket 05 (three phases) | 5 Tabs each after a short turn, then a 2,000-message transcript in Tab 1; no virtualisation, **no Manual editor yet** | 80.7 MB | 89.4 MB (94.6 MB after the transcript) | 2.2 MB | 0.39% of one core (20 s) | Pass |
 | 2026-10-01 | Windows 11 (16 logical cores) | release, ticket 02 (markdown, Lezer, virtualised list, CSP) | same as above | 82.4 MB | 89.2 MB (98.7 MB after the transcript) | 1.7 MB | 0.31% of one core (20 s) | Pass |
+| 2026-10-02 | Windows 11 (16 logical cores) | release, ticket 14 (Manual editor, auto-suspend, file watching) | same, plus `src/main.rs` open in the Manual editor in the last phase | 90.4 MB | 98.9 MB (116.4 MB after the transcript, with the file open) | 2.1 MB | 0.39% of one core (20 s) | Pass |
 | — | Arch Linux (Wayland) | — | — | — | — | — | — | Pending: needs a Linux run (PSS) |
 
 \* The first version measured per-Tab cost as (5 Tabs − 1 Tab) / 4, with Tab 1's 2,000-message transcript
 streamed in between, so it mixed transcript growth with Tab cost and overstated per-Tab cost. The script now
 measures 5 Tabs (each after a short turn) before the long transcript.
 
-The budget names "5 Tabs and 1 open Manual editor"; the Manual editor arrives with ticket 14, which adds it to
-the scenario.
+The budget names "5 Tabs and 1 open Manual editor": since ticket 14 the last phase has a file open in the Manual editor.
 
 **Ticket 02:** virtualising the transcript didn't lower memory. The renderer is about 2 MB higher with the
 2,000-message transcript (25.2 vs 23.1 MB). At this size the JavaScript heap (the message objects themselves, plus

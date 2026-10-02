@@ -4,11 +4,13 @@
 
 **Blocked by:** 13 (File watching and search), 08 (Settings file).
 
-**Status:** ready-for-agent
+**Status:** done (Windows; Arch pending)
 
-- [ ] Files open in the pane with file tabs; highlighting loads on first use of a language.
-- [ ] Save writes the file; saving over a newer on-disk version asks first.
-- [ ] Toggling `editor.vim` in settings enables or disables vim live; `:w` and `:q` behave as specified.
-- [ ] Big, binary and minified files follow the spec's rules.
-- [ ] The memory benchmark scenario now includes 1 open Manual editor and still passes.
-- [ ] Core tests: save with a stale expected version is refused.
+- [x] Files open in the pane with file tabs; highlighting loads on first use of a language.
+- [x] Save writes the file; saving over a newer on-disk version asks first.
+- [x] Toggling `editor.vim` in settings enables or disables vim live; `:w` and `:q` behave as specified.
+- [x] Big, binary and minified files follow the spec's rules.
+- [x] The memory benchmark scenario now includes 1 open Manual editor and still passes.
+- [x] Core tests: save with a stale expected version is refused.
+
+Notes: auto-indent means Enter keeps the line's indentation (the bare Lezer grammars carry no indent rules). Open in editor on a chat code block opens an unsaved snippet. Benchmark (Windows, with a file open): 116.4 MB total, 2.1 MB per extra Tab, 0.39% idle CPU; see docs/benchmarks/memory.md.
