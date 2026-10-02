@@ -10,16 +10,18 @@ type StartChoice = "default" | "active" | "other";
 export function NewWorktreeDialog(props: {
   /** The active Worktree's branch, offered as a start point. */
   activeBranch: string | null;
+  /** Opened to check out this existing branch ("New Worktree from this branch"). */
+  existing?: string;
   onCreated: (created: CreatedWorktree) => void;
   onGoToWorktree: (path: string) => void;
   onClose: () => void;
 }) {
-  const [mode, setMode] = createSignal<"new" | "existing">("new");
+  const [mode, setMode] = createSignal<"new" | "existing">(props.existing ? "existing" : "new");
   const [name, setName] = createSignal("");
   const [typed, setTyped] = createSignal(false);
   const [startChoice, setStartChoice] = createSignal<StartChoice>("default");
   const [otherStart, setOtherStart] = createSignal("");
-  const [filter, setFilter] = createSignal("");
+  const [filter, setFilter] = createSignal(props.existing ?? "");
   const [busy, setBusy] = createSignal("");
   const [error, setError] = createSignal("");
   const [taken, setTaken] = createSignal<BranchInfo | null>(null);
@@ -36,12 +38,12 @@ export function NewWorktreeDialog(props: {
   onCleanup(() => window.removeEventListener("keydown", onKey));
 
   onMount(() => {
-    nameInput.focus();
+    nameInput?.focus(); // (not there when it opens on an existing branch)
     void suggestion
       .then((suggested) => {
         if (typed()) return; // don't overwrite what the user started typing
         setName(suggested);
-        nameInput.select();
+        nameInput?.select(); // (not there when it opened on an existing branch)
       })
       .catch((err) => setError(String(err)));
   });

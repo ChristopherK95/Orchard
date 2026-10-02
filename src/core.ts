@@ -236,6 +236,10 @@ export interface GitStatus {
   behind: number | null;
   files: GitFile[];
   lastCommit: { id: string; subject: string } | null;
+  /** A merge, rebase, cherry-pick or revert in progress; its conflicted files are the `conflicted` ones. */
+  operation: "merge" | "rebase" | "cherryPick" | "revert" | "am" | null;
+  /** Sessions in this Worktree in the middle of a turn (a branch switch waits for them). */
+  midTurn: string[];
 }
 
 /** A changed file: git's status letters for what's staged and what isn't (`?`: untracked). */
@@ -443,6 +447,10 @@ export const core = {
   gitPull: (worktree: string, evenIfWorking = false) => invoke<PullOutcome>("git_pull", { worktree, evenIfWorking }),
   /** The window got focus: the core lists the Worktrees again, and fetches if it's due. */
   windowFocused: () => invoke<void>("window_focused"),
+  /** Switches the Worktree to another branch (local, or remote: it gets a local one tracking it). */
+  switchBranch: (worktree: string, branch: string) => invoke<void>("switch_branch", { worktree, branch }),
+  /** Aborts the merge, rebase, cherry-pick or revert in progress. */
+  abortOperation: (worktree: string) => invoke<void>("abort_operation", { worktree }),
   /** Throws away every change to the file (ask first). */
   gitDiscard: (worktree: string, path: string) => invoke<void>("git_discard", { worktree, path }),
   /** The session's Edit notes (sent with its next prompt). */

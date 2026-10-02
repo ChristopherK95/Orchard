@@ -180,6 +180,10 @@ pub enum CoreError {
     BranchCheckedOut { branch: String, worktree: PathBuf },
     #[error("there is no branch `{0}`")]
     UnknownBranch(String),
+    #[error("a session here is in the middle of a turn ({}); switch branches once it's done", .0.join(", "))]
+    SessionsWorking(Vec<String>),
+    #[error("nothing is in progress to abort")]
+    NothingToAbort,
     #[error("`{0}` isn't a branch, tag or commit in this repository")]
     UnknownStartPoint(String),
     #[error("git created {} but doesn't list it as a Worktree", .0.display())]
@@ -1582,7 +1586,54 @@ impl Core {
     /// The Git drawer: the Worktree's branch, upstream standing and changed files.
     pub async fn git_status(&self, worktree: &Path) -> Result<GitStatus, CoreError> {
         let worktree = self.known_worktree(worktree)?;
-        git::status(&worktree).await.map_err(CoreError::Git)
+        let mut status = git::status(&worktree).await.map_err(CoreError::Git)?;
+        status.mid_turn = self.mid_turn(&worktree);
+        Ok(status)
+    }
+
+    /// Switches the Worktree to another branch (a local one, or a remote one, which gets a local
+    /// branch tracking it). Refused while a session there is mid-turn, and for a branch checked
+    /// out in another Worktree. Its sessions stay with it: they're bound to the Worktree, not the
+    /// branch.
+    pub async fn switch_branch(&self, worktree: &Path, branch: &str) -> Result<(), CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let working = self.mid_turn(&worktree);
+        if !working.is_empty() {
+            return Err(CoreError::SessionsWorking(working));
+        }
+        let root = self.workspace()?.root;
+        let branches = git::branches(&root).await.map_err(CoreError::Git)?;
+        let checkout = crate::create_worktree::resolve_checkout(&branches, branch)?;
+        match checkout.checked_out_in {
+            Some(here) if here == worktree => return Ok(()), // (already on it)
+            Some(elsewhere) => {
+                return Err(CoreError::BranchCheckedOut {
+                    branch: checkout.local,
+                    worktree: elsewhere,
+                })
+            }
+            None => {}
+        }
+        let switched = git::switch(&worktree, &checkout.local, checkout.track.as_deref())
+            .await
+            .map_err(CoreError::Git);
+        self.inner.git_changed(worktree.clone());
+        self.inner.refresh_status_of(&worktree).await; // (its branch, in the Worktree list)
+        switched
+    }
+
+    /// Aborts the merge, rebase, cherry-pick or revert in progress in the Worktree.
+    pub async fn abort_operation(&self, worktree: &Path) -> Result<(), CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let operation = git::operation(&worktree)
+            .await
+            .ok_or(CoreError::NothingToAbort)?;
+        let aborted = git::abort(&worktree, operation)
+            .await
+            .map_err(CoreError::Git);
+        self.inner.git_changed(worktree.clone());
+        self.inner.refresh_status_of(&worktree).await;
+        aborted
     }
 
     /// Stages whole files (paths relative to the Worktree, `/`-separated).
@@ -3479,6 +3530,13 @@ impl Session {
         let state = control.state();
         let mut info = self.info.lock().expect("info lock");
         if info.state != state {
+            let mid_turn = |s| matches!(s, SessionState::Working | SessionState::NeedsYou);
+            if mid_turn(info.state) != mid_turn(state) {
+                // (The Git drawer's "a session is mid-turn here", for switching branches.)
+                let _ = self.events.send(CoreEvent::GitStatusChanged {
+                    worktree: info.worktree.clone(),
+                });
+            }
             info.state = state;
             let mut idle_since = self.idle_since.lock().expect("idle lock");
             if !(control.suspending || suspending_before) {

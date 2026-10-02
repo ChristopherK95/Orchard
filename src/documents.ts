@@ -22,6 +22,13 @@ function follow() {
     .catch(() => {});
 }
 
+/** Whether a file under the folder `dir` has unsaved changes in some Manual editor. */
+export function hasUnsavedChangesUnder(dir: string): boolean {
+  follow();
+  const prefix = dir.replace(/[\\/]+$/, "");
+  return documents().some((d) => d.dirty && (d.path.startsWith(prefix + "\\") || d.path.startsWith(prefix + "/")));
+}
+
 /** Whether `path` (absolute, as the core gives paths) has unsaved changes in some Manual editor. */
 export function hasUnsavedChanges(path: string): boolean {
   follow();

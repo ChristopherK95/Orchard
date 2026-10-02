@@ -138,6 +138,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   const [activeWorktree, setActiveWorktree] = createSignal(props.workspace.root);
   const lastSessionIn = new Map<string, SessionId>();
   const [creatingWorktree, setCreatingWorktree] = createSignal(false);
+  /** "New Worktree from this branch" (from the Git drawer's branch picker). */
+  const [creatingFrom, setCreatingFrom] = createSignal<string | undefined>(undefined);
   /** Each Worktree's Recent sessions (closed Tabs), as the core last reported them. */
   const [recent, setRecent] = createStore<Record<string, RecentSession[]>>({});
   const [recentOpen, setRecentOpen] = createSignal(false);
@@ -503,11 +505,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       <Show when={creatingWorktree()}>
         <NewWorktreeDialog
           activeBranch={worktree()?.branch ?? null}
+          existing={creatingFrom()}
           onCreated={(created) => {
             // The Worktree exists now: close, and start its session in the main view, where a
             // failure leaves the (empty) Worktree selected with "＋ session" to retry. With a
             // setup, show it running; the core starts the session once it's done.
             setCreatingWorktree(false);
+            setCreatingFrom(undefined);
             setNotice(created.warning ?? "");
             const setup = created.setup;
             if (!setup) return void newSession(created.worktree.path);
@@ -517,9 +521,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           }}
           onGoToWorktree={(path) => {
             setCreatingWorktree(false);
+            setCreatingFrom(undefined);
             selectWorktree(path);
           }}
-          onClose={() => setCreatingWorktree(false)}
+          onClose={() => {
+            setCreatingWorktree(false);
+            setCreatingFrom(undefined);
+          }}
         />
       </Show>
       <nav class="tabs" style={{ "--c": worktreeColour(activeWorktree()) }}>
@@ -668,7 +676,16 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         />
       </Show>
       <Show when={gitOpen()}>
-        <GitDrawer worktree={activeWorktree()} onOpenFile={openWorktreeFile} onClose={() => setDrawer(null)} />
+        <GitDrawer
+          worktree={activeWorktree()}
+          onOpenFile={openWorktreeFile}
+          onGoToWorktree={selectWorktree}
+          onNewWorktreeFrom={(branch) => {
+            setCreatingFrom(branch);
+            setCreatingWorktree(true);
+          }}
+          onClose={() => setDrawer(null)}
+        />
       </Show>
       </div>
     </div>

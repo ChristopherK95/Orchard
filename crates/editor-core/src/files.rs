@@ -182,13 +182,28 @@ enum Kind {
     Noise,
 }
 
-/// Whether a path inside a git folder (relative to it) holds branch state.
+/// Whether a path inside a git folder (relative to it) holds branch state, or the state of a merge,
+/// rebase, cherry-pick or revert in progress.
 fn git_relevant(sub: &str) -> bool {
     matches!(
         sub,
-        "HEAD" | "index" | "ORIG_HEAD" | "FETCH_HEAD" | "MERGE_HEAD" | "packed-refs"
-    ) || sub.starts_with("logs/")
-        || sub.starts_with("refs/")
+        "HEAD"
+            | "index"
+            | "ORIG_HEAD"
+            | "FETCH_HEAD"
+            | "MERGE_HEAD"
+            | "CHERRY_PICK_HEAD"
+            | "REVERT_HEAD"
+            | "packed-refs"
+    ) || [
+        "logs/",
+        "refs/",
+        "rebase-merge",
+        "rebase-apply",
+        "sequencer",
+    ]
+    .iter()
+    .any(|prefix| sub.starts_with(prefix))
 }
 
 /// The outcome of a burst of events.

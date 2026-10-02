@@ -549,7 +549,67 @@ pub(crate) async fn status(worktree: &Path) -> Result<crate::git_status::GitStat
     status.last_commit = last_commit(worktree)
         .await
         .map(|(id, subject)| crate::git_status::LastCommit { id, subject });
+    status.operation = operation(worktree).await;
     Ok(status)
+}
+
+/// The merge, rebase, cherry-pick or revert in progress in the Worktree, if any: what its own git
+/// folder holds while one waits to be finished.
+pub(crate) async fn operation(worktree: &Path) -> Option<crate::git_status::GitOperation> {
+    use crate::git_status::GitOperation;
+    let dir = git_dir(worktree).await?;
+    let has = |name: &str| dir.join(name).exists();
+    if has("rebase-apply/applying") {
+        Some(GitOperation::Am) // (`git am` keeps its state where a rebase would)
+    } else if has("rebase-merge") || has("rebase-apply") {
+        Some(GitOperation::Rebase)
+    } else if has("MERGE_HEAD") {
+        Some(GitOperation::Merge)
+    } else if has("CHERRY_PICK_HEAD") {
+        Some(GitOperation::CherryPick)
+    } else if has("REVERT_HEAD") {
+        Some(GitOperation::Revert)
+    } else if has("sequencer/todo") {
+        // A cherry-pick or revert of several commits, between them: its next step says which.
+        let todo = std::fs::read_to_string(dir.join("sequencer/todo")).unwrap_or_default();
+        match todo.trim_start().starts_with("revert") {
+            true => Some(GitOperation::Revert),
+            false => Some(GitOperation::CherryPick),
+        }
+    } else {
+        None
+    }
+}
+
+/// Aborts the operation in progress: the Worktree goes back to how it was before it started.
+pub(crate) async fn abort(
+    worktree: &Path,
+    operation: crate::git_status::GitOperation,
+) -> Result<(), String> {
+    run(worktree, &[operation.command(), "--abort"])
+        .await
+        .map(drop)
+}
+
+/// Switches the Worktree to the local branch `local`, made first from `track` (a remote branch,
+/// which it then tracks) if given. Uncommitted changes come along if git can carry them, else it
+/// refuses.
+pub(crate) async fn switch(
+    worktree: &Path,
+    local: &str,
+    track: Option<&str>,
+) -> Result<(), String> {
+    match track {
+        Some(remote) => {
+            run(
+                worktree,
+                &["switch", "--quiet", "-c", local, "--track", remote],
+            )
+            .await
+        }
+        None => run(worktree, &["switch", "--quiet", local]).await,
+    }
+    .map(drop)
 }
 
 /// Runs git on `paths` (relative, `/`-separated), as pathspecs that match only themselves. Never

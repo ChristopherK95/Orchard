@@ -220,6 +220,15 @@ select { font: inherit; color: inherit; background: var(--bg3); border: 1px soli
 .git-branch { padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 12.5px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .git-branch .ghost { padding: 1px 6px; font-size: 12px; }
 .git-notice { margin: 0; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 12.5px; white-space: pre-wrap; }
+.branch-pick { padding: 1px 4px; }
+.git-operation { padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; background: color-mix(in srgb, var(--needs-you) 10%, transparent); }
+.git-operation .conflicted-file { text-align: left; padding: 1px 4px; color: var(--needs-you); }
+.git-operation .actions { display: flex; gap: 6px; }
+.branch-picker { padding: 6px 10px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; max-height: 50%; min-height: 0; }
+.branch-picker .branch-list { overflow: auto; min-height: 0; }
+.branch-row { display: flex; align-items: center; gap: 4px; }
+.branch-row .branch { flex: 1; min-width: 0; }
+.branch-row.taken .branch { opacity: 0.5; }
 .git-notice.warn { color: var(--needs-you); }
 .git-notice.error { color: var(--exited); }
 .git-commit .error, .git-drawer .error { white-space: pre-wrap; }

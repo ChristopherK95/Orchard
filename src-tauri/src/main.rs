@@ -516,6 +516,26 @@ async fn window_focused(core: State<'_, Core>) -> CommandResult<()> {
     Ok(())
 }
 
+/// Switches the Worktree to another branch (refused while a session there is mid-turn).
+#[tauri::command]
+async fn switch_branch(
+    core: State<'_, Core>,
+    worktree: String,
+    branch: String,
+) -> CommandResult<()> {
+    core.switch_branch(worktree.as_ref(), &branch)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Aborts the merge, rebase, cherry-pick or revert in progress.
+#[tauri::command]
+async fn abort_operation(core: State<'_, Core>, worktree: String) -> CommandResult<()> {
+    core.abort_operation(worktree.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Throws away every change to one file (the drawer has asked).
 #[tauri::command]
 async fn git_discard(core: State<'_, Core>, worktree: String, path: String) -> CommandResult<()> {
@@ -734,6 +754,8 @@ fn main() {
             git_push,
             git_pull,
             window_focused,
+            switch_branch,
+            abort_operation,
             set_permission_mode,
             transcript_page_before,
             notify_session,

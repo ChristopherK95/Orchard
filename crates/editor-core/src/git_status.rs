@@ -14,6 +14,36 @@ pub struct GitStatus {
     pub files: Vec<GitFile>,
     /// None before the first commit.
     pub last_commit: Option<LastCommit>,
+    /// A merge, rebase, cherry-pick or revert in progress (whoever started it): its conflicted files
+    /// are the `conflicted` ones.
+    pub operation: Option<GitOperation>,
+    /// The sessions in this Worktree in the middle of a turn, Working or Needs you (a branch switch
+    /// waits for them).
+    pub mid_turn: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GitOperation {
+    Merge,
+    Rebase,
+    CherryPick,
+    Revert,
+    /// `git am`, applying patches.
+    Am,
+}
+
+impl GitOperation {
+    /// The git command that started it (and `--abort`s it).
+    pub(crate) fn command(self) -> &'static str {
+        match self {
+            Self::Merge => "merge",
+            Self::Rebase => "rebase",
+            Self::CherryPick => "cherry-pick",
+            Self::Revert => "revert",
+            Self::Am => "am",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

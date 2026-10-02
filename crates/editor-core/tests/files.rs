@@ -345,7 +345,10 @@ async fn a_linked_worktree_follows_commits_and_fetches_live() {
         .worktree
         .path;
     // (A new branch tracks nothing until it's pushed; here it follows origin/main.)
-    git(&path, &["branch", "--quiet", "--set-upstream-to=origin/main"]);
+    git(
+        &path,
+        &["branch", "--quiet", "--set-upstream-to=origin/main"],
+    );
     core.refresh_worktrees().await;
     core.show_worktree(&path).await.unwrap();
     let info = || {

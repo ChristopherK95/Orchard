@@ -92,24 +92,19 @@ pub(crate) async fn create(
         NewWorktree::ExistingBranch { name } => {
             let fetched = git::fetch_origin(root).await;
             let branches = git::branches(root).await.map_err(CoreError::Git)?;
-            let branch = branches
-                .iter()
-                .find(|b| b.name == *name)
-                .ok_or_else(|| CoreError::UnknownBranch(name.clone()))?;
-            let local = local_name(&branch.name, branch.remote);
-            // A remote branch may already have a local branch of the same name: use that.
-            let local_branch = branches.iter().find(|b| !b.remote && b.name == local);
-            if let Some(worktree) = local_branch.and_then(|b| b.checked_out_in.clone()) {
+            let checkout = resolve_checkout(&branches, name)?;
+            if let Some(worktree) = checkout.checked_out_in {
                 return Err(CoreError::BranchCheckedOut {
-                    branch: local.to_owned(),
-                    worktree: worktrees::normalize(worktree),
+                    branch: checkout.local,
+                    worktree,
                 });
             }
-            let path = free_folder(root, local);
-            if local_branch.is_some() {
-                git::worktree_add_existing(root, &path, local).await
-            } else {
-                git::worktree_add_tracking(root, &path, local, &branch.name).await
+            let path = free_folder(root, &checkout.local);
+            match &checkout.track {
+                None => git::worktree_add_existing(root, &path, &checkout.local).await,
+                Some(remote) => {
+                    git::worktree_add_tracking(root, &path, &checkout.local, remote).await
+                }
             }
             .map_err(CoreError::Git)?;
             let warning = fetched.err().map(|err| {
@@ -183,6 +178,33 @@ pub(crate) fn suggest_name(branches: &[BranchInfo]) -> String {
 }
 
 /// The local branch name for an existing branch: `origin/feat/x` becomes `feat/x`.
+/// What checking out the branch `name` (local `feat/x`, or remote `origin/feat/x`) comes to.
+pub(crate) struct Checkout {
+    /// The local branch it lands on.
+    pub(crate) local: String,
+    /// The remote branch to make `local` from, tracking it; None when `local` already exists (a
+    /// remote branch with a local one of the same name uses that).
+    pub(crate) track: Option<String>,
+    /// The Worktree `local` is checked out in, if any (canonical).
+    pub(crate) checked_out_in: Option<PathBuf>,
+}
+
+pub(crate) fn resolve_checkout(branches: &[BranchInfo], name: &str) -> Result<Checkout, CoreError> {
+    let branch = branches
+        .iter()
+        .find(|b| b.name == name)
+        .ok_or_else(|| CoreError::UnknownBranch(name.to_owned()))?;
+    let local = local_name(&branch.name, branch.remote).to_owned();
+    let local_branch = branches.iter().find(|b| !b.remote && b.name == local);
+    Ok(Checkout {
+        track: local_branch.is_none().then(|| branch.name.clone()),
+        checked_out_in: local_branch
+            .and_then(|b| b.checked_out_in.clone())
+            .map(worktrees::normalize),
+        local,
+    })
+}
+
 fn local_name(branch: &str, remote: bool) -> &str {
     if remote {
         branch

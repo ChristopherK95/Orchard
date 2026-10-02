@@ -32,7 +32,8 @@ pub use crate::documents::{FileContent, OpenDocument, OpenedFile, PoppedOutFile,
 pub use crate::edit_notes::EditNote;
 pub use crate::files::{DirEntry, FileMatch, FileWatchConfig, IndexStats, WatchStatus};
 pub use crate::git_status::{
-    CommitOutcome, CommitRequest, GitFile, GitStatus, LastCommit, PullOutcome, PushOutcome,
+    CommitOutcome, CommitRequest, GitFile, GitOperation, GitStatus, LastCommit, PullOutcome,
+    PushOutcome,
 };
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};
 pub use crate::remove_worktree::{CommitSummary, RemovalCheck, RemoveWorktree, RemovedWorktree};
