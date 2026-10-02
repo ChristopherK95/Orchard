@@ -21,6 +21,26 @@ export interface SessionInfo {
   unread: number;
 }
 
+/** A Ctrl+P result. */
+export interface FileMatch {
+  /** `/`-separated, relative to the Worktree. */
+  path: string;
+  /** Offsets of the matched characters, for highlighting. */
+  indices: number[];
+}
+
+/** An entry of a folder in the Files drawer. */
+export interface DirEntry {
+  name: string;
+  /** `/`-separated, relative to the Worktree. */
+  path: string;
+  isDir: boolean;
+  /** The file's git status code (`M`, `A`, `D`, `??`), if it's changed. */
+  change: string | null;
+  /** A folder with changed files inside. */
+  hasChanges: boolean;
+}
+
 /** A closed Tab in a Worktree's Recent sessions. */
 export interface RecentSession {
   /** The ACP session id, which `reopenSession` takes. */
@@ -210,6 +230,8 @@ export type CoreEvent =
   | { kind: "sessionUnreadChanged"; sessionId: SessionId; unread: number }
   | { kind: "worktreesChanged"; worktrees: WorktreeInfo[] }
   | { kind: "sessionClosed"; sessionId: SessionId }
+  | { kind: "filesChanged"; worktree: string }
+  | { kind: "fileWatchFallback"; worktree: string; message: string }
   | { kind: "autoSuspended"; suspended: { session: SessionInfo; reason: AutoSuspendReason }[] }
   | { kind: "recentSessionsChanged"; worktree: string; sessions: RecentSession[] }
   | { kind: "settingsChanged"; settings: LoadedSettings }
@@ -222,6 +244,12 @@ export const core = {
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
   newSession: () => invoke<SessionId>("new_session"),
   newSessionIn: (worktree: string) => invoke<SessionId>("new_session_in", { worktree }),
+  /** The Worktree being looked at (its files are indexed and watched). */
+  showWorktree: (worktree: string) => invoke<void>("show_worktree", { worktree }),
+  /** Ctrl+P: files best matching `query`, typos allowed. */
+  findFiles: (worktree: string, query: string, limit: number) => invoke<FileMatch[]>("find_files", { worktree, query, limit }),
+  /** A folder (`""` = the Worktree's root) for the Files drawer. */
+  listDir: (worktree: string, dir: string) => invoke<DirEntry[]>("list_dir", { worktree, dir }),
   /** The open Tabs in order (after a restart, the restored ones, Suspended). */
   sessions: () => invoke<SessionInfo[]>("sessions"),
   /** Closes a Tab; its session goes to its Worktree's Recent sessions. */

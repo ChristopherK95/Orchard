@@ -4,13 +4,15 @@
 
 **Blocked by:** 06 (Worktree row).
 
-**Status:** ready-for-agent
+**Status:** done (core tests on Windows; Arch pending)
 
-- [ ] Creating, deleting and renaming files updates the index and tree without a restart; ignored directories are never watched.
-- [ ] `Ctrl+P` returns ranked results instantly on a large repo; typos still match, below exact matches.
-- [ ] `Ctrl+P` includes the two new-session commands.
-- [ ] The Files drawer is scoped to the active Worktree and marks changed files.
-- [ ] Watch-limit exhaustion switches that Worktree to polling, with a toast.
-- [ ] Actors stop for Worktrees that are dimmed and idle.
-- [ ] The Worktree row's and context bar's ahead/behind and changed counts update live (ticket 06 refreshes them only on open, focus, Worktree-list changes and turn ends, so a terminal commit shows late).
+- [x] Creating, deleting and renaming files updates the index and tree without a restart; ignored directories are never watched.
+- [x] `Ctrl+P` returns ranked results instantly on a large repo; typos still match, below exact matches.
+- [x] `Ctrl+P` includes the two new-session commands.
+- [x] The Files drawer is scoped to the active Worktree and marks changed files.
+- [x] Watch-limit exhaustion switches that Worktree to polling, with a toast.
+- [x] Actors stop for Worktrees that are dimmed and idle.
+- [x] The Worktree row's and context bar's ahead/behind and changed counts update live (ticket 06 refreshes them only on open, focus, Worktree-list changes and turn ends, so a terminal commit shows late).
 - [ ] Core tests with real temp directories on both OSes, including the forced polling fallback.
+
+Notes: the index comes from `git ls-files` (ignore-aware, via the git CLI per ADR 0004) rather than a separate ignore-aware walker; deleted tracked files are left out. Until the Manual editor (ticket 14), picking a file in Ctrl+P reveals it in the Files drawer. The drawer is on the right edge (story 13). Branch status is refreshed per Worktree, 200 ms after the last relevant change (its files, its git folder, the shared refs).

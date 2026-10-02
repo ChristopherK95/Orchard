@@ -6,6 +6,7 @@ mod app_state;
 mod auto_suspend;
 mod core;
 mod create_worktree;
+mod files;
 mod git;
 mod permissions;
 mod prerequisites;
@@ -23,6 +24,7 @@ pub use crate::core::{
     WorkspaceInfo,
 };
 pub use crate::create_worktree::{BranchInfo, BranchList, CreatedWorktree, NewWorktree};
+pub use crate::files::{DirEntry, FileMatch, FileWatchConfig, IndexStats, WatchStatus};
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};
 pub use crate::remove_worktree::{CommitSummary, RemovalCheck, RemoveWorktree, RemovedWorktree};
 pub use crate::session::{

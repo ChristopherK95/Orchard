@@ -45,6 +45,37 @@ pub(crate) async fn list(root: &Path) -> Vec<WorktreeInfo> {
     worktrees
 }
 
+/// Like `list`, but only `refresh`'s branch status (and that of any Worktree not in `previous`)
+/// is read again; the others keep theirs from `previous`.
+pub(crate) async fn list_refreshing(
+    root: &Path,
+    previous: &[WorktreeInfo],
+    refresh: &Path,
+) -> Vec<WorktreeInfo> {
+    let mut worktrees = vec![];
+    for listed in git::worktree_list(root).await.unwrap_or_default() {
+        let path = normalize(listed.path.clone());
+        let known = previous.iter().find(|w| w.path == path);
+        let (ahead, behind, changed) = match known {
+            Some(w) if path != refresh => (w.ahead, w.behind, w.changed),
+            _ => {
+                let status = git::status_summary(&listed.path).await.unwrap_or_default();
+                (status.ahead, status.behind, status.changed)
+            }
+        };
+        worktrees.push(WorktreeInfo {
+            path,
+            branch: listed.branch,
+            head: listed.head.chars().take(7).collect(),
+            is_main: listed.is_main,
+            ahead,
+            behind,
+            changed,
+        });
+    }
+    worktrees
+}
+
 /// Canonical form without Windows' `\\?\` prefix, so paths from git, the OS and the user compare
 /// equal. Falls back to the path as given if it doesn't exist (any more).
 pub(crate) fn normalize(path: PathBuf) -> PathBuf {

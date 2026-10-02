@@ -5,10 +5,10 @@
 use std::path::PathBuf;
 
 use editor_core::{
-    check_prerequisites, AdapterCommand, BranchList, Core, CoreConfig, CreatedWorktree,
-    LoadedSettings, MissingPrerequisite, NewWorktree, PermissionMode, RecentSession, RemovalCheck,
-    RemoveWorktree, RemovedWorktree, SessionId, SessionInfo, SetupInfo, Tools, TranscriptDelta,
-    TranscriptPage, WorkspaceInfo, WorktreeInfo,
+    check_prerequisites, AdapterCommand, BranchList, Core, CoreConfig, CreatedWorktree, DirEntry,
+    FileMatch, LoadedSettings, MissingPrerequisite, NewWorktree, PermissionMode, RecentSession,
+    RemovalCheck, RemoveWorktree, RemovedWorktree, SessionId, SessionInfo, SetupInfo, Tools,
+    TranscriptDelta, TranscriptPage, WorkspaceInfo, WorktreeInfo,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -166,6 +166,39 @@ async fn send_prompt(
     text: String,
 ) -> CommandResult<()> {
     core.send_prompt(session_id, &text)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The Worktree being looked at (its files are indexed and watched).
+#[tauri::command]
+async fn show_worktree(core: State<'_, Core>, worktree: String) -> CommandResult<()> {
+    core.show_worktree(worktree.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Ctrl+P.
+#[tauri::command]
+async fn find_files(
+    core: State<'_, Core>,
+    worktree: String,
+    query: String,
+    limit: usize,
+) -> CommandResult<Vec<FileMatch>> {
+    core.find_files(worktree.as_ref(), &query, limit)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The Files drawer.
+#[tauri::command]
+async fn list_dir(
+    core: State<'_, Core>,
+    worktree: String,
+    dir: String,
+) -> CommandResult<Vec<DirEntry>> {
+    core.list_dir(worktree.as_ref(), &dir)
         .await
         .map_err(|e| e.to_string())
 }
@@ -365,6 +398,9 @@ fn main() {
             start_anyway,
             send_prompt,
             sessions,
+            show_worktree,
+            find_files,
+            list_dir,
             close_tab,
             recent_sessions,
             reopen_session,

@@ -21,6 +21,8 @@ import { type BenchDriver, runBenchmark } from "./benchmark";
 import { answerByKey } from "./PermissionCard";
 import { NewWorktreeDialog } from "./NewWorktreeDialog";
 import { RemoveWorktreeDialog } from "./RemoveWorktreeDialog";
+import { CommandPalette, type PaletteCommand } from "./CommandPalette";
+import { FilesDrawer } from "./FilesDrawer";
 import { Transcript } from "./Transcript";
 import { ContextBar, removedWorktree, worktreeColour, worktreeLabel, WorktreeRow, type WorktreeTab } from "./Worktrees";
 import { notify, onNotificationClicked } from "./notify";
@@ -138,6 +140,15 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     const path = activeWorktree();
     if (!recent[path]) void core.recentSessions(path).then((list) => !recent[path] && setRecent(path, list));
   });
+  /** The Files drawer and Ctrl+P; `revision` per Worktree, bumped when its files change. */
+  const [filesOpen, setFilesOpen] = createSignal(false);
+  const [paletteOpen, setPaletteOpen] = createSignal(false);
+  const [filesRevision, setFilesRevision] = createStore<Record<string, number>>({});
+  const [revealed, setRevealed] = createSignal<{ path: string; n: number } | null>(null);
+  /** The Worktree being looked at gets its files indexed and watched. */
+  createEffect(() => void core.showWorktree(activeWorktree()).catch(() => {}));
+  const runCommand = (command: PaletteCommand) =>
+    command.kind === "newSessionHere" ? void newSession() : setCreatingWorktree(true);
   /** The Worktree whose removal dialog is open. */
   const [removing, setRemoving] = createSignal<WorktreeTab | null>(null);
   /** Worktree setups this editor started, by Worktree path; shown until the first session opens. */
@@ -327,6 +338,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         setSessions(produce((all) => void delete all[id]));
         // Back to what's left of its Worktree, or to the main checkout if the Worktree's gone.
         if (activeId() === id && path) selectWorktree(worktrees().some((w) => w.path === path) ? path : props.workspace.root);
+      } else if (event.kind === "filesChanged") {
+        setFilesRevision(event.worktree, (n) => (n ?? 0) + 1);
+      } else if (event.kind === "fileWatchFallback") {
+        setNotice(event.message);
       } else if (event.kind === "autoSuspended") {
         setNotice(autoSuspendNotice(event.suspended));
       } else if (event.kind === "recentSessionsChanged") {
@@ -356,7 +371,17 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     onCleanup(unlistenClicks);
     // Y/N answer the oldest open permission card anywhere in the Tab (outside text fields).
     const onKey = (e: KeyboardEvent) => {
-      if (removing() || creatingWorktree()) return; // a dialog is open over the Tab
+      // (Ctrl+P is never the browser's print, even with a dialog open.)
+      if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        if (!removing() && !creatingWorktree()) setPaletteOpen(true);
+        return;
+      }
+      if (removing() || creatingWorktree() || paletteOpen()) return; // a dialog is open over the Tab
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "e") {
+        e.preventDefault();
+        return void setFilesOpen((open) => !open);
+      }
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "t") {
         e.preventDefault();
         if (!e.repeat) void reopen(core.reopenLastClosed());
@@ -407,6 +432,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         <b>{props.workspace.name}</b>
         <span class="muted mono">{props.workspace.root}</span>
         <span class="grow" />
+        <button class="ghost" classList={{ on: filesOpen() }} onClick={() => setFilesOpen((open) => !open)} title="Files of this Worktree (Ctrl+Shift+E); Ctrl+P to find one">
+          Files
+        </button>
         <button class="ghost" onClick={() => core.openRepoSettings().catch((err) => setError(String(err)))} title="Settings for this repo, e.g. its Worktree setup commands">
           Repo settings
         </button>
@@ -483,6 +511,19 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         onSuspend={(s) => core.suspendSession(s.id).catch((err) => setError(String(err)))}
         onResume={(s) => core.resumeSession(s.id).catch((err) => setError(String(err)))}
       />
+      <Show when={paletteOpen()}>
+        <CommandPalette
+          worktree={activeWorktree()}
+          onFile={(path) => {
+            // Until the Manual editor (ticket 14) can open it: shown in the Files drawer.
+            setFilesOpen(true);
+            setRevealed((now) => ({ path, n: (now?.n ?? 0) + 1 }));
+          }}
+          revision={filesRevision[activeWorktree()] ?? 0}
+          onCommand={runCommand}
+          onClose={() => setPaletteOpen(false)}
+        />
+      </Show>
       <Show when={removing()}>
         {(w) => (
           <RemoveWorktreeDialog
@@ -516,6 +557,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       <Show when={error()}>
         <p class="error banner">{error()}</p>
       </Show>
+      <div class="main-row">
+      <div class="main-col">
       <Show
         when={session()}
         keyed
@@ -546,6 +589,16 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
           </>
         )}
       </Show>
+      </div>
+      <Show when={filesOpen()}>
+        <FilesDrawer
+          worktree={activeWorktree()}
+          revision={filesRevision[activeWorktree()] ?? 0}
+          reveal={revealed()}
+          onClose={() => setFilesOpen(false)}
+        />
+      </Show>
+      </div>
     </div>
   );
 }

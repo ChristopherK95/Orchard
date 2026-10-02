@@ -199,3 +199,28 @@ select { font: inherit; color: inherit; background: var(--bg3); border: 1px soli
 .composer { display: flex; gap: 8px; align-items: flex-end; padding: 10px 14px; border-top: 1px solid var(--line); background: var(--bg2); flex-wrap: wrap; }
 .composer .error { width: 100%; margin: 0; }
 .composer textarea { flex: 1; resize: none; height: 56px; }
+
+/* Files drawer and Ctrl+P (ticket 13) */
+.main-row { flex: 1; min-height: 0; display: flex; }
+.main-col { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.files-drawer { width: 280px; flex: none; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bg2); min-height: 0; }
+.drawer-head { display: flex; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.drawer-tree { flex: 1; overflow: auto; padding: 4px 0; }
+.tree-row { display: flex; align-items: center; gap: 4px; width: 100%; text-align: left; border: 0; border-radius: 0; background: transparent; padding: 1px 8px; font-size: 12.5px; white-space: nowrap; }
+.tree-row:hover { background: var(--bg3); }
+.tree-row.revealed { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.tree-icon { width: 10px; color: var(--fg2); font-size: 10px; }
+.tree-name { overflow: hidden; text-overflow: ellipsis; }
+.tree-row .change { margin-left: auto; font: 11px var(--mono); }
+.change-modified { color: var(--needs-you); }
+.change-added { color: var(--idle); }
+.change-deleted { color: var(--exited); }
+.change-dot { margin-left: auto; color: var(--needs-you); }
+button.ghost.on { color: var(--fg); background: var(--bg3); }
+.palette { width: min(640px, 92vw); }
+.palette-input { width: 100%; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 10px 14px; font-size: 14px; background: transparent; }
+.palette-list { max-height: 50vh; overflow: auto; padding: 4px; }
+.palette-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 4px 10px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.palette-item.on { background: var(--bg3); }
+.palette-item .hit { color: var(--accent); font-weight: 700; }
+.palette-empty { padding: 6px 10px; margin: 0; }

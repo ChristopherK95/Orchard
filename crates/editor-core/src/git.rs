@@ -448,3 +448,79 @@ pub(crate) async fn worktree_remove(repo: &Path, path: &Path, force: bool) -> Re
 pub(crate) async fn delete_branch(repo: &Path, name: &str) -> Result<(), String> {
     run(repo, &["branch", "-D", "--", name]).await.map(|_| ())
 }
+
+/// Every file in the Worktree git doesn't ignore and that's there (tracked, plus untracked but not
+/// ignored; not tracked files deleted from disk), as `/`-separated paths relative to it, optionally
+/// only under `under` (a relative folder).
+pub(crate) async fn files(worktree: &Path, under: Option<&str>) -> Result<Vec<String>, String> {
+    let list = |extra: &'static [&'static str]| {
+        let mut args = vec!["ls-files", "-z"];
+        args.extend_from_slice(extra);
+        if let Some(under) = under {
+            args.extend(["--", under]);
+        }
+        args
+    };
+    let all = run(
+        worktree,
+        &list(&[
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--deduplicate",
+        ]),
+    )
+    .await?;
+    let deleted = run(worktree, &list(&["--deleted"])).await?;
+    let deleted: std::collections::HashSet<&str> =
+        deleted.split('\0').filter(|p| !p.is_empty()).collect();
+    Ok(all
+        .split('\0')
+        .filter(|p| !p.is_empty() && !deleted.contains(p))
+        .map(str::to_owned)
+        .collect())
+}
+
+/// Which of `paths` (relative to the Worktree, none empty) git ignores.
+pub(crate) async fn check_ignored(
+    worktree: &Path,
+    paths: &[String],
+) -> Result<Vec<String>, String> {
+    if paths.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut cmd = git(worktree);
+    cmd.args(["check-ignore", "--stdin", "-z"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = cmd.spawn().map_err(|e| format!("could not run git: {e}"))?;
+    let mut input = paths.join("\0");
+    input.push('\0');
+    // Written while the output is read, so a big list can't fill both pipes and stall.
+    let writer = child.stdin.take().map(|mut stdin| {
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            let _ = stdin.write_all(input.as_bytes()).await;
+        }) // (dropping stdin ends the input)
+    });
+    let out = child.wait_with_output().await.map_err(|e| e.to_string())?;
+    if let Some(writer) = writer {
+        let _ = writer.await;
+    }
+    // Exit 1 just means none of them is ignored.
+    if !out.status.success() && out.status.code() != Some(1) {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_owned());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .split('\0')
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+/// The Worktree's own git folder (`.git` for the main checkout, `.git/worktrees/<name>` else).
+pub(crate) async fn git_dir(worktree: &Path) -> Option<PathBuf> {
+    let out = output(worktree, &["rev-parse", "--absolute-git-dir"]).await?;
+    Some(PathBuf::from(out.trim()))
+}

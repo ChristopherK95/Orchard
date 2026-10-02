@@ -1,6 +1,6 @@
 //! The core's public API: the same surface the frontend drives over Tauri IPC (ADR 0003).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -16,6 +16,9 @@ use crate::auto_suspend::{
     self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, SystemClock, SystemProbe,
 };
 use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewWorktree};
+use crate::files::{
+    ActorNews, DirEntry, FileMatch, FileWatchConfig, IndexStats, WatchStatus, WorktreeActor,
+};
 use crate::git;
 use crate::permissions;
 use crate::remove_worktree::{self, RemovalCheck, RemoveWorktree, RemovedWorktree};
@@ -103,6 +106,8 @@ pub struct CoreConfig {
     pub memory_probe: Option<Arc<dyn MemoryProbe>>,
     /// The clock Idle time is measured by; `None` is the real one.
     pub clock: Option<Arc<dyn Clock>>,
+    /// How Worktrees' files are watched (ticket 13).
+    pub file_watch: FileWatchConfig,
 }
 
 impl CoreConfig {
@@ -114,6 +119,7 @@ impl CoreConfig {
             state_path: None,
             memory_probe: None,
             clock: None,
+            file_watch: FileWatchConfig::default(),
         }
     }
 }
@@ -124,6 +130,12 @@ const MONITOR_INTERVAL: Duration = Duration::from_secs(10);
 /// After auto-suspending, memory isn't acted on for this long: the reading may still include the
 /// processes being closed.
 const AUTO_SUSPEND_COOLDOWN: Duration = Duration::from_secs(20);
+
+/// A Worktree's actor, started once (by whoever needs it first).
+type ActorSlot = Arc<tokio::sync::OnceCell<Arc<WorktreeActor>>>;
+
+/// How long after a burst of file news a Worktree's branch status is refreshed.
+const STATUS_SETTLE: Duration = Duration::from_millis(200);
 
 /// A session auto-suspend stopped, and why.
 #[derive(Debug, Clone, Serialize)]
@@ -177,6 +189,8 @@ pub enum CoreError {
     Unsupported(&'static str),
     #[error("no closed session to reopen")]
     NothingToReopen,
+    #[error("`{0}` isn't shown or in use, so its files aren't indexed")]
+    NotWatched(PathBuf),
     #[error("that session isn't in this Worktree's Recent sessions")]
     UnknownRecentSession,
     #[error("the Agent session isn't waiting for a permission answer")]
@@ -253,6 +267,16 @@ pub enum CoreEvent {
     AutoSuspended {
         suspended: Vec<AutoSuspension>,
     },
+    /// A Worktree's files changed (created, deleted, renamed, or their git status), for the Files
+    /// drawer and Ctrl+P.
+    FilesChanged {
+        worktree: PathBuf,
+    },
+    /// Watching a Worktree's files failed (the OS's watch limit); it's polled instead.
+    FileWatchFallback {
+        worktree: PathBuf,
+        message: String,
+    },
     /// A Worktree's Recent sessions changed (a Tab was closed or reopened).
     RecentSessionsChanged {
         worktree: PathBuf,
@@ -321,6 +345,15 @@ struct Inner {
     monitoring: AtomicBool,
     /// When auto-suspend last stopped something (by `clock`), for its cooldown.
     last_auto_suspend: Mutex<Option<std::time::Instant>>,
+    /// Worktree actors (file index and watching), for the Worktree being looked at and those with
+    /// sessions. Each starts (indexes) outside the lock; whoever needs one meanwhile waits for it.
+    actors: Mutex<HashMap<PathBuf, ActorSlot>>,
+    /// Worktrees whose branch status is due a refresh (coalesced: one per Worktree at a time).
+    status_due: Mutex<HashSet<PathBuf>>,
+    /// Worktrees whose watch-limit toast has been shown this run (it's shown once).
+    fallback_told: Mutex<HashSet<PathBuf>>,
+    /// The Worktree being looked at.
+    shown_worktree: Mutex<Option<PathBuf>>,
 }
 
 #[derive(Default)]
@@ -521,6 +554,10 @@ impl Core {
             clock,
             monitoring: AtomicBool::new(false),
             last_auto_suspend: Mutex::new(None),
+            actors: Mutex::default(),
+            status_due: Mutex::default(),
+            fallback_told: Mutex::default(),
+            shown_worktree: Mutex::new(None),
         });
         if let Some(path) = &inner.config.settings_path {
             let weak = Arc::downgrade(&inner);
@@ -753,6 +790,7 @@ impl Core {
         }
         self.inner.restore(&workspace.root);
         self.inner.watch_worktrees(&workspace.root).await;
+        self.inner.update_actors().await;
         self.start_monitor();
         Ok(workspace)
     }
@@ -987,6 +1025,8 @@ impl Core {
             self.inner.recent_changed(&info.path);
         }
         self.inner.persist();
+        // Removed: its actor stays stopped; refused or failed: it's watched again.
+        self.inner.update_actors().await;
         removed
     }
 
@@ -1000,6 +1040,12 @@ impl Core {
         for session in self.sessions_in(&info.path) {
             self.close_session(session).await?;
         }
+        // Its files' watch holds the folder open (on Windows, enough to stop it being deleted).
+        self.inner
+            .actors
+            .lock()
+            .expect("actors lock")
+            .remove(&info.path);
         // An Agent may have changed something before it stopped.
         let check = self.inspect_for_removal(root, info).await?;
         refuse_loss(&check, options)?;
@@ -1203,6 +1249,7 @@ impl Core {
             .inner
             .events
             .send(CoreEvent::SessionClosed { session_id: id });
+        self.inner.actors_may_change();
     }
     /// Local and remote branches, for the "existing branch" picker. Fetches first, so a colleague's
     /// branch pushed a minute ago is there; if that fails, it says so and lists what was last fetched.
@@ -1325,6 +1372,7 @@ impl Core {
             .events
             .send(CoreEvent::SessionCreated { session: info });
         self.inner.persist();
+        self.inner.actors_may_change();
         Ok(id)
     }
 
@@ -1338,6 +1386,63 @@ impl Core {
             .collect();
         sessions.sort_by_key(|s| s.id);
         sessions
+    }
+
+    /// The Worktree being looked at: its files are indexed and watched (as are those of
+    /// Worktrees with sessions); other Worktrees' actors stop.
+    pub async fn show_worktree(&self, worktree: &Path) -> Result<(), CoreError> {
+        let wanted = worktrees::normalize(worktree.to_owned());
+        if !self.worktrees().iter().any(|w| w.path == wanted) {
+            return Err(CoreError::UnknownWorktree(worktree.to_owned()));
+        }
+        *self
+            .inner
+            .shown_worktree
+            .lock()
+            .expect("shown worktree lock") = Some(wanted);
+        self.inner.update_actors().await;
+        Ok(())
+    }
+
+    /// Ctrl+P: the Worktree's files best matching `query` (typos allowed, ranked below exact
+    /// matches), at most `limit`. Empty until the Worktree has been shown.
+    pub async fn find_files(
+        &self,
+        worktree: &Path,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<FileMatch>, CoreError> {
+        Ok(self.actor(worktree).await?.find(query, limit))
+    }
+
+    /// The Files drawer: a folder of the Worktree (relative, `""` for its root), folders first,
+    /// with changed files marked.
+    pub async fn list_dir(&self, worktree: &Path, dir: &str) -> Result<Vec<DirEntry>, CoreError> {
+        Ok(self.actor(worktree).await?.list(dir))
+    }
+
+    /// How the Worktree's files are being followed, if they are.
+    pub async fn file_watch(&self, worktree: &Path) -> Option<WatchStatus> {
+        self.actor(worktree).await.ok().map(|actor| actor.status())
+    }
+
+    /// The Worktree's index: how many files, and how often it's been re-read in full.
+    pub async fn file_index_stats(&self, worktree: &Path) -> Option<IndexStats> {
+        self.actor(worktree).await.ok().map(|actor| actor.stats())
+    }
+
+    /// The Worktree's actor, waiting for its first index if it's still starting.
+    async fn actor(&self, worktree: &Path) -> Result<Arc<WorktreeActor>, CoreError> {
+        let wanted = worktrees::normalize(worktree.to_owned());
+        let slot = self
+            .inner
+            .actors
+            .lock()
+            .expect("actors lock")
+            .get(&wanted)
+            .cloned()
+            .ok_or_else(|| CoreError::NotWatched(worktree.to_owned()))?;
+        Ok(self.inner.start_actor(&wanted, &slot).await)
     }
 
     /// The Tab shown last (before the editor last closed, if it's been restored), to show again.
@@ -1439,6 +1544,7 @@ impl Core {
             .send(CoreEvent::SessionCreated { session: info });
         self.inner.recent_changed(&worktree);
         self.inner.persist();
+        self.inner.actors_may_change();
         if let Err(err) = self.inner.resume_claimed(&session, None).await {
             session.record(|t| {
                 t.push(TranscriptItem::Notice {
@@ -1780,6 +1886,124 @@ impl Core {
 }
 
 impl Inner {
+    /// Starts actors for the Worktree being looked at and those with sessions, and stops the rest
+    /// (dimmed and not looked at). Never for a Worktree being removed.
+    async fn update_actors(self: &Arc<Self>) {
+        let wanted: BTreeSet<PathBuf> = {
+            let state = self.state.lock().expect("state lock");
+            let usable = |path: &PathBuf| {
+                state.worktrees.iter().any(|w| &w.path == path) && !state.removing.contains(path)
+            };
+            let mut wanted: BTreeSet<PathBuf> = state
+                .sessions
+                .values()
+                .map(|s| s.info.lock().expect("info lock").worktree.clone())
+                .filter(usable)
+                .collect();
+            if let Some(shown) = self
+                .shown_worktree
+                .lock()
+                .expect("shown worktree lock")
+                .clone()
+                .filter(usable)
+            {
+                wanted.insert(shown);
+            }
+            wanted
+        };
+        let starting: Vec<(PathBuf, ActorSlot)> = {
+            let mut actors = self.actors.lock().expect("actors lock");
+            actors.retain(|path, _| wanted.contains(path)); // dropping one stops it
+            let mut starting = vec![];
+            for path in wanted {
+                if !actors.contains_key(&path) {
+                    let slot = ActorSlot::default();
+                    actors.insert(path.clone(), slot.clone());
+                    starting.push((path, slot));
+                }
+            }
+            starting
+        };
+        for (path, slot) in starting {
+            self.start_actor(&path, &slot).await;
+        }
+    }
+
+    /// The actor in `slot`, started (and indexed) by whichever caller gets there first.
+    async fn start_actor(
+        self: &Arc<Self>,
+        worktree: &Path,
+        slot: &ActorSlot,
+    ) -> Arc<WorktreeActor> {
+        slot.get_or_init(|| {
+            WorktreeActor::start(
+                worktree.to_owned(),
+                self.config.file_watch,
+                self.news_sink(),
+            )
+        })
+        .await
+        .clone()
+    }
+
+    /// Where actors report: file changes become events, status changes a (coalesced) refresh of
+    /// that Worktree's branch status, and a watch-limit fallback a toast (once per Worktree).
+    fn news_sink(self: &Arc<Self>) -> crate::files::NewsSink {
+        let weak = Arc::downgrade(self);
+        Arc::new(move |worktree: &Path, news| {
+            let Some(inner) = weak.upgrade() else {
+                return;
+            };
+            let worktree = worktree.to_owned();
+            match news {
+                ActorNews::Files => {
+                    let _ = inner.events.send(CoreEvent::FilesChanged { worktree });
+                }
+                ActorNews::Status => inner.status_due(worktree),
+                ActorNews::Fallback(message) => {
+                    let first = inner
+                        .fallback_told
+                        .lock()
+                        .expect("fallback lock")
+                        .insert(worktree.clone());
+                    if first {
+                        let _ = inner
+                            .events
+                            .send(CoreEvent::FileWatchFallback { worktree, message });
+                    }
+                }
+            }
+        })
+    }
+
+    /// Refreshes a Worktree's branch status a moment from now, once however often it's asked.
+    fn status_due(self: &Arc<Self>, worktree: PathBuf) {
+        if !self
+            .status_due
+            .lock()
+            .expect("status due lock")
+            .insert(worktree.clone())
+        {
+            return; // already due
+        }
+        let inner = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(STATUS_SETTLE).await;
+            inner
+                .status_due
+                .lock()
+                .expect("status due lock")
+                .remove(&worktree);
+            inner.refresh_status_of(&worktree).await;
+        });
+    }
+
+    /// `update_actors` in the background (from places that can't wait for it).
+    fn actors_may_change(self: &Arc<Self>) {
+        let inner = self.clone();
+        tokio::spawn(async move { inner.update_actors().await });
+    }
+
     /// Adds a Tab's session: running on `connection`, or (with none) Suspended until resumed, its
     /// conversation to be loaded then. Call with the state lock held.
     fn register_session(
@@ -2281,9 +2505,20 @@ impl Inner {
         });
     }
 
-    /// Re-lists the Worktrees. Refreshes run one at a time (so an older listing can't overwrite a
-    /// newer one), and a listing is dropped if another Workspace was opened meanwhile.
-    async fn refresh_worktrees(&self) {
+    /// Re-lists the Worktrees with each one's branch status.
+    async fn refresh_worktrees(self: &Arc<Self>) {
+        self.relist(None).await;
+    }
+
+    /// Re-lists the Worktrees, refreshing only `worktree`'s branch status (and any new one's): what
+    /// a Worktree actor asks for when its files or git folder changed.
+    async fn refresh_status_of(self: &Arc<Self>, worktree: &Path) {
+        self.relist(Some(worktree)).await;
+    }
+
+    /// Refreshes run one at a time (so an older listing can't overwrite a newer one), and a
+    /// listing is dropped if another Workspace was opened meanwhile.
+    async fn relist(self: &Arc<Self>, only: Option<&Path>) {
         let _one_at_a_time = self.refresh_lock.lock().await;
         let root_now = || {
             self.state
@@ -2296,12 +2531,21 @@ impl Inner {
         let Some(root) = root_now() else {
             return;
         };
-        let listed = worktrees::list(&root).await;
+        let listed = match only {
+            Some(worktree) => {
+                let previous = self.state.lock().expect("state lock").worktrees.clone();
+                worktrees::list_refreshing(&root, &previous, worktree).await
+            }
+            None => worktrees::list(&root).await,
+        };
         let mut state = self.state.lock().expect("state lock");
         if state.workspace.as_ref().map(|w| &w.root) != Some(&root) {
             return;
         }
         if state.worktrees != listed {
+            let paths =
+                |list: &[WorktreeInfo]| list.iter().map(|w| w.path.clone()).collect::<Vec<_>>();
+            let list_changed = paths(&state.worktrees) != paths(&listed);
             // A removed Worktree's setup is over (and its command can't keep running there).
             state.setups.retain(|path, run| {
                 let listed = listed.iter().any(|w| &w.path == path);
@@ -2326,6 +2570,9 @@ impl Inner {
             let _ = self
                 .events
                 .send(CoreEvent::WorktreesChanged { worktrees: listed });
+            if list_changed {
+                self.actors_may_change(); // a Worktree that's gone stops being watched
+            }
             if !gone.is_empty() {
                 for worktree in &gone {
                     self.recent_changed(worktree);
