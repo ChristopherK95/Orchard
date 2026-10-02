@@ -16,7 +16,9 @@ use crate::auto_suspend::{
     self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, SystemClock, SystemProbe,
 };
 use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewWorktree};
-use crate::documents::{self, DocumentTracker, OpenDocument, OpenedFile, PoppedOutFile, SaveOver};
+use crate::documents::{
+    self, CheckTicket, DocumentTracker, OpenDocument, OpenedFile, PoppedOutFile, SaveOver,
+};
 use crate::files::{
     ActorNews, DirEntry, FileMatch, FileWatchConfig, IndexStats, WatchStatus, WorktreeActor,
 };
@@ -137,6 +139,10 @@ type ActorSlot = Arc<tokio::sync::OnceCell<Arc<WorktreeActor>>>;
 
 /// How long after a burst of file news a Worktree's branch status is refreshed.
 const STATUS_SETTLE: Duration = Duration::from_millis(200);
+/// A disk check that raced the editor's own save (or an open) is done again after this.
+const RECHECK_AFTER: Duration = Duration::from_millis(150);
+/// Diffs longer than this are cut short in the Manual editor's diff view.
+const MAX_VIEW_DIFF_LINES: usize = 5_000;
 
 /// A session auto-suspend stopped, and why.
 #[derive(Debug, Clone, Serialize)]
@@ -291,6 +297,30 @@ pub enum CoreEvent {
     PopOutReturned {
         window: String,
         file: PoppedOutFile,
+    },
+    /// A file tab in `window`'s Manual editor, with no unsaved changes, has a file that changed on
+    /// disk (an Agent edited it, say): the editor reloads it.
+    DocumentChangedOnDisk {
+        window: String,
+        path: PathBuf,
+    },
+    /// A file tab in `window`'s Manual editor, with unsaved changes, has a file that changed on disk
+    /// (or was deleted): the editor asks what to do, and never reloads it by itself.
+    DocumentConflicted {
+        window: String,
+        path: PathBuf,
+        deleted: bool,
+    },
+    /// A file tab told its file changed on disk has it back as the editor has it (the Agent undid
+    /// its change, say): nothing to ask any more.
+    DocumentBackOnDisk {
+        window: String,
+        path: PathBuf,
+    },
+    /// The files open in Manual editors changed: one opened or closed, or got (or lost) unsaved
+    /// changes. For permission cards warning about an edit to a file with unsaved changes.
+    DocumentsChanged {
+        documents: Vec<OpenDocument>,
     },
     /// A Worktree's Recent sessions changed (a Tab was closed or reopened).
     RecentSessionsChanged {
@@ -1479,6 +1509,8 @@ impl Core {
         let target = path.clone();
         let text = text.to_owned();
         let line_ending = line_ending.to_owned();
+        // (While it writes, the file watcher's news of it isn't an Agent's change.)
+        self.inner.documents().save_started(&path);
         let saved = tokio::task::spawn_blocking(move || {
             documents::save(&target, &text, &line_ending, &over).map_err(|err| match err {
                 documents::SaveError::Changed => CoreError::FileChangedOnDisk(target.clone()),
@@ -1486,11 +1518,18 @@ impl Core {
             })
         })
         .await
-        .map_err(|e| CoreError::File(e.to_string()))?;
-        if let Ok(version) = &saved {
-            // The tracker knows the version the editor now has (whatever the frontend says later).
-            self.inner.documents().saved(&path, window, version);
+        .map_err(|e| CoreError::File(e.to_string()))
+        .and_then(|saved| saved);
+        {
+            let mut docs = self.inner.documents();
+            if let Ok(version) = &saved {
+                // The tracker knows the version the editor now has (whatever the frontend says later).
+                docs.saved(&path, window, version);
+            }
+            docs.save_finished(&path);
         }
+        self.inner.documents_changed();
+        self.inner.check_document(&path);
         // The settings apply as soon as they're saved (the file watch would catch it a moment later).
         if saved.is_ok() && is_settings {
             self.inner.reload_settings();
@@ -1504,27 +1543,58 @@ impl Core {
     }
 
     /// A Manual editor in `window` opened `path` at `version`.
-    pub fn document_opened(
+    /// Its Worktree's files are watched from now on (for changes on disk), and the file is checked at
+    /// once: it may have changed since it was read.
+    pub async fn document_opened(
         &self,
         path: &Path,
         window: &str,
         version: &str,
     ) -> Result<(), CoreError> {
         let path = self.editable(path)?;
-        self.inner.documents().opened(path, window, version);
+        self.inner.documents().opened(path.clone(), window, version);
+        self.inner.documents_changed();
+        self.inner.update_actors().await;
+        self.inner.check_document(&path);
         Ok(())
+    }
+
+    /// The diff from `text` (a Manual editor's) to the file on disk now.
+    pub async fn diff_with_disk(
+        &self,
+        path: &Path,
+        text: &str,
+    ) -> Result<Vec<crate::session::DiffLine>, CoreError> {
+        let path = self.editable(path)?;
+        let opened = tokio::task::spawn_blocking(move || documents::read(&path))
+            .await
+            .map_err(|e| CoreError::File(e.to_string()))?
+            .map_err(CoreError::File)?;
+        match opened.content {
+            documents::FileContent::Text { text: on_disk, .. } => Ok(crate::diff::unified_diff(
+                text,
+                &on_disk,
+                MAX_VIEW_DIFF_LINES,
+            )),
+            _ => Err(CoreError::File(format!(
+                "{} isn't text on disk, so there's no diff to show",
+                opened.path.display()
+            ))),
+        }
     }
 
     /// The file in `window` now has (or no longer has) unsaved changes.
     pub fn document_changed(&self, path: &Path, window: &str, dirty: bool) {
         let path = self.tracked_path(path);
         self.inner.documents().changed(&path, window, dirty);
+        self.inner.documents_changed();
     }
 
     /// A Manual editor in `window` closed `path`.
     pub fn document_closed(&self, path: &Path, window: &str) {
         let path = self.tracked_path(path);
         self.inner.documents().closed(&path, window);
+        self.inner.documents_changed();
     }
 
     /// The windows `path` is open in.
@@ -1537,18 +1607,23 @@ impl Core {
     /// core holds it, unsaved changes and all, until that window is gone.
     pub fn pop_out(&self, from: &str, file: PoppedOutFile) -> Result<String, CoreError> {
         let path = self.editable(&file.path)?;
-        Ok(self
+        let window = self
             .inner
             .documents()
-            .pop_out(from, PoppedOutFile { path, ..file }))
+            .pop_out(from, PoppedOutFile { path, ..file });
+        self.inner.documents_changed();
+        Ok(window)
     }
 
-    /// The popped-out `window` collects its file (again after a reload: the latest copy).
-    pub fn collect_pop_out(&self, window: &str) -> Result<PoppedOutFile, CoreError> {
-        self.inner
-            .documents()
-            .collect(window)
-            .ok_or(CoreError::NoPopOut)
+    /// The popped-out `window` collects its file (again after a reload: the latest copy), and hears
+    /// afresh about changes to it on disk.
+    pub async fn collect_pop_out(&self, window: &str) -> Result<PoppedOutFile, CoreError> {
+        let file = self.inner.documents().collect(window);
+        self.inner.documents_changed();
+        let file = file.ok_or(CoreError::NoPopOut)?;
+        self.inner.update_actors().await;
+        self.inner.check_document(&file.path);
+        Ok(file)
     }
 
     /// The popped-out `window`'s file as it is now (so reloading the window loses nothing).
@@ -1561,17 +1636,20 @@ impl Core {
     /// The popped-out window couldn't be opened: the file stays where it was.
     pub fn cancel_pop_out(&self, window: &str) {
         self.inner.documents().cancel_pop_out(window);
+        self.inner.documents_changed();
     }
 
     /// `window`'s page is (re)loading: nothing is open in it until its editors say so again.
     pub fn page_loading(&self, window: &str) {
         self.inner.documents().page_loading(window);
+        self.inner.documents_changed();
     }
 
     /// `window` closed: its files aren't open any more. A popped-out file it never collected comes
     /// back (`PopOutReturned`) rather than being lost.
     pub fn window_closed(&self, window: &str) {
         let returned = self.inner.documents().window_closed(window);
+        self.inner.documents_changed();
         if let Some((window, file)) = returned {
             let _ = self
                 .inner
@@ -2091,6 +2169,7 @@ impl Inner {
     /// Starts actors for the Worktree being looked at and those with sessions, and stops the rest
     /// (dimmed and not looked at). Never for a Worktree being removed.
     async fn update_actors(self: &Arc<Self>) {
+        let open: Vec<PathBuf> = self.documents().all().into_iter().map(|d| d.path).collect();
         let wanted: BTreeSet<PathBuf> = {
             let state = self.state.lock().expect("state lock");
             let usable = |path: &PathBuf| {
@@ -2102,6 +2181,16 @@ impl Inner {
                 .map(|s| s.info.lock().expect("info lock").worktree.clone())
                 .filter(usable)
                 .collect();
+            // (A file open in a Manual editor is watched for changes on disk.)
+            wanted.extend(
+                state
+                    .worktrees
+                    .iter()
+                    .map(|w| &w.path)
+                    .filter(|w| open.iter().any(|p| p.starts_with(w)))
+                    .filter(|w| usable(w))
+                    .cloned(),
+            );
             if let Some(shown) = self
                 .shown_worktree
                 .lock()
@@ -2162,6 +2251,7 @@ impl Inner {
                     let _ = inner.events.send(CoreEvent::FilesChanged { worktree });
                 }
                 ActorNews::Status => inner.status_due(worktree),
+                ActorNews::Touched(paths) => inner.check_documents(&worktree, paths),
                 ActorNews::Fallback(message) => {
                     let first = inner
                         .fallback_told
@@ -2176,6 +2266,78 @@ impl Inner {
                 }
             }
         })
+    }
+
+    /// Compares the open files under `worktree` among `touched` (`None`: all) with what's on disk,
+    /// and tells each editor whose file moved on: reload it if it's clean, ask if it isn't.
+    fn check_documents(self: &Arc<Self>, worktree: &Path, touched: Option<Vec<PathBuf>>) {
+        let to_check = self.documents().checks_for(worktree, touched.as_deref());
+        self.check_disk(to_check);
+    }
+
+    /// Checks one open file against the disk (after it's opened or saved, say).
+    fn check_document(self: &Arc<Self>, path: &Path) {
+        let ticket = self.documents().ticket(path);
+        self.check_disk(vec![(path.to_owned(), ticket)]);
+    }
+
+    /// Reads each file's disk version (since its epoch) and tells the editors whose file moved on.
+    /// A read that raced a save or an open is done again a moment later, so no change goes unseen.
+    fn check_disk(self: &Arc<Self>, to_check: Vec<(PathBuf, CheckTicket)>) {
+        if to_check.is_empty() {
+            return;
+        }
+        let inner = self.clone();
+        tokio::spawn(async move {
+            let Ok(on_disk) = tokio::task::spawn_blocking(move || {
+                to_check
+                    .into_iter()
+                    .map(|(path, ticket)| (documents::disk_version(&path), path, ticket))
+                    .collect::<Vec<_>>()
+            })
+            .await
+            else {
+                return;
+            };
+            for (disk, path, ticket) in on_disk {
+                // (Unreadable just now: the next change, or poll, looks again.)
+                let Some(disk) = disk else { continue };
+                let checked = inner.documents().changed_on_disk(&path, &disk, ticket);
+                let Some(notices) = checked else {
+                    let inner = inner.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(RECHECK_AFTER).await;
+                        inner.check_document(&path);
+                    });
+                    continue;
+                };
+                let deleted = disk == documents::version_of(None);
+                for notice in notices {
+                    let path = path.clone();
+                    let _ = inner.events.send(match notice {
+                        documents::Notice::Back { window } => {
+                            CoreEvent::DocumentBackOnDisk { window, path }
+                        }
+                        documents::Notice::Changed { window, dirty } if dirty || deleted => {
+                            CoreEvent::DocumentConflicted {
+                                window,
+                                path,
+                                deleted,
+                            }
+                        }
+                        documents::Notice::Changed { window, .. } => {
+                            CoreEvent::DocumentChangedOnDisk { window, path }
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    /// Tells the frontend the open files after a change to them.
+    fn documents_changed(&self) {
+        let documents = self.documents().all();
+        let _ = self.events.send(CoreEvent::DocumentsChanged { documents });
     }
 
     /// Refreshes a Worktree's branch status a moment from now, once however often it's asked.

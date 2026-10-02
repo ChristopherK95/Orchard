@@ -4,11 +4,11 @@
 use std::path::Path;
 
 use serde_json::{json, Value};
-use similar::{ChangeTag, TextDiff};
 
+use crate::diff::unified_diff;
 use crate::session::{
-    DiffLine, DiffLineKind, PermissionOption, PermissionOptionKind, PermissionOutcome,
-    PermissionRequest, ToolCallStatus, TranscriptItem,
+    PermissionOption, PermissionOptionKind, PermissionOutcome, PermissionRequest, ToolCallStatus,
+    TranscriptItem,
 };
 
 /// Diffs longer than this are cut short on the card; the full change is still what gets applied.
@@ -33,6 +33,7 @@ pub(crate) fn request_from(
                 unified_diff(
                     d["oldText"].as_str().unwrap_or_default(),
                     d["newText"].as_str().unwrap_or_default(),
+                    MAX_DIFF_LINES,
                 )
             })
             .collect()
@@ -48,6 +49,7 @@ pub(crate) fn request_from(
             .to_owned(),
         kind: tool_call["kind"].as_str().map(str::to_owned),
         target,
+        file: file_of(tool_call, worktree),
         diff,
         options: options
             .as_array()
@@ -96,6 +98,26 @@ fn target_of(tool_call: &Value, worktree: &Path) -> Option<String> {
         })
 }
 
+/// The file an edit (or a delete or move) changes, canonical when it exists: its diff's, or its
+/// first location's (relative ones taken as inside `worktree`). None for other tools: reading a
+/// file with unsaved changes is nothing to warn about.
+fn file_of(tool_call: &Value, worktree: &Path) -> Option<std::path::PathBuf> {
+    let has_diff = tool_call["content"]
+        .as_array()
+        .is_some_and(|content| content.iter().any(|c| c["type"] == "diff"));
+    let changes_files = matches!(tool_call["kind"].as_str(), Some("edit" | "delete" | "move"));
+    if !has_diff && !changes_files {
+        return None;
+    }
+    let path = tool_call["content"]
+        .as_array()
+        .and_then(|content| content.iter().find(|c| c["type"] == "diff"))
+        .and_then(|d| d["path"].as_str())
+        .or_else(|| tool_call["locations"][0]["path"].as_str())
+        .or_else(|| tool_call["rawInput"]["file_path"].as_str())?;
+    Some(crate::worktrees::normalize(worktree.join(path)))
+}
+
 /// The `RequestPermissionResponse` for an answer.
 pub(crate) fn acp_outcome(outcome: &PermissionOutcome) -> Value {
     match outcome {
@@ -116,35 +138,4 @@ pub(crate) fn merge_tool_call(known: &mut Value, update: &Value) {
             known.insert(key.clone(), value.clone());
         }
     }
-}
-
-fn unified_diff(old: &str, new: &str) -> Vec<DiffLine> {
-    let diff = TextDiff::from_lines(old, new);
-    let mut lines = vec![];
-    for hunk in diff.unified_diff().context_radius(3).iter_hunks() {
-        lines.push(DiffLine {
-            kind: DiffLineKind::Hunk,
-            text: hunk.header().to_string().trim_end().to_owned(),
-        });
-        for change in hunk.iter_changes() {
-            let kind = match change.tag() {
-                ChangeTag::Equal => DiffLineKind::Context,
-                ChangeTag::Delete => DiffLineKind::Removed,
-                ChangeTag::Insert => DiffLineKind::Added,
-            };
-            lines.push(DiffLine {
-                kind,
-                text: change.value().trim_end_matches(['\n', '\r']).to_owned(),
-            });
-        }
-    }
-    if lines.len() > MAX_DIFF_LINES {
-        let hidden = lines.len() - MAX_DIFF_LINES;
-        lines.truncate(MAX_DIFF_LINES);
-        lines.push(DiffLine {
-            kind: DiffLineKind::Hunk,
-            text: format!("… {hidden} more lines"),
-        });
-    }
-    lines
 }

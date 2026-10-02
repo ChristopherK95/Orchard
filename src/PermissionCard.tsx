@@ -9,6 +9,7 @@ import {
   type SessionId,
   type TranscriptItem,
 } from "./core";
+import { hasUnsavedChanges } from "./documents";
 import { highlightCode, languageOfPath } from "./highlight";
 
 const DIFF_PREFIX = { hunk: "", context: " ", added: "+", removed: "−" } as const;
@@ -83,6 +84,11 @@ export function PermissionCard(props: {
         <span class="grow" />
         <span class="muted">{pending() ? "Permission requested" : chosen()}</span>
       </div>
+      <Show when={pending() && props.request.file && hasUnsavedChanges(props.request.file)}>
+        <p class="permission-warning">
+          ⚠ This file has unsaved changes in the editor. If you allow this, you'll be asked which version to keep.
+        </p>
+      </Show>
       <Show when={props.request.diff}>
         {(diff) => (
           <pre class="diff">

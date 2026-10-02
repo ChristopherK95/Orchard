@@ -136,6 +136,9 @@ pub struct PermissionRequest {
     pub kind: Option<String>,
     /// The file or command the tool acts on.
     pub target: Option<String>,
+    /// The file it would change (absolute), if it's a file: so the card can warn when it has
+    /// unsaved changes in a Manual editor.
+    pub file: Option<std::path::PathBuf>,
     /// For edits, the change the Agent wants to make, shown before approval.
     pub diff: Option<Vec<DiffLine>>,
     /// The choices the Agent offers, in its order and with its names.

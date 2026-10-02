@@ -27,7 +27,9 @@ import {
 import { classHighlighter } from "@lezer/highlight";
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import { core, type OpenedFile, type PoppedOutFile } from "./core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { core, type DiffLine, type OpenedFile, type PoppedOutFile } from "./core";
+import { DiffView } from "./DiffView";
 import { languageOf, languageOfPath, parserFor } from "./highlight";
 
 /** What to open: a file (absolute path), a chat code block as an unsaved snippet, or a file popped
@@ -55,7 +57,13 @@ interface Tab {
   /** The text as saved, to tell whether there are unsaved changes. */
   saved: Text | null;
   dirty: boolean;
+  /** The file changed on disk (or was deleted) while it had unsaved changes: the banner's showing. */
+  onDisk: "changed" | "deleted" | null;
+  /** "Keep mine": the next save writes over whatever is on disk. */
+  overwrite: boolean;
 }
+
+type TabFields = Omit<Tab, "id" | "saved" | "dirty" | "onDisk" | "overwrite">;
 
 const vimMode = new Compartment();
 const wrapping = new Compartment();
@@ -98,6 +106,9 @@ export function ManualEditor(props: {
   const [conflict, setConflict] = createSignal<number | null>(null);
   const [closing, setClosing] = createSignal<number | null>(null);
   const [notice, setNotice] = createSignal("");
+  /** The diff shown in place of the editor: the tab's text against the file on disk. */
+  const [diff, setDiff] = createSignal<{ tabId: number; lines: DiffLine[] } | null>(null);
+  const [sideBySide, setSideBySide] = createSignal(false);
   const states = new Map<number, EditorState>();
   /** Saves in flight, one per tab (a second Ctrl+S waits for the first rather than racing it). */
   const saving = new Map<number, Promise<boolean>>();
@@ -187,13 +198,13 @@ export function ManualEditor(props: {
   };
 
   const addTab = (
-    fields: Omit<Tab, "id" | "saved" | "dirty">,
+    fields: TabFields,
     text: string | null,
     lang?: string,
     carried?: { savedText: string; selection: { anchor: number; head: number } },
   ) => {
     const id = nextId++;
-    const full: Tab = { ...fields, id, saved: null, dirty: false };
+    const full: Tab = { ...fields, id, saved: null, dirty: false, onDisk: null, overwrite: false };
     if (text !== null) {
       const state = EditorState.create({
         doc: text,
@@ -341,7 +352,7 @@ export function ManualEditor(props: {
           t.path,
           sent.toString(),
           t.lineEnding,
-          overwrite ? { kind: "anything" } : { kind: "version", version: t.version! },
+          overwrite || t.overwrite ? { kind: "anything" } : { kind: "version", version: t.version! },
         );
         if (outcome.kind === "changedOnDisk") {
           setConflict(tabId);
@@ -355,8 +366,11 @@ export function ManualEditor(props: {
             x.version = outcome.version;
             x.saved = sent;
             x.dirty = !sent.eq(now);
+            x.overwrite = false;
+            x.onDisk = null;
           }),
         );
+        if (diff()?.tabId === tabId) setDiff(null);
         void core.documentChanged(t.path, !sent.eq(now)).catch(() => {});
         snapshot(tabId);
         if (conflict() === tabId) setConflict(null);
@@ -377,6 +391,7 @@ export function ManualEditor(props: {
     if (t.dirty && !force) return void setClosing(tabId);
     setClosing(null);
     if (conflict() === tabId) setConflict(null);
+    if (diff()?.tabId === tabId) setDiff(null);
     if (t.path) void core.documentClosed(t.path).catch(() => {});
     const at = tabs.findIndex((x) => x.id === tabId);
     states.delete(tabId);
@@ -389,6 +404,122 @@ export function ManualEditor(props: {
       if (opening.size === 0) props.onEmpty(); // (unless a file is still on its way)
     }
   };
+
+  /** Reads the tab's file again and puts it in the editor (an undoable change, cursor kept). Unless
+   *  `dropMine`, it's left alone if typed into meanwhile: the banner asks instead. */
+  const reload = async (tabId: number, dropMine = false) => {
+    const t = tab(tabId);
+    if (!t?.path) return;
+    const before = currentState(tabId)?.doc;
+    let opened: OpenedFile;
+    try {
+      opened = await core.readFile(t.path);
+    } catch (err) {
+      // (Gone meanwhile, most likely: the core says so next.)
+      return props.onError(String(err));
+    }
+    const state = currentState(tabId);
+    if (!alive || !tab(tabId)) return;
+    const content = opened.content;
+    const settle = () => {
+      setTabs(
+        (x) => x.id === tabId,
+        produce((x) => {
+          x.version = opened.version;
+          x.onDisk = null;
+          x.overwrite = false;
+        }),
+      );
+      if (diff()?.tabId === tabId) setDiff(null);
+      if (conflict() === tabId) setConflict(null);
+      void core.documentOpened(opened.path, opened.version).catch(() => {});
+    };
+    // A placeholder tab: nothing to put in the editor, just the new version.
+    if (!state) return settle();
+    if (content.kind !== "text") {
+      // Not text any more: the tab keeps its text, and saving it would write over what's there now.
+      setTabs((x) => x.id === tabId, "onDisk", "changed");
+      return setNotice(`${t.title} isn't text on disk any more; close it and open it again to see what it is.`);
+    }
+    if (!dropMine && before && !before.eq(state.doc)) {
+      setTabs((x) => x.id === tabId, "onDisk", "changed");
+      return;
+    }
+    // The new saved text first, so the change below leaves the tab clean.
+    setTabs(
+      (x) => x.id === tabId,
+      produce((x) => {
+        x.saved = EditorState.create({ doc: content.text }).doc;
+        x.lineEnding = content.lineEnding;
+      }),
+    );
+    const change = {
+      changes: { from: 0, to: state.doc.length, insert: content.text },
+      selection: clampSelection(state.selection.main, content.text.length),
+    };
+    if (activeId() === tabId && view) view.dispatch(change);
+    else states.set(tabId, state.update(change).state);
+    markDirty(tabId, currentState(tabId)!.doc);
+    snapshot(tabId);
+    settle();
+  };
+
+  /** The core says `path` changed on disk: a clean tab reloads, one with unsaved changes asks. (The
+   *  core decided which, but the tab looks again: it may have been typed into since.) An open diff
+   *  of it is brought up to date. */
+  const changedOnDisk = (path: string, deleted: boolean) => {
+    for (const t of tabs.filter((x) => x.path === path)) {
+      if (!deleted && !t.dirty) void reload(t.id);
+      else {
+        setTabs((x) => x.id === t.id, "onDisk", deleted ? "deleted" : "changed");
+        if (diff()?.tabId === t.id) void (deleted ? setDiff(null) : showDiff(t.id));
+      }
+    }
+  };
+
+  /** The file is back as the tab has it (the Agent undid its change): nothing to ask any more. */
+  const backOnDisk = (path: string) => {
+    for (const t of tabs.filter((x) => x.path === path && x.onDisk)) {
+      setTabs((x) => x.id === t.id, "onDisk", null);
+      if (diff()?.tabId === t.id) setDiff(null);
+    }
+  };
+
+  /** "Keep mine": the banner goes, and the next save writes over what's on disk. */
+  const keepMine = (tabId: number) => {
+    setTabs(
+      (x) => x.id === tabId,
+      produce((x) => {
+        x.onDisk = null;
+        x.overwrite = true;
+      }),
+    );
+    if (diff()?.tabId === tabId) setDiff(null);
+  };
+
+  /** Shows the tab's text against the file on disk. */
+  const showDiff = async (tabId: number) => {
+    const t = tab(tabId);
+    const mine = currentState(tabId)?.doc.toString();
+    if (!t?.path || mine === undefined) return;
+    try {
+      const lines = await core.diffWithDisk(t.path, mine);
+      if (alive && tab(tabId)) setDiff({ tabId, lines });
+    } catch (err) {
+      props.onError(String(err));
+    }
+  };
+
+  const myWindow = getCurrentWindow().label;
+  let stopEvents: (() => void) | undefined;
+  void core
+    .onEvent((event) => {
+      if (!("window" in event) || event.window !== myWindow) return;
+      if (event.kind === "documentChangedOnDisk") changedOnDisk(event.path, false);
+      else if (event.kind === "documentConflicted") changedOnDisk(event.path, event.deleted);
+      else if (event.kind === "documentBackOnDisk") backOnDisk(event.path);
+    })
+    .then((stop) => (alive ? (stopEvents = stop) : stop()));
 
   /** Vim on or off in the shown tab, as the setting says (applied live). */
   const syncVim = async () => {
@@ -444,6 +575,7 @@ export function ManualEditor(props: {
   });
   onCleanup(() => {
     alive = false;
+    stopEvents?.();
     clearTimeout(snapshotTimer);
     view?.destroy();
   });
@@ -459,6 +591,11 @@ export function ManualEditor(props: {
                 <Show when={t.dirty}>
                   <span class="dirty" title="Unsaved changes">●</span>
                 </Show>
+                <Show when={t.onDisk}>
+                  <span class="on-disk" title={t.onDisk === "deleted" ? "Deleted on disk" : "Changed on disk"}>
+                    !
+                  </span>
+                </Show>
               </button>
               <button class="close-tab" aria-label={`Close ${t.title}`} onClick={() => close(t.id)}>
                 ×
@@ -473,7 +610,7 @@ export function ManualEditor(props: {
           </button>
         </Show>
         <Show when={active()?.path && !active()?.readOnly}>
-          <button class="ghost" onClick={() => void save(activeId()!)} title="Save (Ctrl+S)" disabled={!active()?.dirty}>
+          <button class="ghost" onClick={() => void save(activeId()!)} title="Save (Ctrl+S)" disabled={!active()?.dirty && !active()?.overwrite}>
             Save
           </button>
           <Show when={!props.poppedOut}>
@@ -496,6 +633,52 @@ export function ManualEditor(props: {
           </div>
         )}
       </Show>
+      <Show when={active()?.onDisk ? active() : undefined}>
+        {(t) => (
+          <div class="editor-banner warning">
+            <Show
+              when={t().onDisk === "changed"}
+              fallback={
+                <>
+                  <span class="grow">
+                    <span class="mono">{t().title}</span> was deleted on disk. Saving puts your text back.
+                  </span>
+                  <button onClick={() => keepMine(t().id)}>Keep mine</button>
+                  <button class="ghost" onClick={() => close(t().id)}>
+                    Close it
+                  </button>
+                </>
+              }
+            >
+              <span class="grow">Agent changed this file. Your unsaved changes are still here.</span>
+              <button
+                classList={{ on: diff()?.tabId === t().id }}
+                onClick={() => (diff()?.tabId === t().id ? setDiff(null) : void showDiff(t().id))}
+              >
+                Show diff
+              </button>
+              <button onClick={() => void reload(t().id, true)}>Reload (drop mine)</button>
+              <button onClick={() => keepMine(t().id)}>Keep mine</button>
+            </Show>
+          </div>
+        )}
+      </Show>
+      <Show when={diff()?.tabId === activeId() ? diff() : undefined}>
+        <div class="diff-head">
+          <span class="grow muted">
+            <span class="removed-key">− yours</span> · <span class="added-key">+ on disk</span> (read-only)
+          </span>
+          <button class="ghost" classList={{ on: !sideBySide() }} onClick={() => setSideBySide(false)}>
+            Unified
+          </button>
+          <button class="ghost" classList={{ on: sideBySide() }} onClick={() => setSideBySide(true)}>
+            Side by side
+          </button>
+          <button onClick={() => setDiff(null)} title="Back to the editor">
+            Edit file
+          </button>
+        </div>
+      </Show>
       <Show when={closing() !== null ? tab(closing()!) : undefined}>
         {(t) => (
           <div class="editor-banner warning">
@@ -516,7 +699,14 @@ export function ManualEditor(props: {
       </Show>
       <Show when={active()?.note}>{(note) => <div class="editor-banner muted">{note()}</div>}</Show>
       <Show when={active()?.placeholder}>{(text) => <div class="center muted editor-placeholder">{text()}</div>}</Show>
-      <div class="editor-host" ref={host} classList={{ hidden: !!active()?.placeholder || !active() }} />
+      <Show when={diff()?.tabId === activeId() ? diff() : undefined}>
+        {(d) => <DiffView lines={d().lines} sideBySide={sideBySide()} language={languageOfPath(active()?.path)} />}
+      </Show>
+      <div
+        class="editor-host"
+        ref={host}
+        classList={{ hidden: !!active()?.placeholder || !active() || diff()?.tabId === activeId() }}
+      />
     </section>
   );
 }

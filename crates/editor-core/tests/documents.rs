@@ -30,6 +30,7 @@ async fn opening_editing_saving_and_closing_are_tracked() {
     let opened = core.read_file(&path).await.unwrap();
 
     core.document_opened(&path, "main", &opened.version)
+        .await
         .unwrap();
     let docs = core.open_documents();
     assert_eq!(docs.len(), 1);
@@ -73,6 +74,7 @@ async fn a_popped_out_file_keeps_its_text_cursor_and_unsaved_state() {
     std::fs::write(&path, "fn b() {}\n").unwrap();
     let opened = core.read_file(&path).await.unwrap();
     core.document_opened(&path, "main", &opened.version)
+        .await
         .unwrap();
     core.document_changed(&path, "main", true);
 
@@ -97,7 +99,7 @@ async fn a_popped_out_file_keeps_its_text_cursor_and_unsaved_state() {
         (window.as_str(), true)
     );
 
-    let collected = core.collect_pop_out(&window).unwrap();
+    let collected = core.collect_pop_out(&window).await.unwrap();
     assert_eq!(collected.text, "fn b() { edited }\n");
     assert_eq!(collected.cursor, 9);
     assert_eq!(core.windows_with(&path), std::slice::from_ref(&window));
@@ -106,7 +108,7 @@ async fn a_popped_out_file_keeps_its_text_cursor_and_unsaved_state() {
     core.window_closed(&window);
     assert!(core.open_documents().is_empty());
     assert!(matches!(
-        core.collect_pop_out(&window),
+        core.collect_pop_out(&window).await,
         Err(CoreError::NoPopOut)
     ));
 }
@@ -145,7 +147,7 @@ async fn only_editable_files_are_tracked_or_popped_out() {
     let core = core_with(&fake);
     core.open_workspace(repo.path()).await.unwrap();
     assert!(matches!(
-        core.document_opened(&outside, "main", "v"),
+        core.document_opened(&outside, "main", "v").await,
         Err(CoreError::NotEditable(_))
     ));
     assert!(matches!(

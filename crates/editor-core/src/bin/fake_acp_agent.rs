@@ -16,6 +16,9 @@
 //! }
 //! ```
 //!
+//! A turn's `"write": [{ "path": "a.rs", "text": "…", "afterMs": 0 }]` writes files in the session's
+//! folder (after any permission is answered, whatever the answer), like an Agent's edit.
+//!
 //! A top-level `"failResume": true` makes `session/resume` fail (`Session not found`).
 //!
 //! Each `session/prompt` consumes the next turn (across all sessions); once the script runs out, the
@@ -40,6 +43,7 @@
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{Lines, StdinLock, Write};
+use std::path::Path;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -90,6 +94,20 @@ struct Turn {
     /// Keep the turn going (Working) until the client sends `session/cancel` (or goes away).
     #[serde(default)]
     until_cancelled: bool,
+    /// Files to write (paths relative to the session's folder) once any permission is answered,
+    /// whatever the answer, before sending `chunks`: the Agent editing a file.
+    #[serde(default)]
+    write: Vec<WriteScript>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WriteScript {
+    path: String,
+    text: String,
+    /// Wait this long first.
+    #[serde(default)]
+    after_ms: u64,
 }
 
 #[derive(Deserialize)]
@@ -110,6 +128,8 @@ struct Permission {
     title: String,
     kind: String,
     diff: Option<Value>,
+    /// The file it's about, when there's no diff (a read, say).
+    path: Option<String>,
 }
 
 struct Agent {
@@ -325,6 +345,15 @@ impl Agent {
                 );
             }
         }
+        let cwd = session_id
+            .as_str()
+            .and_then(|id| self.cwds.get(id))
+            .cloned()
+            .unwrap_or_default();
+        for write in &turn.write {
+            std::thread::sleep(Duration::from_millis(write.after_ms));
+            std::fs::write(Path::new(&cwd).join(&write.path), &write.text).expect("write a file");
+        }
         for chunk in &chunks {
             std::thread::sleep(Duration::from_millis(turn.delay_ms));
             notify_update(
@@ -371,6 +400,7 @@ impl Agent {
             .diff
             .iter()
             .map(|d| json!({ "path": d["path"] }))
+            .chain(permission.path.iter().map(|p| json!({ "path": p })))
             .collect();
         notify_update(
             session_id,

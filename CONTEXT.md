@@ -45,7 +45,7 @@ The overview of every Agent session in the Workspace, grouped by Agent session s
 _Avoid_: Dashboard, overview
 
 **Manual editor**:
-Where the user views and hand-edits a file in a Worktree (or the settings file, or an unsaved snippet copied from a chat code block). It opens as a pane beside the chat, with a file tab per file, and can be popped out into its own window.
+Where the user views and hand-edits a file in a Worktree (or the settings file, or an unsaved snippet copied from a chat code block). It opens as a pane beside the chat, with a file tab per file, and can be popped out into its own window. When a file it has open changes on disk, a file tab with no unsaved changes reloads; one with unsaved changes asks (show the diff, reload and drop mine, or keep mine and overwrite on the next save).
 _Avoid_: Text editor window, code view
 
 **Agent**:

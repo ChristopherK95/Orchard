@@ -222,8 +222,18 @@ export interface PermissionRequest {
   title: string;
   kind: string | null;
   target: string | null;
+  /** The file it would change (absolute), if it's a file. */
+  file: string | null;
   diff: DiffLine[] | null;
   options: PermissionOption[];
+}
+
+/** A file open in a Manual editor, in some window. */
+export interface OpenDocument {
+  path: string;
+  window: string;
+  dirty: boolean;
+  version: string;
 }
 
 export type PermissionOutcome = { kind: "selected"; optionId: string } | { kind: "cancelled" };
@@ -271,6 +281,13 @@ export type CoreEvent =
   | { kind: "sessionClosed"; sessionId: SessionId }
   /** A popped-out window closed before it showed its file: `window` reopens it. */
   | { kind: "popOutReturned"; window: string; file: PoppedOutFile }
+  /** A clean file open in `window` changed on disk: reload it. */
+  | { kind: "documentChangedOnDisk"; window: string; path: string }
+  /** A file with unsaved changes open in `window` changed on disk (or was deleted): ask. */
+  | { kind: "documentConflicted"; window: string; path: string; deleted: boolean }
+  /** A file `window` was told changed is back as the editor has it: nothing to ask. */
+  | { kind: "documentBackOnDisk"; window: string; path: string }
+  | { kind: "documentsChanged"; documents: OpenDocument[] }
   | { kind: "filesChanged"; worktree: string }
   | { kind: "fileWatchFallback"; worktree: string; message: string }
   | { kind: "autoSuspended"; suspended: { session: SessionInfo; reason: AutoSuspendReason }[] }
@@ -319,6 +336,10 @@ export const core = {
   documentOpened: (path: string, version: string) => invoke<void>("document_opened", { path, version }),
   documentChanged: (path: string, dirty: boolean) => invoke<void>("document_changed", { path, dirty }),
   documentClosed: (path: string) => invoke<void>("document_closed", { path }),
+  /** The files open in Manual editors, in every window. */
+  openDocuments: () => invoke<OpenDocument[]>("open_documents"),
+  /** The diff from a Manual editor's `text` to the file on disk. */
+  diffWithDisk: (path: string, text: string) => invoke<DiffLine[]>("diff_with_disk", { path, text }),
   /** If the file is open in another window, brings that window forward; whether it did. */
   showWhereOpen: (path: string) => invoke<boolean>("show_where_open", { path }),
   /** Moves a file into a window of its own; that window's label. */

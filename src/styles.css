@@ -194,6 +194,7 @@ select { font: inherit; color: inherit; background: var(--bg3); border: 1px soli
 .diff .added { background: rgba(127, 209, 139, 0.18); color: var(--added); box-shadow: inset 3px 0 rgba(127, 209, 139, 0.7); }
 .diff .removed { background: rgba(239, 107, 115, 0.18); color: var(--removed); box-shadow: inset 3px 0 rgba(239, 107, 115, 0.7); }
 .diff .hunk { color: var(--hunk); }
+.permission-warning { margin: 0; padding: 6px 12px; color: var(--needs-you); font-size: 12.5px; }
 
 .composer-side { display: flex; flex-direction: column; gap: 6px; }
 .composer { display: flex; gap: 8px; align-items: flex-end; padding: 10px 14px; border-top: 1px solid var(--line); background: var(--bg2); flex-wrap: wrap; }
@@ -232,6 +233,9 @@ button.ghost.on { color: var(--fg); background: var(--bg3); }
 .editor-tab.on { background: var(--bg); box-shadow: inset 0 2px var(--accent); }
 .editor-tab-name { border: 0; background: transparent; padding: 4px 4px 4px 10px; font-size: 12.5px; white-space: nowrap; }
 .editor-tab .dirty { margin-left: 5px; color: var(--needs-you); font-size: 10px; }
+.editor-tab .on-disk { margin-left: 5px; color: var(--exited); font-weight: 700; }
+.diff-head .removed-key { color: var(--removed); }
+.diff-head .added-key { color: var(--added); }
 .editor-tabs > button { font-size: 12px; padding: 1px 8px; }
 .editor-banner { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
 .editor-host { flex: 1; min-height: 0; overflow: hidden; }
@@ -246,3 +250,10 @@ button.ghost.on { color: var(--fg); background: var(--bg3); }
 .editor-host .cm-matchingBracket { outline: 1px solid var(--accent); background: transparent; }
 .editor-placeholder { flex: 1; }
 .popout .manual-editor { border-left: 0; }
+.diff-head { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.diff.diff-view { flex: 1; min-height: 0; max-height: none; overflow: auto; }
+.diff.side-by-side { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-content: start; }
+.diff.side-by-side .line { white-space: pre-wrap; overflow-wrap: anywhere; }
+.diff.side-by-side .line:nth-child(odd of :not(.wide)) { border-right: 1px solid var(--line); }
+.diff .line.wide { grid-column: 1 / -1; }
+.diff .line.empty { background: color-mix(in srgb, var(--line) 25%, transparent); }

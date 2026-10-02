@@ -205,13 +205,14 @@ async fn send_prompt(
 
 /// A Manual editor in the calling window opened a file.
 #[tauri::command]
-fn document_opened(
+async fn document_opened(
     core: State<'_, Core>,
     window: tauri::Window,
     path: String,
     version: String,
 ) -> CommandResult<()> {
     core.document_opened(path.as_ref(), window.label(), &version)
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -219,6 +220,24 @@ fn document_opened(
 #[tauri::command]
 fn document_changed(core: State<'_, Core>, window: tauri::Window, path: String, dirty: bool) {
     core.document_changed(path.as_ref(), window.label(), dirty);
+}
+
+/// The files open in Manual editors, in every window (which have unsaved changes).
+#[tauri::command]
+fn open_documents(core: State<'_, Core>) -> Vec<editor_core::OpenDocument> {
+    core.open_documents()
+}
+
+/// The diff from a Manual editor's text to the file on disk.
+#[tauri::command]
+async fn diff_with_disk(
+    core: State<'_, Core>,
+    path: String,
+    text: String,
+) -> CommandResult<Vec<editor_core::DiffLine>> {
+    core.diff_with_disk(path.as_ref(), &text)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -293,8 +312,12 @@ async fn pop_out(
 
 /// A popped-out window collects its file (again, after a reload).
 #[tauri::command]
-fn collect_pop_out(core: State<'_, Core>, window: tauri::Window) -> CommandResult<PoppedOutFile> {
+async fn collect_pop_out(
+    core: State<'_, Core>,
+    window: tauri::Window,
+) -> CommandResult<PoppedOutFile> {
     core.collect_pop_out(window.label())
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -551,6 +574,8 @@ fn main() {
             document_opened,
             document_changed,
             document_closed,
+            open_documents,
+            diff_with_disk,
             show_where_open,
             pop_out,
             collect_pop_out,

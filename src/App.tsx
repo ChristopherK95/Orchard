@@ -395,6 +395,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       } else if (event.kind === "sessionCreated") {
         setSessions(event.session.id, event.session);
         setOrder((ids) => [...ids, event.session.id]);
+      } else if (
+        event.kind === "documentChangedOnDisk" ||
+        event.kind === "documentConflicted" ||
+        event.kind === "documentBackOnDisk" ||
+        event.kind === "documentsChanged"
+      ) {
+        return; // (the Manual editors' and the permission cards' business)
       } else if (!sessions[event.sessionId]) return;
       else if (event.kind === "sessionStateChanged") onStateChanged(event.sessionId, event.state);
       else if (event.kind === "permissionModeChanged") setSessions(event.sessionId, "permissionMode", event.mode);

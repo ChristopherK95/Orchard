@@ -6,6 +6,7 @@ mod app_state;
 mod auto_suspend;
 mod core;
 mod create_worktree;
+mod diff;
 mod documents;
 mod files;
 mod git;

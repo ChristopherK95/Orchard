@@ -92,6 +92,9 @@ pub(crate) enum ActorNews {
     Status,
     /// Watching failed; polling instead, and why.
     Fallback(String),
+    /// These paths (absolute, ignored ones too) may have been written to; `None`: any of them may
+    /// have (a rescan, or a poll).
+    Touched(Option<Vec<PathBuf>>),
 }
 
 pub(crate) type NewsSink = Arc<dyn Fn(&Path, ActorNews) + Send + Sync>;
@@ -224,6 +227,7 @@ impl WorktreeActor {
         };
         *actor.task.lock().expect("task lock") = Some(task);
         news(&actor.root, ActorNews::Files); // the first index is ready
+        news(&actor.root, ActorNews::Touched(None)); // (open files may have changed unwatched)
         actor
     }
 
@@ -731,7 +735,7 @@ async fn follow(
         let Some(actor) = weak.upgrade() else {
             return;
         };
-        let mut paths = vec![];
+        let mut paths: Vec<(PathBuf, bool)> = vec![];
         let mut rescan = false;
         for event in burst {
             match event {
@@ -743,7 +747,9 @@ async fn follow(
                 Err(_) => rescan = true, // (e.g. the OS's event buffer overflowed)
             }
         }
+        let touched = (!rescan).then(|| paths.iter().map(|(p, _)| p.clone()).collect());
         let applied = actor.apply(paths, rescan).await;
+        news(&actor.root, ActorNews::Touched(touched));
         if applied.files {
             news(&actor.root, ActorNews::Files);
         }
@@ -774,6 +780,7 @@ async fn poll(weak: Weak<WorktreeActor>, interval: Duration, news: NewsSink) {
             news(&actor.root, ActorNews::Files);
             news(&actor.root, ActorNews::Status);
         }
+        news(&actor.root, ActorNews::Touched(None)); // (a file's content changing moves nothing)
     }
 }
 

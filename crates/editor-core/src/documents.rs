@@ -72,6 +72,18 @@ pub(crate) fn version_of(bytes: Option<&[u8]>) -> String {
     }
 }
 
+/// The version of the file on disk now, as `read` would give it (`"missing"` when it's gone).
+/// `None` if it's there but can't be read just now (another program holding it, say).
+pub(crate) fn disk_version(path: &Path) -> Option<String> {
+    match std::fs::metadata(path) {
+        Err(_) => Some(version_of(None)),
+        Ok(meta) if meta.len() > TOO_BIG_OVER => Some(format!("size-{}", meta.len())),
+        Ok(_) => std::fs::read(path)
+            .ok()
+            .map(|bytes| version_of(Some(&bytes))),
+    }
+}
+
 pub(crate) fn read(path: &Path) -> Result<OpenedFile, String> {
     let size = std::fs::metadata(path)
         .map_err(|e| format!("couldn't open {}: {e}", path.display()))?
@@ -224,6 +236,42 @@ pub(crate) struct DocumentTracker {
     /// By the popped-out window's label.
     pop_outs: std::collections::HashMap<String, PopOut>,
     next_window: u64,
+    /// The disk version each (path, window) was last told about, so it's told once per change.
+    told: std::collections::HashMap<(PathBuf, String), String>,
+    /// Saves in progress, by path: what's on disk is the editor's own write, not a change.
+    saving: std::collections::HashMap<PathBuf, usize>,
+    /// Bumped by every open and save of a path: a disk check that began before one is stale.
+    epochs: std::collections::HashMap<PathBuf, u64>,
+    /// Disk reads begun, and the latest applied, by path: a slow read can't undo a newer one.
+    reads: std::collections::HashMap<PathBuf, u64>,
+    applied: std::collections::HashMap<PathBuf, u64>,
+}
+
+/// What to tell a window about its file on disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Notice {
+    /// It moved away from the editor's version.
+    Changed { window: String, dirty: bool },
+    /// It's back to the editor's version (an Agent undid its change, say): nothing to ask.
+    Back { window: String },
+}
+
+/// When a disk read began, for `DocumentTracker::changed_on_disk`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CheckTicket {
+    epoch: u64,
+    read: u64,
+}
+
+/// `path` is `touched`, or inside it. Case-insensitive on Windows, where the watcher may report
+/// the casing the writer used.
+fn inside(path: &Path, touched: &Path) -> bool {
+    if cfg!(windows) {
+        let lower = |p: &Path| PathBuf::from(p.to_string_lossy().to_lowercase());
+        lower(path).starts_with(lower(touched))
+    } else {
+        path.starts_with(touched)
+    }
 }
 
 impl DocumentTracker {
@@ -232,6 +280,8 @@ impl DocumentTracker {
     }
 
     pub(crate) fn opened(&mut self, path: PathBuf, window: &str, version: &str) {
+        self.bump(&path);
+        self.told.remove(&(path.clone(), window.to_owned()));
         self.docs
             .retain(|d| !(d.path == path && d.window == window));
         self.docs.push(OpenDocument {
@@ -256,14 +306,127 @@ impl DocumentTracker {
 
     /// Saved from `window` as `version` (still dirty if typed into meanwhile: `changed` says so).
     pub(crate) fn saved(&mut self, path: &Path, window: &str, version: &str) {
+        self.bump(path);
+        self.told.remove(&(path.to_owned(), window.to_owned()));
         if let Some(doc) = self.entry(path, window) {
             doc.version = version.to_owned();
         }
     }
 
+    /// A save of `path` is starting; `save_finished` must follow.
+    pub(crate) fn save_started(&mut self, path: &Path) {
+        *self.saving.entry(path.to_owned()).or_default() += 1;
+    }
+
+    pub(crate) fn save_finished(&mut self, path: &Path) {
+        self.bump(path);
+        if let Some(count) = self.saving.get_mut(path) {
+            *count -= 1;
+            if *count == 0 {
+                self.saving.remove(path);
+            }
+        }
+    }
+
+    fn bump(&mut self, path: &Path) {
+        *self.epochs.entry(path.to_owned()).or_default() += 1;
+    }
+
+    /// The open files under `worktree` among `touched` (`None`: all of them; a touched folder
+    /// covers what's inside it, as a folder renamed or deleted is reported alone), each with the
+    /// ticket to hand `changed_on_disk` once its disk version has been read.
+    pub(crate) fn checks_for(
+        &mut self,
+        worktree: &Path,
+        touched: Option<&[PathBuf]>,
+    ) -> Vec<(PathBuf, CheckTicket)> {
+        let mut paths: Vec<PathBuf> = self
+            .docs
+            .iter()
+            .map(|d| &d.path)
+            .filter(|p| p.starts_with(worktree))
+            .filter(|p| touched.is_none_or(|touched| touched.iter().any(|t| inside(p, t))))
+            .cloned()
+            .collect();
+        paths.sort();
+        paths.dedup();
+        paths
+            .into_iter()
+            .map(|p| {
+                let ticket = self.ticket(&p);
+                (p, ticket)
+            })
+            .collect()
+    }
+
+    /// A ticket for reading `path`'s disk version now (see `changed_on_disk`).
+    pub(crate) fn ticket(&mut self, path: &Path) -> CheckTicket {
+        let read = self.reads.entry(path.to_owned()).or_default();
+        *read += 1;
+        CheckTicket {
+            epoch: self.epochs.get(path).copied().unwrap_or_default(),
+            read: *read,
+        }
+    }
+
+    /// `path` is at version `disk` on disk (read under `ticket`): what to tell which windows. A
+    /// window whose editor has another version, and hasn't been told about this one, hears that
+    /// it changed; one that was told and now matches the disk again hears that it's back.
+    ///
+    /// `None` while the editor itself is saving it, or if it was opened or saved since the read
+    /// began (the read may be out of date): check again in a moment. A read overtaken by a later
+    /// one that's already been applied is dropped (`Some(vec![])`).
+    pub(crate) fn changed_on_disk(
+        &mut self,
+        path: &Path,
+        disk: &str,
+        ticket: CheckTicket,
+    ) -> Option<Vec<Notice>> {
+        if self.saving.contains_key(path)
+            || self.epochs.get(path).copied().unwrap_or_default() != ticket.epoch
+        {
+            return None;
+        }
+        let applied = self.applied.entry(path.to_owned()).or_default();
+        if ticket.read <= *applied {
+            return Some(vec![]);
+        }
+        *applied = ticket.read;
+        let mut notices = vec![];
+        for doc in self.docs.iter().filter(|d| d.path == path) {
+            let key = (doc.path.clone(), doc.window.clone());
+            let back = doc.version == disk;
+            let told = self.told.get(&key);
+            if back {
+                if told.is_some() {
+                    self.told.remove(&key);
+                    notices.push(Notice::Back {
+                        window: doc.window.clone(),
+                    });
+                }
+            } else if told.is_none_or(|told| told != disk) {
+                self.told.insert(key, disk.to_owned());
+                notices.push(Notice::Changed {
+                    window: doc.window.clone(),
+                    dirty: doc.dirty,
+                });
+            }
+        }
+        Some(notices)
+    }
+
     pub(crate) fn closed(&mut self, path: &Path, window: &str) {
         self.docs
             .retain(|d| !(d.path == path && d.window == window));
+        self.forget_told();
+    }
+
+    /// What windows were told about files they no longer have open.
+    fn forget_told(&mut self) {
+        let docs = &self.docs;
+        self.told.retain(|(path, window), _| {
+            docs.iter().any(|d| &d.path == path && &d.window == window)
+        });
     }
 
     /// The windows `path` is open in.
@@ -303,6 +466,8 @@ impl DocumentTracker {
         let pop_out = self.pop_outs.get_mut(window)?;
         pop_out.collected = true;
         let file = pop_out.file.clone();
+        self.bump(&file.path);
+        self.told.remove(&(file.path.clone(), window.to_owned()));
         if self.entry(&file.path, window).is_none() {
             self.docs.push(OpenDocument {
                 path: file.path.clone(),
@@ -359,6 +524,7 @@ impl DocumentTracker {
 
     fn window_gone(&mut self, window: &str) {
         self.docs.retain(|d| d.window != window);
+        self.forget_told();
     }
 }
 
@@ -422,6 +588,72 @@ mod tests {
         docs.collect(&window);
         assert!(docs.window_closed(&window).is_none());
         assert!(docs.all().is_empty());
+    }
+
+    #[test]
+    fn a_change_on_disk_is_told_once_per_version_and_never_during_a_save() {
+        let mut docs = DocumentTracker::default();
+        let a = Path::new("a.rs");
+        docs.opened(a.into(), "main", "v1");
+        docs.changed(a, "main", true);
+        let changed = Notice::Changed {
+            window: "main".into(),
+            dirty: true,
+        };
+        let check = |docs: &mut DocumentTracker, disk: &str| {
+            let ticket = docs.ticket(a);
+            docs.changed_on_disk(a, disk, ticket)
+        };
+
+        assert_eq!(check(&mut docs, "v1"), Some(vec![]));
+        assert_eq!(check(&mut docs, "v2"), Some(vec![changed.clone()]));
+        assert_eq!(check(&mut docs, "v2"), Some(vec![]), "told once");
+        assert_eq!(
+            check(&mut docs, "v3"),
+            Some(vec![changed]),
+            "a newer change"
+        );
+        let back = Notice::Back {
+            window: "main".into(),
+        };
+        assert_eq!(check(&mut docs, "v1"), Some(vec![back]), "undone");
+
+        // The editor's own save: check again later, both while it writes and for a read from before.
+        let ticket = docs.ticket(a);
+        docs.save_started(a);
+        assert_eq!(docs.changed_on_disk(a, "v4", ticket), None);
+        docs.saved(a, "main", "v4");
+        docs.save_finished(a);
+        assert_eq!(
+            docs.changed_on_disk(a, "v3", ticket),
+            None,
+            "a read from before the save"
+        );
+        assert_eq!(check(&mut docs, "v4"), Some(vec![]));
+
+        // A slow read applied after a newer one is dropped.
+        let slow = docs.ticket(a);
+        assert_eq!(check(&mut docs, "v6").unwrap().len(), 1);
+        assert_eq!(docs.changed_on_disk(a, "v5", slow), Some(vec![]));
+
+        // Closing forgets what it was told: reopened, the same change is news again.
+        docs.closed(a, "main");
+        docs.opened(a.into(), "main", "v4");
+        assert_eq!(check(&mut docs, "v6").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_folder_touched_covers_the_files_inside_it() {
+        let mut docs = DocumentTracker::default();
+        docs.opened("/w/src/a.rs".into(), "main", "v1");
+        docs.opened("/w/b.rs".into(), "main", "v1");
+        let touched = [PathBuf::from("/w/src")];
+        let paths: Vec<PathBuf> = docs
+            .checks_for(Path::new("/w"), Some(&touched))
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect();
+        assert_eq!(paths, [PathBuf::from("/w/src/a.rs")]);
     }
 
     #[test]
