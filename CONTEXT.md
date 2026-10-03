@@ -10,6 +10,13 @@ An agent-first source-code editor: the coding agent is the primary surface; manu
 One git repository opened in an editor window. One window holds exactly one Workspace.
 _Avoid_: Project, repo window
 
+**Workspace picker**:
+Where a Workspace is chosen: at startup, or over an open Workspace to switch the window to another. Lists the Recent Workspaces and also takes a typed path or a browsed folder. (The UI calls it "Open a repository".)
+_Avoid_: Project picker, welcome screen
+
+**Recent Workspaces**:
+The Workspaces opened in this editor before, most recently opened first. Removing one hides it from the list but keeps its saved Tabs and Recent sessions.
+
 **Worktree**:
 A git worktree belonging to the Workspace's repository. The main checkout is also a Worktree.
 _Avoid_: Checkout, branch (a Worktree has a branch; it is not one)
