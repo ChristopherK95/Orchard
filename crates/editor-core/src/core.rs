@@ -924,8 +924,94 @@ impl Core {
     }
 
     /// Opens the git repository containing `path` as the Workspace, lists its Worktrees and starts
-    /// watching for Worktrees added or removed elsewhere.
+    /// watching for Worktrees added or removed elsewhere. Another Workspace already open is closed
+    /// first, as quitting would (its Tabs come back when it's opened again); the one already open
+    /// is left as it is.
     pub async fn open_workspace(&self, path: &Path) -> Result<WorkspaceInfo, CoreError> {
+        let workspace = self.workspace_at(path).await?;
+        let open_now = self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .workspace
+            .clone();
+        match open_now {
+            Some(open) if open.root == workspace.root => return Ok(open),
+            Some(_) => self.close_workspace().await,
+            None => {}
+        }
+        let listed = worktrees::list(&workspace.root).await;
+        {
+            let mut state = self.inner.state.lock().expect("state lock");
+            state.workspace = Some(workspace.clone());
+            state.worktrees = listed;
+            state.opened = Some(unix_millis());
+        }
+        self.inner.restore(&workspace.root);
+        // (So it heads the Recent Workspaces even if no Tab is ever opened in it.)
+        self.inner.persist();
+        self.inner.watch_worktrees(&workspace.root).await;
+        self.inner.update_actors().await;
+        self.start_monitor();
+        Ok(workspace)
+    }
+
+    /// Closes the open Workspace (if any) the way quitting would: its Tabs are saved, to come back
+    /// when it's opened again; its Agents stop; its setups, watchers and Worktree actors go.
+    async fn close_workspace(&self) {
+        self.inner.persist();
+        let sessions: Vec<Arc<Session>> = {
+            let mut state = self.inner.state.lock().expect("state lock");
+            // (With no Workspace open, nothing below saves over the Tabs just saved.)
+            if state.workspace.take().is_none() {
+                return;
+            }
+            state.sessions.values().cloned().collect()
+        };
+        let mut stopping = tokio::task::JoinSet::new();
+        for session in sessions {
+            let core = self.clone();
+            stopping.spawn(async move {
+                session.wait_settled().await;
+                // A slow close only means the process lingers a while.
+                let _ = core.stop_agent(&session).await;
+                core.forget_session(&session);
+            });
+        }
+        while stopping.join_next().await.is_some() {}
+        {
+            let mut state = self.inner.state.lock().expect("state lock");
+            for (_, run) in state.setups.drain() {
+                run.stop();
+            }
+            // Session ids stay unique across Workspaces (a late event can't hit a new Tab).
+            *state = State {
+                next_session: state.next_session,
+                ..State::default()
+            };
+        }
+        self.inner.discovery.lock().expect("discovery lock").take();
+        self.inner
+            .visible_tabs
+            .lock()
+            .expect("visible tab lock")
+            .clear();
+        self.inner.actors.lock().expect("actors lock").clear(); // dropping one stops it
+        self.inner.status_due.lock().expect("status lock").clear();
+        *self
+            .inner
+            .shown_worktree
+            .lock()
+            .expect("shown worktree lock") = None;
+        *self.inner.last_fetch.lock().expect("last fetch lock") = None;
+        // (Its popped-out windows are closed by now; the main window's files go with the view.)
+        self.inner.documents().close_all();
+        self.inner.documents_changed();
+    }
+
+    /// The Workspace that opening `path` opens: the main checkout of the repository it's in.
+    async fn workspace_at(&self, path: &Path) -> Result<WorkspaceInfo, CoreError> {
         let toplevel = git::toplevel(path)
             .await
             .ok_or_else(|| CoreError::NotARepository(path.to_owned()))?;
@@ -941,25 +1027,13 @@ impl Core {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let workspace = WorkspaceInfo { root, name };
-        let listed = worktrees::list(&workspace.root).await;
-        {
-            let mut state = self.inner.state.lock().expect("state lock");
-            state.workspace = Some(workspace.clone());
-            state.worktrees = listed;
-            state.opened = Some(unix_millis());
-            // Setups belong to the previous Workspace's Worktrees.
-            for (_, run) in state.setups.drain() {
-                run.stop();
-            }
-        }
-        self.inner.restore(&workspace.root);
-        // (So it heads the Recent Workspaces even if no Tab is ever opened in it.)
-        self.inner.persist();
-        self.inner.watch_worktrees(&workspace.root).await;
-        self.inner.update_actors().await;
-        self.start_monitor();
-        Ok(workspace)
+        Ok(WorkspaceInfo { root, name })
+    }
+
+    /// The Workspace that opening `path` would open (without opening it), so the view can tell a
+    /// switch from opening the one already open.
+    pub async fn workspace_for(&self, path: &Path) -> Result<WorkspaceInfo, CoreError> {
+        self.workspace_at(path).await
     }
 
     /// The Recent Workspaces matching `query` (best first; all of them, newest first, when it's

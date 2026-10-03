@@ -1,6 +1,7 @@
 // The Workspace picker (ticket 29): one input over the Recent Workspaces, plus Browse… for the
 // native folder dialog. Typing filters the list (Ctrl+P's matching); a path opens as typed.
-// ↑/↓ move, Enter opens, Delete removes a row from the list, Ctrl+O browses.
+// ↑/↓ move, Enter opens, Delete removes a row from the list, Ctrl+O browses. At startup it fills
+// the window; over an open Workspace (ticket 30) it's an overlay that Esc closes.
 import { createEffect, createSignal, For, type JSX, onMount, Show } from "solid-js";
 import { core, type RecentWorkspace, type WorkspaceInfo } from "./core";
 import { Highlighted } from "./CommandPalette";
@@ -29,6 +30,11 @@ export function WorkspacePicker(props: {
   error?: string;
   /** Put in the input as the picker opens. */
   initialText?: string;
+  /** Opens what was picked, instead of just opening it: null if it didn't (and the picker stays,
+   *  unless it was closed). Throwing shows the error. */
+  open?: (path: string) => Promise<WorkspaceInfo | null>;
+  /** Shown over an open Workspace (its root), as an overlay. */
+  overlay?: { current: string; onCancel: () => void };
 }) {
   const [query, setQuery] = createSignal(props.initialText ?? "");
   const [rows, setRows] = createSignal<RecentWorkspace[]>([]);
@@ -45,8 +51,9 @@ export function WorkspacePicker(props: {
     const found = await core.recentWorkspaces(looksLikePath(text.trim()) ? "" : text).catch(() => []);
     if (mine !== asked) return; // (a later keystroke's answer wins)
     setRows(found);
-    // Select the first one that can be opened: with no filter, the last Workspace opened.
-    setSelected(Math.max(0, found.findIndex((w) => w.exists)));
+    // Select the first one that can be opened: with no filter, the last Workspace opened (or, over
+    // one, the one before it).
+    setSelected(Math.max(0, found.findIndex((w) => w.exists && w.root !== props.overlay?.current)));
   };
 
   const open = async (path: string) => {
@@ -54,7 +61,8 @@ export function WorkspacePicker(props: {
     setError("");
     setOpening(true);
     try {
-      props.onOpened(await core.openWorkspace(path));
+      const opened = await (props.open ?? core.openWorkspace)(path);
+      if (opened) props.onOpened(opened);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -85,8 +93,7 @@ export function WorkspacePicker(props: {
     void search(query());
   });
 
-  return (
-    <div class="startup">
+  const card = (
       <div class="startup-card">
         {props.header}
         <h1>Open a repository</h1>
@@ -115,6 +122,9 @@ export function WorkspacePicker(props: {
                   const path = typedPath();
                   if (path) void open(path);
                   else pick(rows()[selected()]);
+                } else if (e.key === "Escape" && props.overlay) {
+                  e.preventDefault();
+                  props.overlay.onCancel();
                 } else if (e.key === "o" && e.ctrlKey && !e.shiftKey && !e.altKey) {
                   e.preventDefault();
                   void browse();
@@ -170,6 +180,9 @@ export function WorkspacePicker(props: {
                       <Highlighted text={row.root} indices={row.indices} />
                       <span class="end">
                         <Show when={row.exists} fallback={<span class="not-found">Not found</span>}>
+                          <Show when={row.root === props.overlay?.current}>
+                            <span class="current">Open now</span>
+                          </Show>
                           <Show when={row.sessions}>
                             <span>{row.sessions === 1 ? "1 session" : `${row.sessions} sessions`}</span>
                           </Show>
@@ -200,8 +213,23 @@ export function WorkspacePicker(props: {
         </Show>
         <p class="muted small picker-keys">
           <kbd>↑</kbd> <kbd>↓</kbd> select · <kbd>Enter</kbd> open · <kbd>Del</kbd> remove from list · <kbd>Ctrl+O</kbd> browse
+          <Show when={props.overlay}>
+            {" "}
+            · <kbd>Esc</kbd> cancel
+          </Show>
         </p>
       </div>
-    </div>
+  );
+
+  return (
+    <Show when={props.overlay} fallback={<div class="startup">{card}</div>}>
+      {(overlay) => (
+        <div class="modal-backdrop" onClick={(e) => e.target === e.currentTarget && overlay().onCancel()}>
+          <div class="modal picker-modal" role="dialog" aria-label="Open a repository">
+            {card}
+          </div>
+        </div>
+      )}
+    </Show>
   );
 }

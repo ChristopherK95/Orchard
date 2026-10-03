@@ -51,21 +51,48 @@ fn default_workspace_path() -> Option<String> {
         .or_else(|| std::env::var("AGENT_EDITOR_WORKSPACE").ok())
 }
 
-/// Opens the repository containing `path`; a leading `~` is the home folder.
+/// A typed path, with a leading `~` as the home folder.
+fn typed_path(app: &AppHandle, path: String) -> PathBuf {
+    match (path.strip_prefix('~'), app.path().home_dir().ok()) {
+        (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with(['/', '\\']) => {
+            home.join(rest.trim_start_matches(['/', '\\']))
+        }
+        _ => PathBuf::from(path),
+    }
+}
+
+/// Opens the repository containing `path` (closing another Workspace open in the window).
 #[tauri::command]
 async fn open_workspace(
     app: AppHandle,
     core: State<'_, Core>,
     path: String,
 ) -> CommandResult<WorkspaceInfo> {
-    let home = app.path().home_dir().ok();
-    let path = match (path.strip_prefix('~'), home) {
-        (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with(['/', '\\']) => {
-            home.join(rest.trim_start_matches(['/', '\\']))
+    core.open_workspace(&typed_path(&app, path))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The Workspace opening `path` would open, without opening it.
+#[tauri::command]
+async fn workspace_for(
+    app: AppHandle,
+    core: State<'_, Core>,
+    path: String,
+) -> CommandResult<WorkspaceInfo> {
+    core.workspace_for(&typed_path(&app, path))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Closes every popped-out Manual editor window, unsaved changes or not (the caller asked).
+#[tauri::command]
+fn close_pop_outs(app: AppHandle) {
+    for (label, window) in app.webview_windows() {
+        if label.starts_with("editor-") {
+            let _ = window.destroy();
         }
-        _ => PathBuf::from(path),
-    };
-    core.open_workspace(&path).await.map_err(|e| e.to_string())
+    }
 }
 
 /// The Workspace picker's list: the Recent Workspaces matching `query`.
@@ -830,6 +857,8 @@ fn main() {
             prerequisites,
             default_workspace_path,
             open_workspace,
+            workspace_for,
+            close_pop_outs,
             recent_workspaces,
             remove_recent_workspace,
             pick_folder,

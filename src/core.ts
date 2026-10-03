@@ -414,6 +414,10 @@ export const core = {
   defaultWorkspacePath: () => invoke<string | null>("default_workspace_path"),
   /** Opens the repository containing `path` (a leading `~` is the home folder). */
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
+  /** The Workspace opening `path` would open, without opening it. */
+  workspaceFor: (path: string) => invoke<WorkspaceInfo>("workspace_for", { path }),
+  /** Closes every popped-out Manual editor window, unsaved changes or not. */
+  closePopOuts: () => invoke<void>("close_pop_outs"),
   /** The Workspace picker's list: the Recent Workspaces matching `query` (all, newest first, if empty). */
   recentWorkspaces: (query: string) => invoke<RecentWorkspace[]>("recent_workspaces", { query }),
   /** Takes a Workspace off the Recent Workspaces; its saved Tabs stay. */

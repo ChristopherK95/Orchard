@@ -4,13 +4,14 @@ import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "s
 import { core, type FileMatch } from "./core";
 import { FileIcon, GitBranch, Search, Sparkles } from "./icons";
 
-export type PaletteCommand = { kind: "newSessionHere" } | { kind: "newSessionInFreshWorktree" };
+export type PaletteCommand = { kind: "newSessionHere" } | { kind: "newSessionInFreshWorktree" } | { kind: "switchWorkspace" };
 
 type Item = { kind: "command"; command: PaletteCommand; label: string } | { kind: "file"; file: FileMatch };
 
 const COMMANDS: { command: PaletteCommand; label: string }[] = [
   { command: { kind: "newSessionInFreshWorktree" }, label: "New Agent session in a fresh worktree" },
   { command: { kind: "newSessionHere" }, label: "New Agent session in this worktree" },
+  { command: { kind: "switchWorkspace" }, label: "Switch repository… (Ctrl+Shift+O)" },
 ];
 
 /** How many files are shown. */

@@ -291,6 +291,14 @@ impl DocumentTracker {
         self.docs.clone()
     }
 
+    /// Nothing is open any more, in any window (the Workspace closed). Window labels and the
+    /// guards against stale disk reads carry on.
+    pub(crate) fn close_all(&mut self) {
+        self.docs.clear();
+        self.pop_outs.clear();
+        self.told.clear();
+    }
+
     pub(crate) fn opened(&mut self, path: PathBuf, window: &str, version: &str) {
         self.bump(&path);
         self.told.remove(&(path.clone(), window.to_owned()));

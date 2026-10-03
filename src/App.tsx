@@ -6,6 +6,7 @@ import {
   core,
   type LoadedSettings,
   type MissingPrerequisite,
+  type OpenDocument,
   type AutoSuspendReason,
   type RecentSession,
   type SessionId,
@@ -47,6 +48,7 @@ export function App() {
   return (
     <Show
       when={workspace()}
+      keyed
       fallback={
         // Before a Workspace is open, a bare title bar (the window has no native one).
         <div class="startup-window">
@@ -69,7 +71,8 @@ export function App() {
         </div>
       }
     >
-      {(w) => <WorkspaceView workspace={w()} />}
+      {/* (Keyed: switching Workspace builds a fresh view, so nothing of the old one stays.) */}
+      {(w) => <WorkspaceView workspace={w} onSwitched={setWorkspace} />}
     </Show>
   );
 }
@@ -126,7 +129,7 @@ function OpenWorkspace(props: { onOpened: (w: WorkspaceInfo) => void }) {
   );
 }
 
-function WorkspaceView(props: { workspace: WorkspaceInfo }) {
+function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: WorkspaceInfo) => void }) {
   // Sessions as the core reports them; one of them is the Tabs view's visible Tab.
   const [sessions, setSessions] = createStore<Record<SessionId, SessionInfo>>({});
   const [order, setOrder] = createSignal<SessionId[]>([]);
@@ -273,7 +276,41 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
   };
   const openWorktreeFile = (rel: string, root = activeWorktree()) => openInEditor({ kind: "file", path: worktreePath(rel, root) });
   const runCommand = (command: PaletteCommand) =>
-    command.kind === "newSessionHere" ? void newSession() : setCreatingWorktree(true);
+    command.kind === "newSessionHere" ? void newSession() : command.kind === "switchWorkspace" ? setSwitching(true) : setCreatingWorktree(true);
+
+  /** The Workspace picker is open over this Workspace (ticket 30). */
+  const [switching, setSwitching] = createSignal(false);
+  /** Leaving this Workspace waits on the user: sessions mid-turn, or unsaved files. */
+  const [leaving, setLeaving] = createSignal<{
+    busy: string[];
+    unsaved: OpenDocument[];
+    answer: (go: "save" | "discard" | null) => void;
+  } | null>(null);
+  let editorControls: { saveAll: () => Promise<boolean> } | undefined;
+  /** Asks (if anything would be lost) whether to leave this Workspace; saves first if told to. */
+  const mayLeave = async () => {
+    const busy = order()
+      .map((id) => sessions[id])
+      .filter((s) => s && (s.state === "working" || s.state === "needsYou"))
+      .map((s) => s.name);
+    const unsaved = (await core.openDocuments().catch(() => [])).filter((d) => d.dirty);
+    if (!busy.length && !unsaved.length) return true;
+    const go = await new Promise<"save" | "discard" | null>((answer) => setLeaving({ busy, unsaved, answer }));
+    setLeaving(null);
+    if (go === "save") return (await editorControls?.saveAll()) ?? true; // (a refused save says why in its banner)
+    return go === "discard";
+  };
+  /** The picker's open: the one already open just closes it; another is switched to, if allowed. */
+  const switchTo = async (path: string) => {
+    const target = await core.workspaceFor(path);
+    if (target.root === props.workspace.root) {
+      setSwitching(false);
+      return null;
+    }
+    if (!(await mayLeave())) return null;
+    await core.closePopOuts();
+    return core.openWorkspace(target.root);
+  };
   /** The Worktree whose removal dialog is open. */
   const [removing, setRemoving] = createSignal<WorktreeTab | null>(null);
   /** Worktree setups this editor started, by Worktree path; shown until the first session opens. */
@@ -485,10 +522,15 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       // (Ctrl+P is never the browser's print, even with a dialog open.)
       if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
-        if (!removing() && !creatingWorktree()) setPaletteOpen(true);
+        if (!removing() && !creatingWorktree() && !switching()) setPaletteOpen(true);
         return;
       }
-      if (removing() || creatingWorktree() || paletteOpen()) return; // a dialog is open over the Tab
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "o") {
+        e.preventDefault();
+        if (!removing() && !creatingWorktree() && !paletteOpen()) setSwitching(true);
+        return;
+      }
+      if (removing() || creatingWorktree() || paletteOpen() || switching()) return; // a dialog is open over the Tab
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
         return void toggleDrawer("files");
@@ -601,9 +643,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     <div class="workspace" classList={{ "board-open": view() === "board" }}>
       {/* The window's title bar (no native one): drag it by any bare part; double-click maximises. */}
       <header class="titlebar" ref={titlebar} data-tauri-drag-region>
-        <span class="name" data-tauri-drag-region>
+        <button class="name switch-workspace" onClick={() => setSwitching(true)} title="Switch repository (Ctrl+Shift+O)">
           {props.workspace.name}
-        </span>
+          <ChevronDown />
+        </button>
         <span class="path" title={props.workspace.root} data-tauri-drag-region>
           {props.workspace.root}
         </span>
@@ -838,6 +881,58 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         onResume={(s) => core.resumeSession(s.id).catch((err) => setError(String(err)))}
       />
       </Show>
+      <Show when={switching()}>
+        <WorkspacePicker
+          overlay={{ current: props.workspace.root, onCancel: () => setSwitching(false) }}
+          open={switchTo}
+          onOpened={props.onSwitched}
+        />
+      </Show>
+      <Show when={leaving()}>
+        {(leave) => (
+          <div class="modal-backdrop leave-workspace" onClick={(e) => e.target === e.currentTarget && leave().answer(null)}>
+            <div class="modal" role="dialog" aria-label="Switch repository">
+              <div class="modal-head">
+                <b>Switch repository?</b>
+              </div>
+              <div class="modal-body">
+                <Show when={leave().busy.length}>
+                  <p>
+                    {leave().busy.length === 1 ? "1 Agent session is working" : `${leave().busy.length} Agent sessions are working`} ({leave().busy.join(", ")}).
+                    Switching stops them; they can be resumed when you come back.
+                  </p>
+                </Show>
+                <Show when={leave().unsaved.length}>
+                  <p>
+                    Unsaved changes in <span class="mono">{leave().unsaved.map((d) => d.path.split(/[\\/]/).pop()).join(", ")}</span>
+                    <Show when={leave().unsaved.some((d) => d.window !== "main")}> (some are in popped-out windows: save them there first, or they're discarded)</Show>.
+                  </p>
+                </Show>
+              </div>
+              <div class="modal-foot">
+                <button class="ghost" onClick={() => leave().answer(null)}>
+                  Cancel
+                </button>
+                <Show
+                  when={leave().unsaved.length}
+                  fallback={
+                    <button class="primary" onClick={() => leave().answer("discard")}>
+                      Switch
+                    </button>
+                  }
+                >
+                  <button onClick={() => leave().answer("discard")}>Discard and switch</button>
+                  <Show when={leave().unsaved.every((d) => d.window === "main")}>
+                    <button class="primary" onClick={() => leave().answer("save")}>
+                      Save and switch
+                    </button>
+                  </Show>
+                </Show>
+              </div>
+            </div>
+          </div>
+        )}
+      </Show>
       <Show when={paletteOpen()}>
         <CommandPalette
           worktree={activeWorktree()}
@@ -977,6 +1072,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       <Show when={editorOpen()}>
         <ManualEditor
           requests={editorRequests()}
+          controls={(c) => (editorControls = c)}
           vim={settings()?.settings.editor?.vim ?? false}
           onEmpty={() => setEditorOpen(false)}
           onError={setError}
