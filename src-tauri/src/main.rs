@@ -8,8 +8,8 @@ use editor_core::{
     check_prerequisites, AdapterCommand, BranchList, Core, CoreConfig, CoreError, CreatedWorktree,
     DirEntry, FileMatch, LoadedSettings, MissingPrerequisite, NewWorktree, OpenedFile,
     PermissionMode, PoppedOutFile, RecentSession, RecentWorkspace, RemovalCheck, RemoveWorktree,
-    RemovedWorktree, SaveOver, SessionId, SessionInfo, SetupInfo, SlashCommand, Tools,
-    TranscriptDelta, TranscriptPage, WorkspaceInfo, WorktreeInfo,
+    RemovedWorktree, RepoSettings, SaveOver, SessionId, SessionInfo, SettingChange, SetupInfo,
+    SlashCommand, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo, WorktreeInfo,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -192,6 +192,21 @@ async fn open_repo_settings(core: State<'_, Core>) -> CommandResult<String> {
         .await
         .map(|path| path.display().to_string())
         .map_err(|e| e.to_string())
+}
+
+/// The settings page's view of the open repo's settings.
+#[tauri::command]
+async fn repo_settings(core: State<'_, Core>) -> CommandResult<RepoSettings> {
+    core.repo_settings().await.map_err(|e| e.to_string())
+}
+
+/// One change from the settings page, written to the settings file.
+#[tauri::command]
+async fn change_setting(
+    core: State<'_, Core>,
+    change: SettingChange,
+) -> CommandResult<LoadedSettings> {
+    core.change_setting(change).await.map_err(|e| e.to_string())
 }
 
 /// Opens a file for the Manual editor.
@@ -874,6 +889,8 @@ fn main() {
             default_start_point,
             settings,
             open_repo_settings,
+            repo_settings,
+            change_setting,
             read_file,
             document_opened,
             document_changed,

@@ -181,6 +181,36 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .titlebar .switch-workspace:hover { background: var(--bg-3); }
 .titlebar .switch-workspace .lucide { width: 12px; height: 12px; color: var(--fg-3); }
 .leave-workspace .modal-body p { margin: 0; font-size: 13px; line-height: 1.5; }
+/* The settings page (ticket 31). */
+.settings-page { width: min(860px, 100%); height: min(640px, 100%); }
+.settings-main { flex: 1; min-height: 0; display: flex; border-top: 1px solid var(--line); }
+.settings-nav { flex: none; width: 190px; display: flex; flex-direction: column; padding: 4px 8px 12px; border-right: 1px solid var(--line); overflow: auto; }
+.settings-nav .palette-group { padding-left: 8px; }
+.settings-nav-item { justify-content: flex-start; min-height: 28px; padding: 0 8px; border: 0; background: transparent; color: var(--fg-2); font-weight: 400; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-nav-item:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-1); }
+.settings-nav-item.on { background: var(--bg-3); color: var(--fg-1); font-weight: 600; box-shadow: inset 2px 0 0 var(--accent); }
+.settings-content { flex: 1; min-width: 0; overflow: auto; padding: 14px 20px 20px; display: flex; flex-direction: column; gap: 12px; }
+.settings-content h2 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+.settings-fields { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.settings-fields:disabled { opacity: 0.6; }
+.settings-row { display: flex; align-items: center; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.settings-row.block { flex-direction: column; align-items: stretch; gap: 10px; }
+.settings-row.indent { padding-left: 24px; }
+.settings-row.toggle { justify-content: flex-start; gap: 10px; cursor: pointer; }
+.settings-row.toggle input { margin-top: 2px; align-self: flex-start; }
+.settings-label { flex: 1; min-width: 0; font-size: 13px; color: var(--fg-1); }
+.settings-label .hint { margin-top: 2px; font-size: 12px; color: var(--fg-3); line-height: 1.45; }
+.settings-control { flex: none; }
+.settings-number { display: inline-flex; align-items: center; gap: 8px; }
+.settings-number input { width: 96px; }
+.settings-commands { display: flex; flex-direction: column; gap: 6px; }
+.settings-command { display: flex; align-items: center; gap: 4px; }
+.settings-command input { flex: 1; min-width: 0; }
+.settings-commands .add-command { align-self: flex-start; }
+.settings-broken { display: flex; gap: 10px; padding: 10px 12px; border: 1px solid var(--danger); border-radius: var(--r-md); background: var(--bg-3); }
+.settings-broken > .lucide { flex: none; color: var(--danger); }
+.settings-broken p { margin: 0 0 6px; font-size: 13px; }
+.settings-broken .mono { overflow-wrap: anywhere; }
 
 .workspace { height: 100%; display: flex; flex-direction: column; position: relative; }
 

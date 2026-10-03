@@ -19,6 +19,8 @@ toml = "1"
 sysinfo = { version = "0.37", default-features = false, features = ["system"] }
 # Ctrl+P's typo-resistant fuzzy matching (ticket 13).
 frizbee = "0.13"
+# The settings page edits the settings file keeping its comments and layout (ticket 31).
+toml_edit = "0.25"
 
 # Stopping a setup command together with everything it started (ticket 09): a Job object on
 # Windows, a process group on Linux.

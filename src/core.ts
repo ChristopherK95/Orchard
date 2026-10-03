@@ -203,6 +203,30 @@ export interface Settings {
   agents: { memoryLimitMb: number; idleSuspend: boolean; idleSuspendMinutes: number };
 }
 
+export type WindowsShell = "powershell" | "git-bash";
+
+/** One repo's section of the settings file. */
+export interface RepoSettings {
+  /** Worktree setup commands, run in order in each new Worktree. */
+  setup: string[];
+  /** Replaces `setup` on Windows / Linux, when set. */
+  setupWindows: string[] | null;
+  setupLinux: string[] | null;
+  windowsShell: WindowsShell;
+}
+
+/** One change the settings page makes (repo ones are to the open repo's section). */
+export type SettingChange =
+  | { kind: "vim"; on: boolean }
+  | { kind: "turnFinished"; on: boolean }
+  | { kind: "memoryLimitMb"; mb: number }
+  | { kind: "idleSuspend"; on: boolean }
+  | { kind: "idleSuspendMinutes"; minutes: number }
+  | { kind: "setup"; commands: string[] }
+  | { kind: "setupWindows"; commands: string[] | null }
+  | { kind: "setupLinux"; commands: string[] | null }
+  | { kind: "windowsShell"; shell: WindowsShell };
+
 export interface LoadedSettings {
   settings: Settings;
   /** Why the settings file was rejected; the settings above are the last good ones. */
@@ -456,6 +480,10 @@ export const core = {
   settings: () => invoke<LoadedSettings>("settings"),
   /** Adds this repo's section to the settings file if need be; the file's path, to edit. */
   openRepoSettings: () => invoke<string>("open_repo_settings"),
+  /** The open repo's settings (its defaults if the file has no section for it). */
+  repoSettings: () => invoke<RepoSettings>("repo_settings"),
+  /** Writes one change from the settings page to the settings file; the settings now in force. */
+  changeSetting: (change: SettingChange) => invoke<LoadedSettings>("change_setting", { change }),
   /** Tells the core this window's Manual editor opened, changed or closed a file. */
   documentOpened: (path: string, version: string) => invoke<void>("document_opened", { path, version }),
   documentChanged: (path: string, dirty: boolean) => invoke<void>("document_changed", { path, dirty }),

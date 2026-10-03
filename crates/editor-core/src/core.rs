@@ -34,7 +34,7 @@ use crate::session::{
     PermissionMode, PermissionOutcome, SessionId, SessionInfo, SessionState, Transcript,
     TranscriptDelta, TranscriptItem, TranscriptPage,
 };
-use crate::settings::{self, LoadedSettings, WindowsShell};
+use crate::settings::{self, LoadedSettings, RepoSettings, SettingChange, WindowsShell};
 use crate::setup::{self, SetupInfo, SetupStatus};
 use crate::worktrees::{self, Discovery, WorktreeInfo};
 
@@ -258,6 +258,8 @@ pub enum CoreError {
     UnknownRecentSession,
     #[error("couldn't save the Recent Workspaces: {0}")]
     StateNotSaved(String),
+    #[error("the settings file has an error; fix it in the file first")]
+    SettingsInvalid,
     #[error("the Agent session isn't waiting for a permission answer")]
     NoPendingPermission,
     #[error("`{0}` isn't one of the options the Agent offered")]
@@ -752,6 +754,71 @@ impl Core {
 
     /// Makes sure the settings file has a section for this repo (adding a template keyed by its
     /// `origin` URL, else its path) and returns the file's path, for the user to edit.
+    /// The open repo's settings (its defaults if the file has no section for it).
+    pub async fn repo_settings(&self) -> Result<RepoSettings, CoreError> {
+        let workspace = self.workspace()?;
+        let origin = git::origin_url(&workspace.root).await;
+        let loaded = self.inner.settings.lock().expect("settings lock");
+        Ok(loaded
+            .settings
+            .repo(origin.as_deref(), &workspace.root)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    /// Makes one change from the settings page in the settings file, keeping its comments and
+    /// layout, and returns the settings now in force. A repo change goes in the open Workspace's
+    /// section (added if there's none, as "Repo settings" adds it). Refused while the file doesn't
+    /// parse, so nothing is written over it.
+    pub async fn change_setting(&self, change: SettingChange) -> Result<LoadedSettings, CoreError> {
+        let path = self
+            .inner
+            .config
+            .settings_path
+            .clone()
+            .ok_or(CoreError::NoSettingsFile)?;
+        let repo = match change.is_repo() {
+            true => {
+                let workspace = self.workspace()?;
+                Some((git::origin_url(&workspace.root).await, workspace))
+            }
+            false => None,
+        };
+        let _one_at_a_time = self.inner.settings_write.lock().await;
+        // Read it now: a change saved a moment ago may not have been reloaded yet.
+        self.inner.reload_settings();
+        let key = {
+            let loaded = self.inner.settings.lock().expect("settings lock");
+            if loaded.error.is_some() {
+                return Err(CoreError::SettingsInvalid);
+            }
+            repo.as_ref().map(|(origin, workspace)| {
+                match loaded
+                    .settings
+                    .repo_entry(origin.as_deref(), &workspace.root)
+                {
+                    Some((key, _)) => Ok(key.clone()),
+                    None => Err(origin
+                        .clone()
+                        .unwrap_or_else(|| workspace.root.display().to_string())),
+                }
+            })
+        };
+        let key = match (key, &repo) {
+            (Some(Ok(key)), _) => Some(key),
+            // No section yet: added the way "Repo settings" adds one, comments and all.
+            (Some(Err(key)), Some((_, workspace))) => {
+                settings::add_repo_section(&path, &key, &workspace.name)
+                    .map_err(|e| CoreError::SettingsWrite(e.to_string()))?;
+                Some(key)
+            }
+            _ => None,
+        };
+        settings::change(&path, key.as_deref(), &change).map_err(CoreError::SettingsWrite)?;
+        self.inner.reload_settings();
+        Ok(self.inner.settings.lock().expect("settings lock").clone())
+    }
+
     pub async fn open_repo_settings(&self) -> Result<PathBuf, CoreError> {
         let path = self
             .inner

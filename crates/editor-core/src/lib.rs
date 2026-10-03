@@ -43,8 +43,8 @@ pub use crate::session::{
     TranscriptDelta, TranscriptItem, TranscriptPage, TRANSCRIPT_PAGE,
 };
 pub use crate::settings::{
-    AgentSettings, EditorSettings, LoadedSettings, Notifications, RepoSettings, Settings,
-    WindowsShell,
+    AgentSettings, EditorSettings, LoadedSettings, Notifications, RepoSettings, SettingChange,
+    Settings, WindowsShell,
 };
 pub use crate::setup::{SetupInfo, SetupStatus};
 pub use crate::worktrees::WorktreeInfo;

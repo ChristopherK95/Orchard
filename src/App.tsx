@@ -37,6 +37,7 @@ import { Columns, COLUMNS_MIN_WIDTH } from "./Columns";
 import { createTabView, type TabView } from "./TabView";
 import { BareTitlebar, WindowControls } from "./WindowControls";
 import { WorkspacePicker } from "./WorkspacePicker";
+import { SettingsPage, type SettingsSection } from "./SettingsPage";
 import { ChevronDown, GitBranch, Loader, PanelRight, Plus, Search, Settings, Sparkles, X } from "./icons";
 
 export function App() {
@@ -263,6 +264,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     setEditorOpen(true);
     setEditorRequests((all) => [...all.slice(-20), { open, n: ++requested }]);
   };
+  /** The settings page (ticket 31), open at a section. */
+  const [settingsAt, setSettingsAt] = createSignal<SettingsSection | null>(null);
+  const openSettingsPage = (section: SettingsSection = "general") => setSettingsAt(section);
   /** The settings file, with a section for this repo, in the Manual editor. */
   const openRepoSettings = () =>
     core
@@ -534,15 +538,20 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       // (Ctrl+P is never the browser's print, even with a dialog open.)
       if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
-        if (!removing() && !creatingWorktree() && !switching()) setPaletteOpen(true);
+        if (!removing() && !creatingWorktree() && !switching() && !settingsAt()) setPaletteOpen(true);
         return;
       }
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "o") {
         e.preventDefault();
-        if (!removing() && !creatingWorktree() && !paletteOpen()) setSwitching(true);
+        if (!removing() && !creatingWorktree() && !paletteOpen() && !settingsAt()) setSwitching(true);
         return;
       }
-      if (removing() || creatingWorktree() || paletteOpen() || switching()) return; // a dialog is open over the Tab
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ",") {
+        e.preventDefault();
+        if (!removing() && !creatingWorktree() && !paletteOpen() && !switching()) openSettingsPage();
+        return;
+      }
+      if (removing() || creatingWorktree() || paletteOpen() || switching() || settingsAt()) return; // a dialog is open over the Tab
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
         return void toggleDrawer("files");
@@ -749,7 +758,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         >
           <PanelRight />
         </button>
-        <button class="ghost icon" onClick={openRepoSettings} title="Settings for this repo, e.g. its Worktree setup commands" aria-label="Repo settings">
+        <button class="ghost icon" onClick={() => openSettingsPage()} title="Settings (Ctrl+,)" aria-label="Settings">
           <Settings />
         </button>
         <WindowControls />
@@ -894,6 +903,20 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         onResume={(s) => core.resumeSession(s.id).catch((err) => setError(String(err)))}
       />
       </Show>
+      <Show when={settingsAt()}>
+        {(section) => (
+          <SettingsPage
+            settings={settings()}
+            repoName={props.workspace.name}
+            section={section()}
+            onOpenFile={() => {
+              setSettingsAt(null);
+              void openRepoSettings();
+            }}
+            onClose={() => setSettingsAt(null)}
+          />
+        )}
+      </Show>
       <Show when={switching()}>
         <WorkspacePicker
           overlay={{ current: props.workspace.root, onCancel: () => setSwitching(false) }}
@@ -1032,7 +1055,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onSuspend={(s) => core.suspendSession(s.id).catch((err) => setError(String(err)))}
           onResume={(s) => core.resumeSession(s.id).catch((err) => setError(String(err)))}
           onRemove={setRemoving}
-          onOpenSettings={openRepoSettings}
+          onOpenSettings={() => openSettingsPage("repo")}
           onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })}
           onError={setError}
         />
@@ -1061,7 +1084,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
               </div>
             }
           >
-            {(setup) => <Setup worktree={activeWorktree()} setup={setup()} onError={setError} onOpenSettings={openRepoSettings} />}
+            {(setup) => <Setup worktree={activeWorktree()} setup={setup()} onError={setError} onOpenSettings={() => openSettingsPage("repo")} />}
           </Show>
         }
       >

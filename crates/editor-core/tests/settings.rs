@@ -110,3 +110,65 @@ async fn open_repo_settings_adds_a_section_for_this_repo_once() {
         "not added twice"
     );
 }
+
+// Ticket 31: the settings page's changes.
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_settings_page_changes_the_file_and_the_settings_in_force() {
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let core = core_with_settings(&fake, "# mine\n[editor]\nvim = false\n");
+
+    let loaded = core
+        .change_setting(editor_core::SettingChange::Vim { on: true })
+        .await
+        .unwrap();
+    assert!(loaded.settings.editor.vim);
+    assert!(core.settings().settings.editor.vim);
+    let text = std::fs::read_to_string(fake.settings_path()).unwrap();
+    assert!(text.starts_with("# mine\n[editor]\nvim = true"), "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_repo_change_adds_the_open_repos_section_and_shows_in_its_settings() {
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let repo = git_repo();
+    let core = core_with_settings(&fake, "");
+    core.open_workspace(repo.path()).await.unwrap();
+    assert!(core.repo_settings().await.unwrap().setup.is_empty());
+
+    core.change_setting(editor_core::SettingChange::Setup {
+        commands: vec!["pnpm install".into()],
+    })
+    .await
+    .unwrap();
+    assert_eq!(core.repo_settings().await.unwrap().setup, ["pnpm install"]);
+    core.change_setting(editor_core::SettingChange::WindowsShell {
+        shell: editor_core::WindowsShell::GitBash,
+    })
+    .await
+    .unwrap();
+    let text = std::fs::read_to_string(fake.settings_path()).unwrap();
+    assert_eq!(text.matches("[repos.").count(), 1, "one section: {text}");
+    assert_eq!(
+        core.repo_settings().await.unwrap().windows_shell,
+        editor_core::WindowsShell::GitBash
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_settings_page_writes_nothing_over_a_file_that_doesnt_parse() {
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let core = core_with_settings(&fake, "[editor\nvim = ");
+
+    let refused = core
+        .change_setting(editor_core::SettingChange::Vim { on: true })
+        .await;
+    assert!(matches!(
+        refused,
+        Err(editor_core::CoreError::SettingsInvalid)
+    ));
+    assert_eq!(
+        std::fs::read_to_string(fake.settings_path()).unwrap(),
+        "[editor\nvim = "
+    );
+}

@@ -97,19 +97,160 @@ impl RepoSettings {
 impl Settings {
     /// The settings for a repo: the section keyed by its `origin` URL, else by its main checkout.
     pub fn repo(&self, origin: Option<&str>, root: &Path) -> Option<&RepoSettings> {
-        let by_origin = origin.and_then(|origin| {
-            self.repos
-                .iter()
-                .find(|(key, _)| same_url(key, origin))
-                .map(|(_, repo)| repo)
-        });
-        by_origin.or_else(|| {
-            self.repos
-                .iter()
-                .find(|(key, _)| same_path(key, root))
-                .map(|(_, repo)| repo)
-        })
+        self.repo_entry(origin, root).map(|(_, repo)| repo)
     }
+
+    /// The repo's section (`repo`), with the key it's under in the file.
+    pub(crate) fn repo_entry(
+        &self,
+        origin: Option<&str>,
+        root: &Path,
+    ) -> Option<(&String, &RepoSettings)> {
+        let by_origin =
+            origin.and_then(|origin| self.repos.iter().find(|(key, _)| same_url(key, origin)));
+        by_origin.or_else(|| self.repos.iter().find(|(key, _)| same_path(key, root)))
+    }
+}
+
+/// One change the settings page makes. Repo changes are to the open Workspace's section.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SettingChange {
+    Vim {
+        on: bool,
+    },
+    TurnFinished {
+        on: bool,
+    },
+    MemoryLimitMb {
+        mb: u64,
+    },
+    IdleSuspend {
+        on: bool,
+    },
+    IdleSuspendMinutes {
+        minutes: u64,
+    },
+    Setup {
+        commands: Vec<String>,
+    },
+    /// `None` takes the Windows override away (`setup` applies there again).
+    SetupWindows {
+        commands: Option<Vec<String>>,
+    },
+    SetupLinux {
+        commands: Option<Vec<String>>,
+    },
+    WindowsShell {
+        shell: WindowsShell,
+    },
+}
+
+impl SettingChange {
+    pub(crate) fn is_repo(&self) -> bool {
+        matches!(
+            self,
+            Self::Setup { .. }
+                | Self::SetupWindows { .. }
+                | Self::SetupLinux { .. }
+                | Self::WindowsShell { .. }
+        )
+    }
+
+    /// The table it's in (`repo`: the repo's key) and the key it sets; `None` removes the key.
+    fn target(&self, repo: Option<&str>) -> (Vec<String>, &'static str, Option<toml_edit::Item>) {
+        use toml_edit::value;
+        let list = |commands: &[String]| value(commands.iter().collect::<toml_edit::Array>());
+        let app = |table: &str| vec![table.to_owned()];
+        let repo = || vec!["repos".to_owned(), repo.unwrap_or_default().to_owned()];
+        match self {
+            Self::Vim { on } => (app("editor"), "vim", Some(value(*on))),
+            Self::TurnFinished { on } => (app("notifications"), "turn_finished", Some(value(*on))),
+            Self::MemoryLimitMb { mb } => {
+                (app("agents"), "memory_limit_mb", Some(value(*mb as i64)))
+            }
+            Self::IdleSuspend { on } => (app("agents"), "idle_suspend", Some(value(*on))),
+            Self::IdleSuspendMinutes { minutes } => (
+                app("agents"),
+                "idle_suspend_minutes",
+                Some(value(*minutes as i64)),
+            ),
+            Self::Setup { commands } => (repo(), "setup", Some(list(commands))),
+            Self::SetupWindows { commands } => {
+                (repo(), "setup_windows", commands.as_deref().map(list))
+            }
+            Self::SetupLinux { commands } => (repo(), "setup_linux", commands.as_deref().map(list)),
+            Self::WindowsShell { shell } => (
+                repo(),
+                "windows_shell",
+                Some(value(match shell {
+                    WindowsShell::Powershell => "powershell",
+                    WindowsShell::GitBash => "git-bash",
+                })),
+            ),
+        }
+    }
+}
+
+/// Makes `change` in the file (creating it if need be), keeping its comments and layout. Refused,
+/// and nothing written, if the file doesn't parse or the change wouldn't leave valid settings.
+/// `repo` is the key of the repo's section, for repo changes.
+pub(crate) fn change(
+    path: &Path,
+    repo: Option<&str>,
+    change: &SettingChange,
+) -> Result<(), String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => FILE_HEADER.to_owned(),
+        Err(err) => return Err(format!("couldn't read {}: {err}", path.display())),
+    };
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|err| format!("{} isn't valid: {err}", path.display()))?;
+    let (tables, key, item) = change.target(repo);
+    let mut table: &mut dyn toml_edit::TableLike = doc.as_table_mut();
+    for (depth, name) in tables.iter().enumerate() {
+        if table.get(name).is_none() {
+            let mut new = toml_edit::Table::new();
+            // (`[repos."…"]` alone, with no bare `[repos]` header above it.)
+            new.set_implicit(depth + 1 < tables.len());
+            table.insert(name, toml_edit::Item::Table(new));
+        }
+        table = table
+            .get_mut(name)
+            .and_then(|item| item.as_table_like_mut())
+            .ok_or_else(|| format!("`{name}` in {} isn't a table", path.display()))?;
+    }
+    match item {
+        // (Kept where it is, with its comments, if it's there already.)
+        Some(item) => match table.get_mut(key) {
+            Some(existing) if existing.is_value() && item.is_value() => {
+                let decor = existing.as_value().map(|v| v.decor().clone());
+                *existing = item;
+                if let (Some(decor), Some(value)) = (decor, existing.as_value_mut()) {
+                    *value.decor_mut() = decor;
+                }
+            }
+            _ => {
+                table.insert(key, item);
+            }
+        },
+        None => {
+            table.remove(key);
+        }
+    }
+    let text = doc.to_string();
+    toml::from_str::<Settings>(&text)
+        .map_err(|err| format!("the change would leave {} invalid: {err}", path.display()))?;
+    if let Some(folder) = path.parent() {
+        std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, text).map_err(|e| format!("couldn't write {}: {e}", path.display()))
 }
 
 /// The settings in force, and why the file on disk isn't them (if it doesn't parse).
@@ -288,6 +429,87 @@ pub(crate) fn add_repo_section(path: &Path, key: &str, name: &str) -> std::io::R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_change_keeps_the_files_comments_and_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let text = "# mine\n[editor]\nvim = false # keep me\n\n[agents]\nmemory_limit_mb = 4096\n";
+        std::fs::write(&path, text).unwrap();
+        change(&path, None, &SettingChange::Vim { on: true }).unwrap();
+        change(&path, None, &SettingChange::IdleSuspend { on: true }).unwrap();
+        let now = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            now.starts_with("# mine\n[editor]\nvim = true # keep me\n"),
+            "{now}"
+        );
+        assert!(
+            now.contains("memory_limit_mb = 4096\nidle_suspend = true"),
+            "{now}"
+        );
+        let Read::Parsed(settings) = read(&path) else {
+            panic!("{now}")
+        };
+        assert!(settings.editor.vim && settings.agents.idle_suspend);
+    }
+
+    #[test]
+    fn a_repo_change_goes_in_its_section_and_none_removes_the_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let key = "https://github.com/me/app";
+        change(
+            &path,
+            Some(key),
+            &SettingChange::Setup {
+                commands: vec!["pnpm install".into()],
+            },
+        )
+        .unwrap();
+        change(
+            &path,
+            Some(key),
+            &SettingChange::SetupWindows {
+                commands: Some(vec!["pnpm i".into()]),
+            },
+        )
+        .unwrap();
+        let now = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            now.contains("[repos.\"https://github.com/me/app\"]"),
+            "{now}"
+        );
+        assert!(!now.contains("[repos]\n"), "{now}");
+        let Read::Parsed(settings) = read(&path) else {
+            panic!("{now}")
+        };
+        let repo = &settings.repos[key];
+        assert_eq!(repo.setup, ["pnpm install"]);
+        assert_eq!(
+            repo.setup_windows.as_deref(),
+            Some(&["pnpm i".to_owned()][..])
+        );
+
+        change(
+            &path,
+            Some(key),
+            &SettingChange::SetupWindows { commands: None },
+        )
+        .unwrap();
+        let Read::Parsed(settings) = read(&path) else {
+            panic!()
+        };
+        assert_eq!(settings.repos[key].setup_windows, None);
+    }
+
+    #[test]
+    fn a_file_that_doesnt_parse_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        std::fs::write(&path, "[editor\nvim = ").unwrap();
+        assert!(change(&path, None, &SettingChange::Vim { on: true }).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[editor\nvim = ");
+    }
 
     #[test]
     fn ssh_and_https_urls_of_one_repo_match() {
