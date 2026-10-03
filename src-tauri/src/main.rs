@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use editor_core::{
     check_prerequisites, AdapterCommand, BranchList, Core, CoreConfig, CoreError, CreatedWorktree,
-    DirEntry, FileMatch, LoadedSettings, MissingPrerequisite, NewWorktree, OpenedFile,
+    DirEntry, FileMatch, FontFamily, LoadedSettings, MissingPrerequisite, NewWorktree, OpenedFile,
     PermissionMode, PoppedOutFile, RecentSession, RecentWorkspace, RemovalCheck, RemoveWorktree,
     RemovedWorktree, RepoSettings, SaveOver, SessionId, SessionInfo, SettingChange, SetupInfo,
     SlashCommand, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo, WorktreeInfo,
@@ -192,6 +192,12 @@ async fn open_repo_settings(core: State<'_, Core>) -> CommandResult<String> {
         .await
         .map(|path| path.display().to_string())
         .map_err(|e| e.to_string())
+}
+
+/// The fonts installed on this machine, for the settings page's font pickers.
+#[tauri::command]
+async fn installed_fonts(core: State<'_, Core>) -> CommandResult<Vec<FontFamily>> {
+    Ok(core.installed_fonts().await)
 }
 
 /// The settings page's view of the open repo's settings.
@@ -890,6 +896,7 @@ fn main() {
             settings,
             open_repo_settings,
             repo_settings,
+            installed_fonts,
             change_setting,
             read_file,
             document_opened,

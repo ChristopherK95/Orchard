@@ -21,6 +21,7 @@ sysinfo = { version = "0.37", default-features = false, features = ["system"] }
 frizbee = "0.13"
 # The settings page edits the settings file keeping its comments and layout (ticket 31).
 toml_edit = "0.25"
+fontdb = "0.24.0"
 
 # Stopping a setup command together with everything it started (ticket 09): a Job object on
 # Windows, a process group on Linux.

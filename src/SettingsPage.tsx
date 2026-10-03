@@ -3,10 +3,11 @@
 // layout: toggles apply at once, fields when they lose focus or on Enter. While the file doesn't
 // parse, the controls are locked (nothing is written over it) and the error says why.
 import { createEffect, createSignal, For, type JSX, on, onCleanup, onMount, Show } from "solid-js";
-import { core, type LoadedSettings, type RepoSettings, type SettingChange } from "./core";
-import { ArrowDown, ArrowUp, Plus, TriangleAlert, X } from "./icons";
+import { core, type FontFamily, type LoadedSettings, type RepoSettings, type SettingChange } from "./core";
+import { CODE_FONT_SIZES } from "./appearance";
+import { ArrowDown, ArrowUp, ChevronDown, Plus, TriangleAlert, X } from "./icons";
 
-export type SettingsSection = "general" | "agents" | "repo";
+export type SettingsSection = "general" | "appearance" | "agents" | "repo";
 
 export function SettingsPage(props: {
   settings: LoadedSettings | null;
@@ -23,6 +24,9 @@ export function SettingsPage(props: {
   /** "Different commands on Windows / Linux" is open (it starts open if the file has either). */
   const [perOs, setPerOs] = createSignal<boolean | null>(null);
   const broken = () => !!props.settings?.error;
+  /** The installed fonts, once the core has found them. */
+  const [fonts, setFonts] = createSignal<FontFamily[] | null>(null);
+  onMount(() => void core.installedFonts().then(setFonts, () => setFonts([])));
   const app = () => props.settings?.settings;
 
   const loadRepo = async () => {
@@ -78,6 +82,7 @@ export function SettingsPage(props: {
           <nav class="settings-nav">
             <div class="palette-group">Application</div>
             {nav("general", "General")}
+            {nav("appearance", "Appearance")}
             {nav("agents", "Agents")}
             <div class="palette-group">Repository</div>
             {nav("repo", <span class="mono">{props.repoName}</span>)}
@@ -112,6 +117,41 @@ export function SettingsPage(props: {
                   hint="For a Tab you're not looking at. A session that needs you always notifies."
                   on={app()?.notifications.turnFinished ?? false}
                   onChange={(on) => void change({ kind: "turnFinished", on })}
+                />
+              </Show>
+              <Show when={section() === "appearance"}>
+                <h2>Appearance</h2>
+                <Row label="Interface font" hint="Menus, the chat, and everything else that isn't code.">
+                  <FontPicker
+                    value={app()?.appearance.uiFont ?? null}
+                    defaultName="Inter"
+                    fonts={fonts()}
+                    onChange={(family) => void change({ kind: "uiFont", family })}
+                  />
+                </Row>
+                <Row label="Code font" hint="The Manual editor, code in the chat, paths and branch names.">
+                  <FontPicker
+                    value={app()?.appearance.codeFont ?? null}
+                    defaultName="JetBrains Mono"
+                    fonts={fonts()}
+                    monospace
+                    onChange={(family) => void change({ kind: "codeFont", family })}
+                  />
+                </Row>
+                <Row label="Code font size" hint={`In the Manual editor (${CODE_FONT_SIZES.min}–${CODE_FONT_SIZES.max}).`}>
+                  <NumberField
+                    value={app()?.appearance.codeFontSize ?? CODE_FONT_SIZES.default}
+                    unit="px"
+                    min={CODE_FONT_SIZES.min}
+                    max={CODE_FONT_SIZES.max}
+                    onCommit={(px) => void change({ kind: "codeFontSize", px })}
+                  />
+                </Row>
+                <Toggle
+                  label="Font ligatures"
+                  hint="Draw => and != as single symbols where code is shown, if the code font has them."
+                  on={app()?.appearance.ligatures ?? true}
+                  onChange={(on) => void change({ kind: "ligatures", on })}
                 />
               </Show>
               <Show when={section() === "agents"}>
@@ -218,19 +258,21 @@ function Toggle(props: { label: string; hint?: string; on: boolean; onChange: (o
   );
 }
 
-/** A whole number ≥ 0, applied when it loses focus or on Enter (anything else is put back). */
-function NumberField(props: { value: number; unit: string; disabled?: boolean; onCommit: (n: number) => void }) {
+/** A whole number in range (≥ 0 by default), applied when it loses focus or on Enter (anything
+ *  else is put back). */
+function NumberField(props: { value: number; unit: string; min?: number; max?: number; disabled?: boolean; onCommit: (n: number) => void }) {
   return (
     <span class="settings-number">
       <input
         type="number"
-        min="0"
+        min={props.min ?? 0}
+        max={props.max}
         step="1"
         value={props.value}
         disabled={props.disabled}
         onChange={(e) => {
           const n = Number(e.currentTarget.value);
-          if (e.currentTarget.value.trim() === "" || !Number.isInteger(n) || n < 0) {
+          if (e.currentTarget.value.trim() === "" || !Number.isInteger(n) || n < (props.min ?? 0) || (props.max !== undefined && n > props.max)) {
             e.currentTarget.value = String(props.value);
             return;
           }
@@ -296,6 +338,118 @@ function CommandList(props: { commands: string[]; onCommit: (commands: string[])
         <Plus />
         Add command
       </button>
+    </div>
+  );
+}
+
+/** An installed font, or the bundled default (`null`), picked from a list filtered by typing. Each
+ *  name is shown in its own font. A font named in the file but not installed says so. */
+function FontPicker(props: {
+  value: string | null;
+  defaultName: string;
+  fonts: FontFamily[] | null;
+  /** List monospace fonts first, marked (for the code font). */
+  monospace?: boolean;
+  onChange: (family: string | null) => void;
+}) {
+  const [open, setOpen] = createSignal(false);
+  const [filter, setFilter] = createSignal("");
+  const [selected, setSelected] = createSignal(0);
+  let box!: HTMLDivElement;
+
+  const missing = () => !!props.value && !!props.fonts && !props.fonts.some((f) => f.name.toLowerCase() === props.value!.toLowerCase());
+  /** null: the default. */
+  const options = (): (FontFamily | null)[] => {
+    const words = filter().trim().toLowerCase();
+    let list = (props.fonts ?? []).filter((f) => !words || f.name.toLowerCase().includes(words));
+    if (props.monospace) list = [...list.filter((f) => f.monospace), ...list.filter((f) => !f.monospace)];
+    const showDefault = !words || `default ${props.defaultName}`.toLowerCase().includes(words);
+    return showDefault ? [null, ...list] : list;
+  };
+  const pick = (family: FontFamily | null | undefined) => {
+    if (family === undefined) return;
+    setOpen(false);
+    if ((family?.name ?? null) !== props.value) props.onChange(family?.name ?? null);
+  };
+  const css = (name: string) => `"${name.replace(/["\\]/g, "\\$&")}", ${props.monospace ? "monospace" : "sans-serif"}`;
+
+  onMount(() => {
+    // A click anywhere else closes the list.
+    const onDown = (e: MouseEvent) => open() && !box.contains(e.target as Node) && setOpen(false);
+    window.addEventListener("mousedown", onDown);
+    onCleanup(() => window.removeEventListener("mousedown", onDown));
+  });
+
+  return (
+    <div class="font-picker" ref={box}>
+      <button
+        class="font-picker-button"
+        onClick={() => {
+          setFilter("");
+          setSelected(0);
+          setOpen((now) => !now);
+        }}
+        style={{ "font-family": props.value ? css(props.value) : undefined }}
+      >
+        <span class="grow">{props.value ?? `Default (${props.defaultName})`}</span>
+        <Show when={missing()}>
+          <span class="not-installed">Not installed</span>
+        </Show>
+        <ChevronDown />
+      </button>
+      <Show when={open()}>
+        <div class="font-picker-menu">
+          <input
+            ref={(el) => setTimeout(() => el.focus())}
+            placeholder="Filter fonts"
+            value={filter()}
+            spellcheck={false}
+            onInput={(e) => {
+              setFilter(e.currentTarget.value);
+              setSelected(0);
+            }}
+            onKeyDown={(e) => {
+              const count = options().length;
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setSelected((i) => (count ? (i + 1) % count : 0));
+              } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setSelected((i) => (count ? (i - 1 + count) % count : 0));
+              } else if (e.key === "Enter") {
+                e.preventDefault();
+                pick(options()[selected()]);
+              } else if (e.key === "Escape") {
+                // (Closes the list, not the settings page.)
+                e.preventDefault();
+                e.stopPropagation();
+                setOpen(false);
+              }
+            }}
+          />
+          <div class="font-picker-list">
+            <Show when={props.fonts} fallback={<p class="muted small palette-empty">Looking for installed fonts…</p>}>
+              <For each={options()} fallback={<p class="muted small palette-empty">No installed font matches.</p>}>
+                {(family, i) => (
+                  <button
+                    class="palette-item"
+                    classList={{ on: i() === selected(), current: (family?.name ?? null) === props.value }}
+                    ref={(el) => createEffect(() => i() === selected() && el.scrollIntoView({ block: "nearest" }))}
+                    onMouseEnter={() => setSelected(i())}
+                    onClick={() => pick(family)}
+                    style={{ "font-family": family ? css(family.name) : undefined }}
+                  >
+                    <span class="file">{family?.name ?? `Default (${props.defaultName})`}</span>
+                    <Show when={props.monospace && family?.monospace}>
+                      <span class="end">monospace</span>
+                    </Show>
+                  </button>
+                )}
+              </For>
+            </Show>
+          </div>
+        </div>
+      </Show>
     </div>
   );
 }

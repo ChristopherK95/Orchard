@@ -197,7 +197,21 @@ export interface SetupInfo {
   output: string;
 }
 
+export interface Appearance {
+  /** null: the bundled default (Inter / JetBrains Mono). */
+  uiFont: string | null;
+  codeFont: string | null;
+  codeFontSize: number;
+  ligatures: boolean;
+}
+
+export interface FontFamily {
+  name: string;
+  monospace: boolean;
+}
+
 export interface Settings {
+  appearance: Appearance;
   editor: { vim: boolean };
   notifications: { turnFinished: boolean };
   agents: { memoryLimitMb: number; idleSuspend: boolean; idleSuspendMinutes: number };
@@ -217,6 +231,10 @@ export interface RepoSettings {
 
 /** One change the settings page makes (repo ones are to the open repo's section). */
 export type SettingChange =
+  | { kind: "uiFont"; family: string | null }
+  | { kind: "codeFont"; family: string | null }
+  | { kind: "codeFontSize"; px: number }
+  | { kind: "ligatures"; on: boolean }
   | { kind: "vim"; on: boolean }
   | { kind: "turnFinished"; on: boolean }
   | { kind: "memoryLimitMb"; mb: number }
@@ -480,6 +498,8 @@ export const core = {
   settings: () => invoke<LoadedSettings>("settings"),
   /** Adds this repo's section to the settings file if need be; the file's path, to edit. */
   openRepoSettings: () => invoke<string>("open_repo_settings"),
+  /** The fonts installed on this machine (found once per run). */
+  installedFonts: () => invoke<FontFamily[]>("installed_fonts"),
   /** The open repo's settings (its defaults if the file has no section for it). */
   repoSettings: () => invoke<RepoSettings>("repo_settings"),
   /** Writes one change from the settings page to the settings file; the settings now in force. */

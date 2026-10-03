@@ -15,6 +15,7 @@ use crate::worktrees;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
 pub struct Settings {
+    pub appearance: Appearance,
     pub editor: EditorSettings,
     pub notifications: Notifications,
     pub agents: AgentSettings,
@@ -27,6 +28,34 @@ pub struct Settings {
 pub struct Notifications {
     /// Notify when a Tab you're not looking at finishes its turn (off by default).
     pub turn_finished: bool,
+}
+
+/// Fonts (ticket 32).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
+pub struct Appearance {
+    /// The interface font's family (none: Inter, which comes with the editor).
+    pub ui_font: Option<String>,
+    /// The code font's family, for all monospace text (none: JetBrains Mono, which comes with it).
+    pub code_font: Option<String>,
+    /// The Manual editor's font size in px (`CODE_FONT_SIZES`).
+    pub code_font_size: u32,
+    /// Ligatures (`=>`, `!=` drawn as one symbol) where code is shown.
+    pub ligatures: bool,
+}
+
+/// The code font sizes allowed (others in the file are taken as the nearest).
+pub const CODE_FONT_SIZES: std::ops::RangeInclusive<u32> = 9..=28;
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            ui_font: None,
+            code_font: None,
+            code_font_size: 13,
+            ligatures: true,
+        }
+    }
 }
 
 /// The Manual editor (ticket 14).
@@ -120,6 +149,19 @@ impl Settings {
     rename_all_fields = "camelCase"
 )]
 pub enum SettingChange {
+    /// `None`: the default font.
+    UiFont {
+        family: Option<String>,
+    },
+    CodeFont {
+        family: Option<String>,
+    },
+    CodeFontSize {
+        px: u32,
+    },
+    Ligatures {
+        on: bool,
+    },
     Vim {
         on: bool,
     },
@@ -167,7 +209,24 @@ impl SettingChange {
         let list = |commands: &[String]| value(commands.iter().collect::<toml_edit::Array>());
         let app = |table: &str| vec![table.to_owned()];
         let repo = || vec!["repos".to_owned(), repo.unwrap_or_default().to_owned()];
+        let font = |family: &Option<String>| {
+            family
+                .as_deref()
+                .map(str::trim)
+                .filter(|f| !f.is_empty())
+                .map(value)
+        };
         match self {
+            Self::UiFont { family } => (app("appearance"), "ui_font", font(family)),
+            Self::CodeFont { family } => (app("appearance"), "code_font", font(family)),
+            Self::CodeFontSize { px } => (
+                app("appearance"),
+                "code_font_size",
+                Some(value(
+                    (*px).clamp(*CODE_FONT_SIZES.start(), *CODE_FONT_SIZES.end()) as i64,
+                )),
+            ),
+            Self::Ligatures { on } => (app("appearance"), "ligatures", Some(value(*on))),
             Self::Vim { on } => (app("editor"), "vim", Some(value(*on))),
             Self::TurnFinished { on } => (app("notifications"), "turn_finished", Some(value(*on))),
             Self::MemoryLimitMb { mb } => {
@@ -377,6 +436,14 @@ pub(crate) fn watch(
 const FILE_HEADER: &str = "\
 # Agent editor settings. Saved changes apply straight away.
 
+[appearance]
+# ui_font = \"Segoe UI\"     # the interface font (default: Inter)
+# code_font = \"Consolas\"   # the code font, for all monospace text (default: JetBrains Mono)
+# The Manual editor's font size in px (9-28).
+code_font_size = 13
+# Ligatures (=> and != drawn as one symbol) where code is shown.
+ligatures = true
+
 [editor]
 # Vim keybindings in the Manual editor (:w saves, :q closes the file tab).
 vim = false
@@ -500,6 +567,34 @@ mod tests {
             panic!()
         };
         assert_eq!(settings.repos[key].setup_windows, None);
+    }
+
+    #[test]
+    fn fonts_are_set_and_unset_and_the_size_kept_in_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let family = |f: &str| Some(f.to_owned());
+        change(
+            &path,
+            None,
+            &SettingChange::CodeFont {
+                family: family("Consolas"),
+            },
+        )
+        .unwrap();
+        change(&path, None, &SettingChange::CodeFontSize { px: 99 }).unwrap();
+        let Read::Parsed(settings) = read(&path) else {
+            panic!()
+        };
+        assert_eq!(settings.appearance.code_font.as_deref(), Some("Consolas"));
+        assert_eq!(settings.appearance.code_font_size, 28);
+        assert!(settings.appearance.ligatures, "on by default");
+
+        change(&path, None, &SettingChange::CodeFont { family: None }).unwrap();
+        let Read::Parsed(settings) = read(&path) else {
+            panic!()
+        };
+        assert_eq!(settings.appearance.code_font, None);
     }
 
     #[test]

@@ -46,8 +46,9 @@
   --e-1: 0 1px 2px rgba(0, 0, 0, 0.35);
   --e-2: 0 6px 16px rgba(0, 0, 0, 0.45);
   --e-3: 0 16px 40px rgba(0, 0, 0, 0.55);
-  --ui: "Inter Variable", Inter, system-ui, "Segoe UI", sans-serif;
-  --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+  /* --user-ui / --user-mono: the fonts chosen in Appearance settings (appearance.ts), if any. */
+  --ui: var(--user-ui, "Inter Variable"), "Inter Variable", Inter, system-ui, "Segoe UI", sans-serif;
+  --mono: var(--user-mono, "JetBrains Mono Variable"), "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
   /* The transcript's prose measure. */
   --measure: 820px;
   color-scheme: dark;
@@ -208,6 +209,15 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .settings-command { display: flex; align-items: center; gap: 4px; }
 .settings-command input { flex: 1; min-width: 0; }
 .settings-commands .add-command { align-self: flex-start; }
+.font-picker { position: relative; width: 260px; }
+.font-picker-button { width: 100%; justify-content: flex-start; gap: 8px; min-height: 30px; padding: 0 8px 0 10px; font-weight: 400; text-align: left; }
+.font-picker-button .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.font-picker-button .lucide { flex: none; width: 12px; height: 12px; color: var(--fg-3); }
+.font-picker .not-installed { flex: none; font: 11px var(--ui); color: var(--warn); }
+.font-picker-menu { position: absolute; z-index: 5; top: calc(100% + 4px); right: 0; width: 320px; display: flex; flex-direction: column; background: var(--bg-2); border: 1px solid var(--line-strong); border-radius: var(--r-lg); box-shadow: var(--e-2); overflow: hidden; }
+.font-picker-menu input { margin: 8px; height: 28px; font-family: var(--ui); }
+.font-picker-list { max-height: 280px; overflow: auto; padding-bottom: 4px; }
+.font-picker-list .palette-item.current .file { color: var(--accent); }
 .settings-broken { display: flex; gap: 10px; padding: 10px 12px; border: 1px solid var(--danger); border-radius: var(--r-md); background: var(--bg-3); }
 .settings-broken > .lucide { flex: none; color: var(--danger); }
 .settings-broken p { margin: 0 0 6px; font-size: 13px; }
@@ -426,6 +436,8 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .cb-head { display: flex; align-items: center; gap: 10px; height: 28px; padding: 0 6px 0 12px; background: var(--bg-2); font: 11px var(--mono); color: var(--fg-3); }
 .cb-head button { min-height: 20px; padding: 0 7px; gap: 5px; font: 11.5px var(--ui); color: var(--fg-3); }
 .cb-head svg { width: 11px; height: 11px; stroke-width: 1.5; }
+/* Ligatures where code is shown (Appearance settings). */
+.cm-scroller, .cb pre, .diff, .markdown code, .settings-command input { font-variant-ligatures: var(--code-ligatures, normal); }
 .cb pre { margin: 0; overflow-x: auto; font: 12.5px/1.55 var(--mono); tab-size: 4; }
 .cb pre code { background: none; color: var(--fg-1); padding: 10px 0; display: block; counter-reset: ln; font: inherit; border-radius: 0; }
 .cb .l { display: block; padding-right: 14px; white-space: pre; }
@@ -692,7 +704,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .editor-banner button { min-height: 24px; padding: 0 9px; font-size: 12px; }
 .editor-host { flex: 1; min-height: 0; overflow: hidden; }
 .editor-host.hidden { display: none; }
-.editor-host .cm-editor { height: 100%; font-size: 13px; background: var(--bg-1); }
+.editor-host .cm-editor { height: 100%; font-size: var(--code-size, 13px); background: var(--bg-1); }
 .editor-host .cm-scroller { font-family: var(--mono); line-height: 1.6; }
 .editor-host .cm-gutters { background: var(--bg-1); border-right: 0; color: var(--fg-dim); }
 .editor-host .cm-activeLine { background: color-mix(in srgb, var(--fg-1) 4%, transparent); }

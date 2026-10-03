@@ -2,16 +2,18 @@
 // with the same save and conflict rules. The core holds the window's file until the window is
 // gone, so a reload of this window collects it again. Closing it with unsaved changes asks first.
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { createSignal, lazy, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, lazy, onCleanup, onMount, Show } from "solid-js";
 import { core, type LoadedSettings } from "./core";
 import type { OpenRequest } from "./ManualEditor";
 import { BareTitlebar } from "./WindowControls";
+import { applyAppearance } from "./appearance";
 
 const ManualEditor = lazy(() => import("./ManualEditor").then((m) => ({ default: m.ManualEditor })));
 
 export function PopOut() {
   const [requests, setRequests] = createSignal<{ open: OpenRequest; n: number }[]>([]);
   const [settings, setSettings] = createSignal<LoadedSettings | null>(null);
+  createEffect(() => settings() && applyAppearance(settings()!.settings.appearance));
   const [error, setError] = createSignal("");
   const [dirty, setDirty] = createSignal(false);
   const [confirmClose, setConfirmClose] = createSignal(false);

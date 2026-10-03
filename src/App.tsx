@@ -38,6 +38,7 @@ import { createTabView, type TabView } from "./TabView";
 import { BareTitlebar, WindowControls } from "./WindowControls";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { SettingsPage, type SettingsSection } from "./SettingsPage";
+import { applyAppearance } from "./appearance";
 import { ChevronDown, GitBranch, Loader, PanelRight, Plus, Search, Settings, Sparkles, X } from "./icons";
 
 export function App() {
@@ -45,6 +46,8 @@ export function App() {
   const [workspace, setWorkspace] = createSignal<WorkspaceInfo | null>(null);
 
   onMount(async () => setProblems(await core.prerequisites()));
+  // The chosen fonts from the start (the Workspace keeps them up to date after).
+  onMount(() => void core.settings().then((loaded) => applyAppearance(loaded.settings.appearance), () => {}));
 
   return (
     <Show
@@ -332,6 +335,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     return !!setup && setup.status.kind !== "done";
   };
   const [settings, setSettings] = createSignal<LoadedSettings | null>(null);
+  createEffect(() => settings() && applyAppearance(settings()!.settings.appearance));
   /** Something to know that isn't an error (e.g. a fetch failed, so a Worktree started from stale refs). */
   const [notice, setNotice] = createSignal("");
   const sessionsIn = (path: string) => order().map((id) => sessions[id]).filter((s) => s.worktree === path);

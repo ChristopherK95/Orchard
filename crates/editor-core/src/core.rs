@@ -502,6 +502,8 @@ struct Inner {
     remote_op: tokio::sync::Mutex<()>,
     /// Files open in Manual editors, and popped-out files held for their windows.
     documents: Mutex<DocumentTracker>,
+    /// The installed fonts, once they've been looked for.
+    fonts: tokio::sync::OnceCell<Vec<crate::fonts::FontFamily>>,
 }
 
 #[derive(Default)]
@@ -724,6 +726,7 @@ impl Core {
             last_fetch: Mutex::default(),
             remote_op: tokio::sync::Mutex::new(()),
             documents: Mutex::default(),
+            fonts: tokio::sync::OnceCell::new(),
         });
         if let Some(path) = &inner.config.settings_path {
             let weak = Arc::downgrade(&inner);
@@ -754,6 +757,21 @@ impl Core {
 
     /// Makes sure the settings file has a section for this repo (adding a template keyed by its
     /// `origin` URL, else its path) and returns the file's path, for the user to edit.
+    /// The fonts installed on this machine, for the settings page (found once per run, off the
+    /// async threads).
+    pub async fn installed_fonts(&self) -> Vec<crate::fonts::FontFamily> {
+        let found = self
+            .inner
+            .fonts
+            .get_or_init(|| async {
+                tokio::task::spawn_blocking(crate::fonts::installed)
+                    .await
+                    .unwrap_or_default()
+            })
+            .await;
+        found.clone()
+    }
+
     /// The open repo's settings (its defaults if the file has no section for it).
     pub async fn repo_settings(&self) -> Result<RepoSettings, CoreError> {
         let workspace = self.workspace()?;
