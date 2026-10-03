@@ -8,10 +8,19 @@ import { createSignal, type JSX, onCleanup, onMount } from "solid-js";
 export function WindowControls() {
   const window = getCurrentWindow();
   const [maximized, setMaximized] = createSignal(false);
+  // (Registered before the awaits, so Solid ties it to this component; a switched-away
+  // Workspace's title bar goes with it.)
+  let stop: (() => void) | undefined;
+  let gone = false;
+  onCleanup(() => {
+    gone = true;
+    stop?.();
+  });
   onMount(async () => {
     setMaximized(await window.isMaximized());
-    const stop = await window.onResized(async () => setMaximized(await window.isMaximized()));
-    onCleanup(stop);
+    const unlisten = await window.onResized(async () => setMaximized(await window.isMaximized()));
+    if (gone) unlisten();
+    else stop = unlisten;
   });
   const glyph = (d: string) => (
     <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true">

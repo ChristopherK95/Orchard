@@ -457,8 +457,20 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
 
   let sawWorktreesEvent = false;
   let sawSettingsEvent = false;
+  // Solid only ties an onCleanup to this view if it's registered before anything is awaited, and
+  // the listeners below arrive after awaits: this one cleanup removes them all. Without it, a
+  // Workspace switched away from would keep handling events (and hide the new view's Tab).
+  const stops: (() => void)[] = [];
+  let disposed = false;
+  onCleanup(() => {
+    disposed = true;
+    stops.splice(0).forEach((stop) => stop());
+  });
+  /** Removed with the view (at once, if the view went while it was being added). */
+  const untilGone = (stop: () => void) => (disposed ? stop() : void stops.push(stop));
   onMount(async () => {
     const unlisten = await core.onEvent((event) => {
+      if (disposed) return; // (one already on its way when the view went)
       if (event.kind === "worktreesChanged") {
         sawWorktreesEvent = true;
         setWorktrees(event.worktrees);
@@ -513,10 +525,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       else if (event.kind === "permissionModeChanged") setSessions(event.sessionId, "permissionMode", event.mode);
       else setSessions(event.sessionId, "unread", event.unread);
     });
-    onCleanup(unlisten);
+    untilGone(unlisten);
     // Clicking a notification opens the session it was about.
     const unlistenClicks = await onNotificationClicked((id) => sessions[id] && (boardOpen() || !onScreen(id)) && void show(id));
-    onCleanup(unlistenClicks);
+    untilGone(unlistenClicks);
     // Y/N answer the oldest open permission card anywhere in the Tab (outside text fields).
     const onKey = (e: KeyboardEvent) => {
       // (Ctrl+P is never the browser's print, even with a dialog open.)
@@ -568,14 +580,14 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       if (s?.state === "needsYou" && shown && answerByKey(e, s.id, shown.items)) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
-    onCleanup(() => window.removeEventListener("keydown", onKey));
+    untilGone(() => window.removeEventListener("keydown", onKey));
     // Narrower than the Columns view allows: back to the Tabs.
     const onResize = () => {
       setWide(window.innerWidth >= COLUMNS_MIN_WIDTH);
       if (!wide() && mainView() === "columns") chooseView("tabs");
     };
     window.addEventListener("resize", onResize);
-    onCleanup(() => window.removeEventListener("resize", onResize));
+    untilGone(() => window.removeEventListener("resize", onResize));
     // The Recent menu closes on a click anywhere else.
     const onClick = (e: MouseEvent) => {
       if ((e.target as Element | null)?.closest?.(".recent-menu, .menu")) return;
@@ -583,13 +595,14 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       setAddColumnAt(null);
     };
     window.addEventListener("click", onClick);
-    onCleanup(() => window.removeEventListener("click", onClick));
+    untilGone(() => window.removeEventListener("click", onClick));
     // Worktrees may have changed while the editor was in the background (the watcher covers the rest),
     // and they're fetched if it's due (the core keeps it to every 5 minutes at most).
     const onFocus = () => void core.windowFocused().catch(() => {});
     window.addEventListener("focus", onFocus);
-    onCleanup(() => window.removeEventListener("focus", onFocus));
+    untilGone(() => window.removeEventListener("focus", onFocus));
     const loaded = await core.settings();
+    if (disposed) return;
     if (!sawSettingsEvent) setSettings(loaded);
     // Setups started before this view (e.g. the webview reloaded); events since then win.
     for (const setup of await core.setups()) if (!setups[setup.worktree]) setSetups(setup.worktree, setup);
