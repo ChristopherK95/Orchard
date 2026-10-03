@@ -700,3 +700,17 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .titlebar.bare .name { font-size: 12px; font-weight: 500; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .startup-window { height: 100%; display: flex; flex-direction: column; }
 .startup-window > :not(.titlebar) { flex: 1; min-height: 0; height: auto; }
+
+/* The composer's `/` menu: the Agent's slash commands and skills, above the input. */
+.composer-box { position: relative; }
+.slash-menu { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 15; display: flex; flex-direction: column; max-height: min(360px, 50vh); background: var(--bg-2); border: 1px solid var(--line-strong); border-radius: var(--r-lg); box-shadow: var(--e-2); overflow: hidden; }
+.slash-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3); border-bottom: 1px solid var(--line); }
+.slash-head .note { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--fg-dim); }
+.slash-list { overflow: auto; padding: 4px 0; }
+.slash-item { display: flex; width: 100%; min-height: 30px; justify-content: flex-start; gap: 10px; padding: 0 12px 0 10px; border: 0; border-left: 2px solid transparent; border-radius: 0; background: transparent; font-weight: 400; text-align: left; }
+.slash-item:hover:not(:disabled) { background: transparent; }
+.slash-item.on { background: var(--bg-3); border-left-color: var(--accent); }
+.slash-item .name { font: 12.5px var(--mono); color: var(--fg-1); flex: none; }
+.slash-item .hint { font: 11.5px var(--mono); color: var(--fg-dim); flex: none; }
+.slash-item .desc { font-size: 12.5px; color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.slash-empty { margin: 0; padding: 10px 12px; font-size: 12.5px; color: var(--fg-3); }

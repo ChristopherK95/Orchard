@@ -3,6 +3,7 @@
 import { createEffect, createSignal, For, type JSX, Match, onMount, Show, Switch } from "solid-js";
 import { core, type PermissionMode, type RecentSession, type SessionId, type SessionInfo, type SessionState } from "./core";
 import { EditNotes } from "./EditNotes";
+import { createSlashMenu, SlashMenu, useSlashCommands } from "./SlashCommands";
 import { BookOpen, ChevronDown, CirclePlay, Info, ShieldQuestion, Sparkles, TriangleAlert, X, Zap } from "./icons";
 import { worktreeColour } from "./Worktrees";
 
@@ -70,6 +71,14 @@ export function Composer(props: { session: SessionInfo }) {
     else drafts.delete(props.session.id);
   };
   const [error, setError] = createSignal("");
+  // Typing `/` lists the Agent's slash commands and skills.
+  const commands = useSlashCommands(() => props.session);
+  const slash = createSlashMenu(text, commands);
+  const complete = (name: string) => {
+    setText(`/${name} `);
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  };
   // A Suspended session takes a message too: sending it resumes the session.
   const disabled = () => props.session.state !== "idle" && props.session.state !== "suspended";
   let input!: HTMLTextAreaElement;
@@ -121,12 +130,22 @@ export function Composer(props: { session: SessionInfo }) {
         </p>
       </Show>
       <div class="composer-box" classList={{ locked: locked() }}>
+        <Show when={slash.open() && !locked()}>
+          <SlashMenu
+            items={slash.items()}
+            selected={slash.selected()}
+            waiting={commands().length === 0}
+            onHover={slash.setSelected}
+            onPick={(command) => complete(command.name)}
+          />
+        </Show>
         <div class="composer-inner">
           <textarea
             ref={input}
             value={text()}
             onInput={(e) => setText(e.currentTarget.value)}
             onKeyDown={(e) => {
+              if (slash.key(e, (command) => complete(command.name))) return;
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 void send();
@@ -137,7 +156,7 @@ export function Composer(props: { session: SessionInfo }) {
                 ? "The Agent exited."
                 : props.session.state === "needsYou"
                   ? "Answer the permission card above first (Y / N)."
-                  : "Message the Agent (Enter to send, Shift+Enter for a newline)"
+                  : "Message the Agent (Enter to send, Shift+Enter for a newline, / for commands)"
             }
             disabled={locked()}
           />

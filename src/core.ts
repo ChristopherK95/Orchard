@@ -357,11 +357,22 @@ export type AutoSuspendReason =
   | { kind: "lowMemory"; availableBytes: number }
   | { kind: "idle"; minutes: number };
 
+/** A slash command the Agent offers (Claude Code's own, a custom command or a skill); typing
+ *  `/name args` as the prompt runs it. */
+export interface SlashCommand {
+  name: string;
+  description: string;
+  /** What to type after it, if it takes input. */
+  hint: string | null;
+}
+
 export type CoreEvent =
   | { kind: "sessionCreated"; session: SessionInfo }
   | { kind: "sessionStateChanged"; sessionId: SessionId; state: SessionState }
   | { kind: "permissionModeChanged"; sessionId: SessionId; mode: PermissionMode }
   | { kind: "sessionUnreadChanged"; sessionId: SessionId; unread: number }
+  /** The slash commands (and skills) the session's Agent offers: the whole list. */
+  | { kind: "availableCommandsChanged"; sessionId: SessionId; commands: SlashCommand[] }
   | { kind: "worktreesChanged"; worktrees: WorktreeInfo[] }
   | { kind: "sessionClosed"; sessionId: SessionId }
   /** A popped-out window closed before it showed its file: `window` reopens it. */
@@ -502,6 +513,8 @@ export const core = {
   hideTabs: (slot: string = TABS_SLOT) => invoke<void>("hide_tabs", { slot }),
   /** The Worktrees pinned as columns of the Columns view. */
   pinnedWorktrees: () => invoke<string[]>("pinned_worktrees"),
+  /** The slash commands the session's Agent last said it offers (none before its process starts). */
+  availableCommands: (sessionId: SessionId) => invoke<SlashCommand[]>("available_commands", { sessionId }),
   /** Pins or unpins a Worktree as a column; resolves to the pinned Worktrees now. */
   setPinned: (worktree: string, pinned: boolean) => invoke<string[]>("set_pinned", { worktree, pinned }),
   /** Up to a page of items just before index `before` (for scrolling back). */

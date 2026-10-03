@@ -489,9 +489,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         event.kind === "documentBackOnDisk" ||
         event.kind === "documentsChanged" ||
         event.kind === "editNotesChanged" ||
+        event.kind === "availableCommandsChanged" ||
         event.kind === "gitStatusChanged"
       ) {
-        return; // (the Manual editors', permission cards', Edit note chips' and Git drawer's business)
+        return; // (the Manual editors', permission cards', Edit note chips', Git drawer's and composer's business)
       } else if (!sessions[event.sessionId]) return;
       else if (event.kind === "sessionStateChanged") onStateChanged(event.sessionId, event.state);
       else if (event.kind === "permissionModeChanged") setSessions(event.sessionId, "permissionMode", event.mode);

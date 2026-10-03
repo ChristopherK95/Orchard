@@ -38,6 +38,35 @@ use crate::settings::{self, LoadedSettings, WindowsShell};
 use crate::setup::{self, SetupInfo, SetupStatus};
 use crate::worktrees::{self, Discovery, WorktreeInfo};
 
+/// A slash command the Agent offers (one of Claude Code's, a custom command or a skill), from ACP's
+/// `available_commands_update`. Typing `/name args` as a prompt runs it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlashCommand {
+    pub name: String,
+    pub description: String,
+    /// What to type after it, if it takes input (e.g. "[file]").
+    pub hint: Option<String>,
+}
+
+impl SlashCommand {
+    /// The commands in an `available_commands_update` (ones without a name are skipped).
+    fn list_from(update: &Value) -> Vec<SlashCommand> {
+        update["availableCommands"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|c| {
+                Some(SlashCommand {
+                    name: c["name"].as_str().filter(|n| !n.is_empty())?.to_owned(),
+                    description: c["description"].as_str().unwrap_or_default().to_owned(),
+                    hint: c["input"]["hint"].as_str().map(str::to_owned),
+                })
+            })
+            .collect()
+    }
+}
+
 /// The Tabs view's view slot: its one visible Tab (the Columns view has a slot per column).
 pub const TABS_SLOT: &str = "tabs";
 
@@ -279,6 +308,13 @@ pub enum CoreEvent {
     SessionUnreadChanged {
         session_id: SessionId,
         unread: usize,
+    },
+    /// The slash commands (and skills) the Agent offers in this session changed (it sends the
+    /// whole list each time).
+    #[serde(rename_all = "camelCase")]
+    AvailableCommandsChanged {
+        session_id: SessionId,
+        commands: Vec<SlashCommand>,
     },
     /// The Worktree list or a Worktree's branch/status changed.
     WorktreesChanged {
@@ -529,6 +565,8 @@ struct Session {
     files: Mutex<HashSet<PathBuf>>,
     /// Hand edits to those files waiting for its next prompt (kept while it's Suspended).
     edit_notes: Mutex<EditNotes>,
+    /// The slash commands the Agent last said it offers (none until its process has started).
+    commands: Mutex<Vec<SlashCommand>>,
     control: Mutex<Control>,
 }
 
@@ -2527,6 +2565,17 @@ impl Core {
         Ok(self.session(id)?.info.lock().expect("info lock").clone())
     }
 
+    /// The slash commands (and skills) the session's Agent last said it offers: empty until its
+    /// process has started (a restored, Suspended session has none yet).
+    pub fn available_commands(&self, id: SessionId) -> Result<Vec<SlashCommand>, CoreError> {
+        Ok(self
+            .session(id)?
+            .commands
+            .lock()
+            .expect("commands lock")
+            .clone())
+    }
+
     /// The whole transcript (mostly for tests; the frontend pages through `show_session` and
     /// `transcript_page`).
     pub fn transcript(&self, id: SessionId) -> Result<Vec<TranscriptItem>, CoreError> {
@@ -3008,6 +3057,7 @@ impl Inner {
             tool_calls: Mutex::default(),
             files: Mutex::new(saved.files.iter().cloned().collect()),
             edit_notes: Mutex::default(),
+            commands: Mutex::default(),
             control: Mutex::new(Control {
                 suspended: stopped,
                 loaded: !stopped,
@@ -3624,6 +3674,15 @@ impl Inner {
                         {
                             self.persist();
                         }
+                    }
+                    Some("available_commands_update") => {
+                        let commands = SlashCommand::list_from(update);
+                        *session.commands.lock().expect("commands lock") = commands.clone();
+                        let session_id = session.info.lock().expect("info lock").id;
+                        let _ = self.events.send(CoreEvent::AvailableCommandsChanged {
+                            session_id,
+                            commands,
+                        });
                     }
                     // The Agent can change mode itself, e.g. when leaving plan mode.
                     // (A replayed mode change is history: the Tab's own mode is applied after.)

@@ -8,8 +8,8 @@ use editor_core::{
     check_prerequisites, AdapterCommand, BranchList, Core, CoreConfig, CoreError, CreatedWorktree,
     DirEntry, FileMatch, LoadedSettings, MissingPrerequisite, NewWorktree, OpenedFile,
     PermissionMode, PoppedOutFile, RecentSession, RemovalCheck, RemoveWorktree, RemovedWorktree,
-    SaveOver, SessionId, SessionInfo, SetupInfo, Tools, TranscriptDelta, TranscriptPage,
-    WorkspaceInfo, WorktreeInfo,
+    SaveOver, SessionId, SessionInfo, SetupInfo, SlashCommand, Tools, TranscriptDelta,
+    TranscriptPage, WorkspaceInfo, WorktreeInfo,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -379,6 +379,16 @@ fn sessions(core: State<'_, Core>) -> Vec<SessionInfo> {
 #[tauri::command]
 async fn close_tab(core: State<'_, Core>, session_id: SessionId) -> CommandResult<()> {
     core.close_tab(session_id).await.map_err(|e| e.to_string())
+}
+
+/// The slash commands (and skills) a session's Agent offers, for the composer's `/` menu.
+#[tauri::command]
+fn available_commands(
+    core: State<'_, Core>,
+    session_id: SessionId,
+) -> CommandResult<Vec<SlashCommand>> {
+    core.available_commands(session_id)
+        .map_err(|e| e.to_string())
 }
 
 /// The Worktrees pinned as columns of the Columns view.
@@ -849,7 +859,8 @@ fn main() {
             show_session,
             hide_tabs,
             pinned_worktrees,
-            set_pinned
+            set_pinned,
+            available_commands
         ])
         .run(tauri::generate_context!())
         .expect("error while running the editor");

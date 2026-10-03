@@ -21,6 +21,9 @@
 //!
 //! A top-level `"failResume": true` makes `session/resume` fail (`Session not found`).
 //!
+//! A top-level `"commands": [{ "name": "review", "description": "…", "input": { "hint": "[pr]" } }]`
+//! is sent as an `available_commands_update` after each `session/new`, like the real adapter's.
+//!
 //! Each `session/prompt` consumes the next turn (across all sessions); once the script runs out, the
 //! agent echoes the prompt. A `permission` turn first announces the tool call, then asks
 //! `session/request_permission` (id `"perm-1"`, `"perm-2"`, …) and waits for the answer, which it
@@ -59,6 +62,9 @@ struct Script {
     /// Answer `session/resume` with an error (a conversation that can't be picked back up).
     #[serde(default)]
     fail_resume: bool,
+    /// Sent as `available_commands_update` after each `session/new` (ACP's command objects).
+    #[serde(default)]
+    commands: Vec<Value>,
 }
 
 fn default_mode() -> String {
@@ -176,6 +182,7 @@ fn main() {
             turns: VecDeque::new(),
             initial_mode: default_mode(),
             fail_resume: false,
+            commands: vec![],
         });
     let log = std::env::var("FAKE_ACP_LOG").ok().map(|path| {
         OpenOptions::new()
@@ -273,6 +280,11 @@ impl Agent {
             };
             if let Some(id) = id {
                 send(json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+            }
+            // Like the real adapter: a new session's slash commands follow its creation.
+            if method == "session/new" && !self.script.commands.is_empty() {
+                let update = json!({ "sessionUpdate": "available_commands_update", "availableCommands": self.script.commands });
+                notify_update(&result["sessionId"], update);
             }
         }
     }
