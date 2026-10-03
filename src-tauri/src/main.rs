@@ -300,6 +300,7 @@ async fn pop_out(
     )
     .title(format!("{name} - {worktree} - Agent Editor"))
     .inner_size(900.0, 720.0)
+    .decorations(false) // (it draws its own title bar, like the main window)
     .build();
     match built {
         Ok(_) => Ok(label),

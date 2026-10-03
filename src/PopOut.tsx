@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createSignal, lazy, onCleanup, onMount, Show } from "solid-js";
 import { core, type LoadedSettings } from "./core";
 import type { OpenRequest } from "./ManualEditor";
+import { BareTitlebar } from "./WindowControls";
 
 const ManualEditor = lazy(() => import("./ManualEditor").then((m) => ({ default: m.ManualEditor })));
 
@@ -45,8 +46,12 @@ export function PopOut() {
     }
   });
 
+  const [title, setTitle] = createSignal("");
+  onMount(async () => setTitle(await window.title()));
+
   return (
     <div class="workspace popout">
+      <BareTitlebar>{title()}</BareTitlebar>
       <Show when={confirmClose()}>
         <div class="editor-banner warning">
           <span class="grow">This window has unsaved changes. Close it anyway?</span>

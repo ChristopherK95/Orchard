@@ -34,6 +34,7 @@ import { StateDot } from "./StateDot";
 import { Banner, Composer, RecentList, STATE_LABEL } from "./Chat";
 import { Columns, COLUMNS_MIN_WIDTH } from "./Columns";
 import { createTabView, type TabView } from "./TabView";
+import { BareTitlebar, WindowControls } from "./WindowControls";
 import { ChevronDown, GitBranch, Loader, PanelRight, Plus, Search, Settings, Sparkles, X } from "./icons";
 
 export function App() {
@@ -43,24 +44,32 @@ export function App() {
   onMount(async () => setProblems(await core.prerequisites()));
 
   return (
-    <Switch
+    <Show
+      when={workspace()}
       fallback={
-        <div class="center muted small">
-          <Loader class="spin" />
-          &nbsp;Checking prerequisites…
+        // Before a Workspace is open, a bare title bar (the window has no native one).
+        <div class="startup-window">
+          <BareTitlebar />
+          <Switch
+            fallback={
+              <div class="center muted small">
+                <Loader class="spin" />
+                &nbsp;Checking prerequisites…
+              </div>
+            }
+          >
+            <Match when={problems()?.length}>
+              <Prerequisites problems={problems()!} />
+            </Match>
+            <Match when={problems()}>
+              <OpenWorkspace onOpened={setWorkspace} />
+            </Match>
+          </Switch>
         </div>
       }
     >
-      <Match when={problems()?.length}>
-        <Prerequisites problems={problems()!} />
-      </Match>
-      <Match when={problems() && !workspace()}>
-        <OpenWorkspace onOpened={setWorkspace} />
-      </Match>
-      <Match when={workspace()}>
-        <WorkspaceView workspace={workspace()!} />
-      </Match>
-    </Switch>
+      {(w) => <WorkspaceView workspace={w()} />}
+    </Show>
   );
 }
 
@@ -611,12 +620,15 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
 
   return (
     <div class="workspace" classList={{ "board-open": view() === "board" }}>
-      <header class="titlebar" ref={titlebar}>
-        <span class="name">{props.workspace.name}</span>
-        <span class="path" title={props.workspace.root}>
+      {/* The window's title bar (no native one): drag it by any bare part; double-click maximises. */}
+      <header class="titlebar" ref={titlebar} data-tauri-drag-region>
+        <span class="name" data-tauri-drag-region>
+          {props.workspace.name}
+        </span>
+        <span class="path" title={props.workspace.root} data-tauri-drag-region>
           {props.workspace.root}
         </span>
-        <span class="grow" />
+        <span class="grow" data-tauri-drag-region />
         <div class="segmented">
           <button classList={{ on: view() === "tabs" }} onClick={() => chooseView("tabs")} title="One session at a time">
             Tabs
@@ -705,6 +717,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
         <button class="ghost icon" onClick={openRepoSettings} title="Settings for this repo, e.g. its Worktree setup commands" aria-label="Repo settings">
           <Settings />
         </button>
+        <WindowControls />
       </header>
       <Show when={view() === "board"}>
         <Board

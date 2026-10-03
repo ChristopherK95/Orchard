@@ -1,11 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window and popped-out Manual editors may call the app's commands, listen for core events, close their own window, and open web links in the system browser.",
+  "description": "The main window and popped-out Manual editors may call the app's commands, listen for core events, move, minimise, maximise and close their own window (they draw their own title bar), and open web links in the system browser.",
   "windows": ["main", "editor-*"],
   "permissions": [
     "core:default",
     "core:window:allow-destroy",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-start-dragging",
     {
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "https://*" }, { "url": "http://*" }, { "url": "mailto:*" }]

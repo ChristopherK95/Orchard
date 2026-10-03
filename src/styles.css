@@ -687,3 +687,16 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .menu-item .badge { margin-left: auto; }
 .context-bar .bar-actions button.icon { width: 24px; padding: 0; border-color: transparent; }
 .context-bar .bar-actions button.icon:hover:not(:disabled) { border-color: var(--line-strong); }
+
+/* The windows' own title bar (no native decorations): the app's bar is the drag region, with
+   Windows-style minimise / maximise / close at the right edge, full height. */
+.titlebar { padding-right: 0; user-select: none; }
+.titlebar .name, .titlebar .path { cursor: default; }
+.window-controls { display: flex; align-self: stretch; margin-left: 4px; }
+.window-controls button { min-height: 0; height: 100%; width: 46px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--fg-2); }
+.window-controls button:hover:not(:disabled) { background: var(--bg-4); color: var(--fg-1); }
+.window-controls button.close:hover:not(:disabled) { background: #c42b1c; color: #fff; }
+.titlebar.bare { flex: none; }
+.titlebar.bare .name { font-size: 12px; font-weight: 500; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.startup-window { height: 100%; display: flex; flex-direction: column; }
+.startup-window > :not(.titlebar) { flex: 1; min-height: 0; height: auto; }
