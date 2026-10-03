@@ -2,7 +2,7 @@
 
 mod support;
 
-use editor_core::{CoreEvent, SlashCommand};
+use editor_core::SlashCommand;
 use support::*;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -17,17 +17,7 @@ async fn a_sessions_slash_commands_come_from_the_agent_and_are_announced() {
     );
     let core = core_with(&fake);
     core.open_workspace(repo.path()).await.unwrap();
-    let mut events = core.subscribe();
     let id = core.new_session().await.unwrap();
-
-    let announced = next_event(&mut events, "the slash commands", |event| match event {
-        CoreEvent::AvailableCommandsChanged {
-            session_id,
-            commands,
-        } if session_id == id => Some(commands),
-        _ => None,
-    })
-    .await;
 
     let expected = vec![
         SlashCommand {
@@ -41,6 +31,9 @@ async fn a_sessions_slash_commands_come_from_the_agent_and_are_announced() {
             hint: None,
         },
     ];
-    assert_eq!(announced, expected);
-    assert_eq!(core.available_commands(id).unwrap(), expected);
+    // (The list can come before the session is registered: it's kept for it then.)
+    eventually("the slash commands", || {
+        core.available_commands(id).unwrap() == expected
+    })
+    .await;
 }

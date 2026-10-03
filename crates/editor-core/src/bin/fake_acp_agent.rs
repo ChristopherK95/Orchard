@@ -32,6 +32,8 @@
 //! Each finished turn (the prompt and the Agent's reply) is kept in the JSON file named by
 //! `FAKE_ACP_HISTORY`, like Claude Code's own transcripts, so `session/load` can replay it as
 //! `user_message_chunk` / `agent_message_chunk` updates, even from a later process.
+//! A `session/load` of a session with no finished turn fails with `-32002` ("Resource not
+//! found"), as Claude Code's does: it has no conversation until the first message.
 //!
 //! Every received message is appended to the file named by `FAKE_ACP_LOG`, preceded by a
 //! `{"started": <pid>}` line, so tests can assert on what the core sent. A `session/close` is
@@ -250,9 +252,18 @@ impl Agent {
                 // Picks a session back up and replays its conversation first.
                 "session/load" => {
                     let session_id = params["sessionId"].as_str().unwrap_or_default().to_owned();
+                    let history = read_history();
+                    // Like Claude Code, which writes a conversation down with its first message.
+                    if history.get(&session_id).is_none() {
+                        if let Some(id) = id {
+                            send(
+                                json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32002, "message": format!("Resource not found: {session_id}") } }),
+                            );
+                        }
+                        continue;
+                    }
                     let cwd = params["cwd"].as_str().unwrap_or_default().to_owned();
                     self.cwds.insert(session_id.clone(), cwd);
-                    let history = read_history();
                     for entry in history[&session_id].as_array().into_iter().flatten() {
                         let kind = if entry["role"] == "user" {
                             "user_message_chunk"

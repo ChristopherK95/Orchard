@@ -67,6 +67,9 @@ impl SlashCommand {
     }
 }
 
+/// ACP's "Resource not found" error: e.g. `session/load` of a conversation Claude Code doesn't have.
+const RESOURCE_NOT_FOUND: i64 = -32002;
+
 /// The Tabs view's view slot: its one visible Tab (the Columns view has a slot per column).
 pub const TABS_SLOT: &str = "tabs";
 
@@ -428,6 +431,9 @@ struct Inner {
     state: Mutex<State>,
     /// The single shared ACP adapter; serialised so concurrent callers never start two.
     adapter: tokio::sync::Mutex<Option<Arc<Connection>>>,
+    /// Slash-command lists that arrived for a session before it was registered (the adapter sends
+    /// a new session's list right after creating it), by ACP id; `register_session` takes them.
+    early_commands: Mutex<HashMap<String, Vec<SlashCommand>>>,
     /// The visible Tabs by view slot (the Tabs view's, or a column's), each with the switch that
     /// ends its stream when another is shown there.
     visible_tabs: Mutex<HashMap<String, (Arc<Session>, oneshot::Sender<()>)>>,
@@ -567,6 +573,8 @@ struct Session {
     edit_notes: Mutex<EditNotes>,
     /// The slash commands the Agent last said it offers (none until its process has started).
     commands: Mutex<Vec<SlashCommand>>,
+    /// It has been sent a prompt, so Claude Code has a conversation for it (see `SavedSession`).
+    started: AtomicBool,
     control: Mutex<Control>,
 }
 
@@ -668,6 +676,7 @@ impl Core {
             state: Mutex::default(),
             adapter: tokio::sync::Mutex::new(None),
             visible_tabs: Mutex::new(HashMap::new()),
+            early_commands: Mutex::default(),
             discovery: Mutex::new(None),
             refresh_lock: tokio::sync::Mutex::new(()),
             settings: Mutex::new(loaded),
@@ -1376,22 +1385,7 @@ impl Core {
 
     /// Drops a closed session from the editor and ends its Tab's stream.
     fn forget_session(&self, session: &Arc<Session>) {
-        let id = session.info.lock().expect("info lock").id;
-        {
-            let mut state = self.inner.state.lock().expect("state lock");
-            state.sessions.remove(&id);
-            state.by_acp_id.remove(&session.acp_id);
-        }
-        self.inner
-            .visible_tabs
-            .lock()
-            .expect("visible tab lock")
-            .retain(|_, (shown, _)| !Arc::ptr_eq(shown, session)); // ends its streams
-        let _ = self
-            .inner
-            .events
-            .send(CoreEvent::SessionClosed { session_id: id });
-        self.inner.actors_may_change();
+        self.inner.forget_session(session);
     }
     /// Local and remote branches, for the "existing branch" picker. Fetches first, so a colleague's
     /// branch pushed a minute ago is there; if that fails, it says so and lists what was last fetched.
@@ -1497,6 +1491,7 @@ impl Core {
                     worktree: root,
                     permission_mode: PermissionMode::AskForEdits,
                     files: vec![],
+                    started: false,
                 };
                 Some(
                     self.inner
@@ -2243,7 +2238,7 @@ impl Core {
         let _ = self.stop_agent(&session).await;
         let saved = session.saved();
         self.forget_session(&session);
-        {
+        if saved.started {
             let mut state = self.inner.state.lock().expect("state lock");
             app_state::remember_closed(&mut state.recent, saved.clone());
         }
@@ -2383,6 +2378,9 @@ impl Core {
         }
         prompt.push(json!({ "type": "text", "text": text }));
         let params = json!({ "sessionId": session.acp_id, "prompt": prompt });
+        if !session.started.swap(true, Ordering::SeqCst) {
+            self.inner.persist(); // (it has a conversation to bring back now)
+        }
         let inner = self.inner.clone();
         tokio::spawn(async move {
             let result = connection.request("session/prompt", params).await;
@@ -2725,6 +2723,26 @@ impl Core {
 }
 
 impl Inner {
+    /// Drops a closed session from the editor and ends its Tab's stream. The saved Tabs no longer
+    /// list it by the time `SessionClosed` goes out.
+    fn forget_session(self: &Arc<Self>, session: &Arc<Session>) {
+        let id = session.info.lock().expect("info lock").id;
+        {
+            let mut state = self.state.lock().expect("state lock");
+            state.sessions.remove(&id);
+            state.by_acp_id.remove(&session.acp_id);
+        }
+        self.persist();
+        self.visible_tabs
+            .lock()
+            .expect("visible tab lock")
+            .retain(|_, (shown, _)| !Arc::ptr_eq(shown, session)); // ends its streams
+        let _ = self
+            .events
+            .send(CoreEvent::SessionClosed { session_id: id });
+        self.actors_may_change();
+    }
+
     fn documents(&self) -> std::sync::MutexGuard<'_, DocumentTracker> {
         self.documents.lock().expect("documents lock")
     }
@@ -3057,7 +3075,14 @@ impl Inner {
             tool_calls: Mutex::default(),
             files: Mutex::new(saved.files.iter().cloned().collect()),
             edit_notes: Mutex::default(),
-            commands: Mutex::default(),
+            commands: Mutex::new(
+                self.early_commands
+                    .lock()
+                    .expect("early commands lock")
+                    .remove(&saved.acp_id)
+                    .unwrap_or_default(),
+            ),
+            started: AtomicBool::new(saved.started),
             control: Mutex::new(Control {
                 suspended: stopped,
                 loaded: !stopped,
@@ -3108,7 +3133,12 @@ impl Inner {
             let Some(workspace) = &state.workspace else {
                 return;
             };
-            let mut open: Vec<_> = state.sessions.values().collect();
+            // (A Tab never sent a prompt has no conversation to bring back.)
+            let mut open: Vec<_> = state
+                .sessions
+                .values()
+                .filter(|s| s.started.load(Ordering::SeqCst))
+                .collect();
             open.sort_by_key(|s| s.info.lock().expect("info lock").id);
             let saved = WorkspaceState {
                 tabs: open.into_iter().map(|s| s.saved()).collect(),
@@ -3430,6 +3460,21 @@ impl Inner {
         let inner = self.clone();
         tokio::spawn(async move {
             let reopened = inner.reopen(&session, None).await;
+            if let Err(CoreError::Acp(AcpError::Rpc {
+                code: RESOURCE_NOT_FOUND,
+                ..
+            })) = &reopened
+            {
+                // Claude Code has no such conversation (it was never sent a message, or its
+                // transcript is gone): retrying can't help, and there's nothing to show. The Tab
+                // goes; if its Worktree has no other, the view offers a new session there.
+                session.update(|control| {
+                    control.loading = false;
+                    control.closed = true;
+                });
+                inner.forget_session(&session);
+                return;
+            }
             let stopped = match &reopened {
                 Ok(connection) => matches!(
                     close_acp(connection, &session.acp_id).await,
@@ -3647,10 +3692,18 @@ impl Inner {
     fn handle(self: &Arc<Self>, incoming: Incoming, generation: u64) {
         match incoming {
             Incoming::Notification { method, params } if method == "session/update" => {
+                let update = &params["update"];
                 let Some(session) = self.session_for(&params) else {
+                    if update["sessionUpdate"] == "available_commands_update" {
+                        if let Some(acp_id) = params["sessionId"].as_str() {
+                            self.early_commands
+                                .lock()
+                                .expect("early commands lock")
+                                .insert(acp_id.to_owned(), SlashCommand::list_from(update));
+                        }
+                    }
                     return;
                 };
-                let update = &params["update"];
                 match update["sessionUpdate"].as_str() {
                     // Only meaningful while `session/load` replays a conversation: live, the
                     // user's message is already in the transcript.
@@ -3747,6 +3800,7 @@ impl Session {
             name: info.name.clone(),
             worktree: info.worktree.clone(),
             permission_mode: info.permission_mode,
+            started: self.started.load(Ordering::SeqCst),
             files: {
                 let mut files: Vec<PathBuf> = self
                     .files

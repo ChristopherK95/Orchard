@@ -150,10 +150,15 @@ impl FakeAgent {
                 ("FAKE_ACP_LOG".into(), self.log_path().display().to_string()),
                 (
                     "FAKE_ACP_HISTORY".into(),
-                    self.dir.path().join("history.json").display().to_string(),
+                    self.history_path().display().to_string(),
                 ),
             ],
         }
+    }
+
+    /// The fake agent's conversations (Claude Code's transcripts, in effect).
+    pub fn history_path(&self) -> PathBuf {
+        self.dir.path().join("history.json")
     }
 
     /// Where a core made with `core_with_state` keeps its app state.

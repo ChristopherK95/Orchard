@@ -49,6 +49,15 @@ pub(crate) struct SavedSession {
     /// The files it read or edited (for Edit notes, before its conversation is loaded again).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) files: Vec<PathBuf>,
+    /// It was sent a prompt, so Claude Code has a conversation to load. One that never was has
+    /// none: Claude Code writes a conversation down with its first message. (Saves from before
+    /// this was recorded count as started.)
+    #[serde(default = "started_by_default")]
+    pub(crate) started: bool,
+}
+
+fn started_by_default() -> bool {
+    true
 }
 
 /// How many Recent sessions are kept per Worktree.
@@ -121,6 +130,7 @@ mod tests {
             worktree: worktree.into(),
             permission_mode: PermissionMode::Plan,
             files: vec![],
+            started: true,
         }
     }
 

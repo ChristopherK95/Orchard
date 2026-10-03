@@ -104,7 +104,9 @@ async fn reopen_last_closed_brings_back_the_most_recent_close() {
     let core = core_with_state(&fake);
     core.open_workspace(repo.path()).await.unwrap();
     let first = core.new_session().await.unwrap();
+    turn(&core, first, "one").await;
     let second = core.new_session().await.unwrap();
+    turn(&core, second, "two").await; // (only a used Tab has a conversation to reopen)
     core.close_tab(second).await.unwrap();
     core.close_tab(first).await.unwrap();
 
@@ -144,6 +146,7 @@ async fn a_restart_restores_every_open_tab_as_suspended() {
             .unwrap();
         core.show_session(worktree_tab).unwrap(); // the Tab last looked at
         let closed = core.new_session().await.unwrap();
+        turn(&core, closed, "closed later").await; // (a used Tab: Recent sessions keeps it)
         core.close_tab(closed).await.unwrap();
         (root, worktree)
     }; // the editor quits
@@ -278,4 +281,61 @@ async fn closing_and_reopening_survive_a_restart() {
         core.transcript(reopened).unwrap(),
         conversation(&[("kept", "Echo: kept")])
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tab_never_sent_a_prompt_is_neither_restored_nor_kept_in_recent_sessions() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(ECHO);
+    let root = {
+        let core = core_with_state(&fake);
+        let root = core.open_workspace(&setup.repo()).await.unwrap().root;
+        let used = core.new_session().await.unwrap();
+        turn(&core, used, "keep me").await;
+        let _unused = core.new_session().await.unwrap();
+        let closed_unused = core.new_session().await.unwrap();
+        core.close_tab(closed_unused).await.unwrap();
+        assert!(core.recent_sessions(&root).is_empty(), "nothing to reopen");
+        root
+    }; // the editor quits
+
+    let core = core_with_state(&fake);
+    core.open_workspace(&setup.repo()).await.unwrap();
+    let names: Vec<_> = core.sessions().into_iter().map(|s| s.name).collect();
+    assert_eq!(
+        names,
+        ["Session 1"],
+        "Claude Code has no conversation for the others"
+    );
+    assert!(core.recent_sessions(&root).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restored_tab_whose_conversation_claude_code_lacks_is_closed_when_shown() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(ECHO);
+    {
+        let core = core_with_state(&fake);
+        core.open_workspace(&setup.repo()).await.unwrap();
+        let id = core.new_session().await.unwrap();
+        turn(&core, id, "soon forgotten").await;
+    } // the editor quits
+    std::fs::remove_file(fake.history_path()).unwrap(); // Claude Code's transcript is gone
+
+    let core = core_with_state(&fake);
+    core.open_workspace(&setup.repo()).await.unwrap();
+    let mut events = core.subscribe();
+    let id = core.sessions()[0].id;
+    let _stream = core.show_session(id).unwrap();
+
+    next_event(&mut events, "the Tab to close", |event| match event {
+        CoreEvent::SessionClosed { session_id } if session_id == id => Some(()),
+        _ => None,
+    })
+    .await;
+    assert!(core.sessions().is_empty());
+    drop(core);
+    let core = core_with_state(&fake);
+    core.open_workspace(&setup.repo()).await.unwrap();
+    assert!(core.sessions().is_empty(), "and it isn't restored again");
 }
