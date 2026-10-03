@@ -2,8 +2,8 @@
 // transcript, streamed in its own view slot. One column has focus: it's the active Worktree, so the
 // next prompt, Y / N, the drawer and the palette all follow it. Only the focused column has the
 // full composer; the others show a one-line stub that focuses them.
-import { createEffect, For, onCleanup, Show } from "solid-js";
-import { Banner, Composer, RecentList, STATE_LABEL } from "./Chat";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { Banner, Composer, RecentList, reportHeight, STATE_LABEL } from "./Chat";
 import type { RecentSession, SessionId, SessionInfo } from "./core";
 import { CirclePause, GitBranch, Pin, Plus, Sparkles, X } from "./icons";
 import { Setup, type SetupView } from "./Setup";
@@ -96,6 +96,8 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
   });
   const sessions = () => props.sessionsIn(path);
   const session = () => sessions().find((s) => s.id === view.shown());
+  /** The floating composer's (or stub's) height: the transcript's last item stays above it. */
+  const [composerHeight, setComposerHeight] = createSignal(0);
   const setup = () => {
     const s = props.setupOf(path);
     return s && s.status.kind !== "done" ? s : undefined;
@@ -174,9 +176,13 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
                 onError={props.onError}
                 onOpenSnippet={props.onOpenSnippet}
                 answerKeys={() => props.isFocused}
+                bottomInset={composerHeight}
               />
-              <Show when={props.isFocused} fallback={<ComposerStub worktree={props.worktree} session={s} onFocus={() => props.onFocus(path)} />}>
-                <Composer session={s} />
+              <Show
+                when={props.isFocused}
+                fallback={<ComposerStub worktree={props.worktree} session={s} onFocus={() => props.onFocus(path)} onHeight={setComposerHeight} />}
+              >
+                <Composer session={s} onHeight={setComposerHeight} />
               </Show>
             </>
           )}
@@ -238,10 +244,10 @@ function ColumnHeader(props: ColumnsProps & { worktree: WorktreeTab; isFocused: 
 }
 
 /** An unfocused column's composer: one dimmed line that focuses the column. */
-function ComposerStub(props: { worktree: WorktreeTab; session: SessionInfo; onFocus: () => void }) {
+function ComposerStub(props: { worktree: WorktreeTab; session: SessionInfo; onFocus: () => void; onHeight: (px: number) => void }) {
   const branch = () => worktreeLabel(props.worktree);
   return (
-    <div class="composer stub">
+    <div class="composer stub" ref={(el) => reportHeight(el, props.onHeight)}>
       <button class="composer-stub" onClick={() => props.onFocus()}>
         <Show when={props.session.state !== "needsYou"} fallback="Answer the permission above, or click to focus">
           Message <GitBranch /> {branch()}

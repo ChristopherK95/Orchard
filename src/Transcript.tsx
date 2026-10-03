@@ -32,6 +32,8 @@ export function Transcript(props: {
   onOpenSnippet: (code: string, label: string) => void;
   /** Whether Y / N answer this transcript's open card (in the Columns view: only the focused column's). */
   answerKeys?: () => boolean;
+  /** How much of the bottom the floating composer covers: the list ends that far up. */
+  bottomInset?: () => number;
 }) {
   let scroller!: HTMLDivElement;
   let following = true;
@@ -46,6 +48,13 @@ export function Transcript(props: {
     overscan: 8,
     // Keys are absolute transcript indexes, so measurements survive prepending earlier pages.
     getItemKey: (i) => props.start + i,
+    // Room under the last item for the composer floating over the bottom; "the bottom" is above it.
+    get paddingEnd() {
+      return props.bottomInset?.() ?? 0;
+    },
+    get scrollPaddingEnd() {
+      return props.bottomInset?.() ?? 0;
+    },
   });
 
   // Rows keyed by their (stable) key, so re-measuring doesn't rebuild what's on screen.
@@ -53,6 +62,8 @@ export function Transcript(props: {
   const rowFor = (key: number) => virtualizer.getVirtualItems().find((row) => row.key === key);
 
   const toBottom = () => requestAnimationFrame(() => virtualizer.scrollToIndex(props.items.length - 1, { align: "end" }));
+  // The composer grew (Edit notes, an error): keep the newest item above it when following.
+  createEffect(on(() => props.bottomInset?.(), () => following && props.items.length > 0 && toBottom(), { defer: true }));
 
   // Follow new or growing output while the user is at the bottom.
   createEffect(

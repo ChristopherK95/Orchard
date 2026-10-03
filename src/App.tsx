@@ -162,6 +162,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
     return id === null ? undefined : sessions[id];
   };
   const [error, setError] = createSignal("");
+  /** The floating composer's height: the transcript's last item stays above it. */
+  const [composerHeight, setComposerHeight] = createSignal(0);
 
   // Worktrees as the core reports them, the one whose sessions are shown, and the session last
   // used in each (so switching back returns to it).
@@ -981,8 +983,16 @@ function WorkspaceView(props: { workspace: WorkspaceInfo }) {
       >
         {(s) => (
           <>
-            <Transcript sessionId={s.id} items={tabs.items} start={tabs.start()} onLoadEarlier={tabs.loadEarlier} onError={setError} onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })} />
-            <Composer session={s} />
+            <Transcript
+              sessionId={s.id}
+              items={tabs.items}
+              start={tabs.start()}
+              onLoadEarlier={tabs.loadEarlier}
+              onError={setError}
+              onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })}
+              bottomInset={composerHeight}
+            />
+            <Composer session={s} onHeight={setComposerHeight} />
           </>
         )}
       </Show>

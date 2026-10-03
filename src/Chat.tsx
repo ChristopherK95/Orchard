@@ -1,6 +1,6 @@
 // Pieces of the chat surface shared by the Tabs view and each column of the Columns view: the
 // composer, banners, the Recent sessions list and the state labels.
-import { createEffect, createSignal, For, type JSX, Match, onMount, Show, Switch } from "solid-js";
+import { createEffect, createSignal, For, type JSX, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { core, type PermissionMode, type RecentSession, type SessionId, type SessionInfo, type SessionState } from "./core";
 import { EditNotes } from "./EditNotes";
 import { createSlashMenu, SlashMenu, useSlashCommands } from "./SlashCommands";
@@ -62,7 +62,15 @@ const MODE_LABEL: Record<PermissionMode, string> = {
 /** Unsent composer text by session. */
 const drafts = new Map<SessionId, string>();
 
-export function Composer(props: { session: SessionInfo }) {
+/** Reports an element's height as it changes (the floating composer's, for the transcript). */
+export function reportHeight(el: HTMLElement, onHeight?: (px: number) => void) {
+  if (!onHeight) return;
+  const observer = new ResizeObserver(() => onHeight(el.offsetHeight));
+  observer.observe(el);
+  onCleanup(() => observer.disconnect());
+}
+
+export function Composer(props: { session: SessionInfo; onHeight?: (px: number) => void }) {
   // The draft outlives the composer: it moves between columns with focus, and Tabs get switched.
   const [text, setDraft] = createSignal(drafts.get(props.session.id) ?? "");
   const setText = (value: string) => {
@@ -121,7 +129,7 @@ export function Composer(props: { session: SessionInfo }) {
   const locked = () => props.session.state === "exited" || props.session.state === "needsYou";
 
   return (
-    <div class="composer" style={{ "--c": worktreeColour(props.session.worktree) }}>
+    <div class="composer" ref={(el) => reportHeight(el, props.onHeight)} style={{ "--c": worktreeColour(props.session.worktree) }}>
       <EditNotes sessionId={props.session.id} />
       <Show when={error()}>
         <p class="error">

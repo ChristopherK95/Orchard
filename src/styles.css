@@ -714,3 +714,13 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .slash-item .hint { font: 11.5px var(--mono); color: var(--fg-dim); flex: none; }
 .slash-item .desc { font-size: 12.5px; color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .slash-empty { margin: 0; padding: 10px 12px; font-size: 12.5px; color: var(--fg-3); }
+
+/* The composer floats over the bottom of the transcript, which runs on underneath and fades out
+   behind it (the transcript keeps room below its last item; see Transcript's bottomInset). Only
+   its controls take clicks: the faded strip above the input still scrolls the transcript. */
+.main-col, .column-body { position: relative; }
+.composer { position: absolute; left: 0; right: 0; bottom: 0; z-index: 5; padding: 22px 24px 13px; border-top: 0; pointer-events: none; background: linear-gradient(to bottom, rgba(21, 23, 28, 0) 0%, rgba(21, 23, 28, 0.9) 35%, var(--bg-1) 60%); }
+.composer > * { pointer-events: auto; }
+.composer-box { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); }
+.composer-box:focus-within { box-shadow: 0 0 0 1px var(--accent), 0 8px 24px rgba(0, 0, 0, 0.5); }
+.composer.stub { padding: 18px 24px 10px; }
