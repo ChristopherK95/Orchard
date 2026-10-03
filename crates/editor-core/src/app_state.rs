@@ -35,6 +35,17 @@ pub(crate) struct WorkspaceState {
     /// The Worktrees pinned as columns of the Columns view.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) pinned: Vec<PathBuf>,
+    /// When it was last opened, in milliseconds since the Unix epoch (none for Workspaces saved
+    /// before this was recorded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) opened: Option<u64>,
+    /// Removed from the Recent Workspaces (opening it again lists it again); its Tabs are kept.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) hidden: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
 }
 
 /// An Agent session as it's remembered: enough to show its Tab and resume it.
@@ -86,15 +97,32 @@ pub(crate) fn load(path: &Path) -> Result<AppState, String> {
 }
 
 /// Saves one Workspace's state into the file, keeping the other Workspaces' entries as the file
-/// has them now, and replacing the file in one step so a crash mid-write can't leave half of it.
+/// has them now.
 pub(crate) fn save_workspace(
     path: &Path,
     root: &Path,
     saved: &WorkspaceState,
 ) -> Result<(), String> {
+    update(path, |state| {
+        state.workspaces.insert(root.to_owned(), saved.clone());
+    })
+}
+
+/// Takes `root` off the Recent Workspaces, keeping its saved Tabs.
+pub(crate) fn hide_workspace(path: &Path, root: &Path) -> Result<(), String> {
+    update(path, |state| {
+        if let Some(saved) = state.workspaces.get_mut(root) {
+            saved.hidden = true;
+        }
+    })
+}
+
+/// Changes the file as it is now with `change`, replacing it in one step so a crash mid-write
+/// can't leave half of it.
+fn update(path: &Path, change: impl FnOnce(&mut AppState)) -> Result<(), String> {
     let mut state = load(path)?;
     state.version = VERSION;
-    state.workspaces.insert(root.to_owned(), saved.clone());
+    change(&mut state);
     if let Some(folder) = path.parent() {
         std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
     }
@@ -107,6 +135,16 @@ pub(crate) fn save_workspace(
         format!("couldn't replace {}: {e}", path.display())
     })
 }
+
+/// The Workspaces to list as Recent Workspaces, most recently opened first; ones saved before
+/// the time was recorded come after, by path.
+pub(crate) fn recent_workspaces(state: &AppState) -> Vec<(&PathBuf, &WorkspaceState)> {
+    let mut listed: Vec<_> = state.workspaces.iter().filter(|(_, w)| !w.hidden).collect();
+    // (The map is ordered by path, and the sort is stable.)
+    listed.sort_by_key(|(_, w)| std::cmp::Reverse(w.opened));
+    listed
+}
+
 /// Remembers `closed` as its Worktree's most recent session (once), keeping the list short.
 pub(crate) fn remember_closed(recent: &mut Vec<SavedSession>, closed: SavedSession) {
     recent.retain(|s| s.acp_id != closed.acp_id);
@@ -147,6 +185,8 @@ mod tests {
                 PathBuf::from("C:/repo"),
                 PathBuf::from("C:/repo.worktrees/x"),
             ],
+            opened: Some(1_700_000_000_000),
+            hidden: true,
         };
         let other = WorkspaceState {
             tabs: vec![saved("d", "C:/other")],
@@ -178,6 +218,42 @@ mod tests {
         assert!(load(&path).is_err());
         assert!(save_workspace(&path, Path::new("C:/repo"), &WorkspaceState::default()).is_err());
         assert!(path.is_dir(), "left alone");
+    }
+
+    #[test]
+    fn recent_workspaces_are_newest_first_then_untimed_by_path_without_hidden_ones() {
+        let at = |opened: Option<u64>, hidden: bool| WorkspaceState {
+            opened,
+            hidden,
+            ..WorkspaceState::default()
+        };
+        let mut state = AppState::default();
+        state.workspaces.insert("C:/b".into(), at(None, false));
+        state.workspaces.insert("C:/a".into(), at(None, false));
+        state.workspaces.insert("C:/old".into(), at(Some(1), false));
+        state.workspaces.insert("C:/new".into(), at(Some(2), false));
+        state.workspaces.insert("C:/gone".into(), at(Some(3), true));
+        let order: Vec<_> = recent_workspaces(&state)
+            .into_iter()
+            .map(|(root, _)| root.to_str().unwrap())
+            .collect();
+        assert_eq!(order, ["C:/new", "C:/old", "C:/a", "C:/b"]);
+    }
+
+    #[test]
+    fn hiding_a_workspace_keeps_its_tabs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let repo = WorkspaceState {
+            tabs: vec![saved("a", "C:/repo")],
+            opened: Some(5),
+            ..WorkspaceState::default()
+        };
+        save_workspace(&path, Path::new("C:/repo"), &repo).unwrap();
+        hide_workspace(&path, Path::new("C:/repo")).unwrap();
+        let loaded = load(&path).unwrap();
+        assert!(loaded.workspaces[Path::new("C:/repo")].hidden);
+        assert_eq!(loaded.workspaces[Path::new("C:/repo")].tabs, repo.tabs);
     }
 
     #[test]

@@ -162,6 +162,18 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .list-box-row { display: flex; align-items: center; gap: 10px; padding: 11px 14px; }
 .list-box-row > .lucide { color: var(--danger); }
 .startup-actions { display: flex; align-items: center; gap: 12px; }
+/* The Workspace picker (ticket 29): Ctrl+P's search and list in a startup box. */
+.picker { background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+.picker .palette-search button { flex: none; }
+.picker .palette-list { max-height: min(50vh, 440px); }
+.picker-row { cursor: default; }
+.picker-row .file { font-weight: 600; }
+.picker-row .dir { font-family: var(--mono); font-size: 11.5px; }
+.picker-row .remove { visibility: hidden; color: var(--fg-3); }
+.picker-row:hover .remove, .picker-row.on .remove { visibility: visible; }
+.picker-row.gone .file, .picker-row.gone .dir { color: var(--fg-dim); }
+.picker-row .not-found { color: var(--warn); }
+.picker-keys { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 
 .workspace { height: 100%; display: flex; flex-direction: column; position: relative; }
 

@@ -145,11 +145,12 @@ export function CommandPalette(props: {
   );
 }
 
-/** The file name with its matched characters in the accent, then its folder, muted. */
-function Highlighted(props: { text: string; indices: number[] }) {
+/** The file name with its matched characters in the accent, then its folder, muted. (Also the
+ *  Workspace picker's rows, whose paths can be `\`-separated.) */
+export function Highlighted(props: { text: string; indices: number[] }) {
   const parts = () => {
     const marked = new Set(props.indices);
-    const slash = props.text.lastIndexOf("/");
+    const slash = Math.max(props.text.lastIndexOf("/"), props.text.lastIndexOf("\\"));
     const name: { text: string; hit: boolean }[] = [];
     const dir: { text: string; hit: boolean }[] = [];
     // Offsets are bytes; paths here are mostly ASCII, so walk UTF-8 to be exact.

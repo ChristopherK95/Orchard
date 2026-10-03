@@ -35,6 +35,7 @@ import { Banner, Composer, RecentList, STATE_LABEL } from "./Chat";
 import { Columns, COLUMNS_MIN_WIDTH } from "./Columns";
 import { createTabView, type TabView } from "./TabView";
 import { BareTitlebar, WindowControls } from "./WindowControls";
+import { WorkspacePicker } from "./WorkspacePicker";
 import { ChevronDown, GitBranch, Loader, PanelRight, Plus, Search, Settings, Sparkles, X } from "./icons";
 
 export function App() {
@@ -106,47 +107,22 @@ function Prerequisites(props: { problems: MissingPrerequisite[] }) {
   );
 }
 
+/** The CLI argument's repo opens straight away; otherwise (or if it can't) the Workspace picker. */
 function OpenWorkspace(props: { onOpened: (w: WorkspaceInfo) => void }) {
-  const [path, setPath] = createSignal("");
-  const [error, setError] = createSignal("");
+  const [picker, setPicker] = createSignal<{ text: string; error: string } | null>(null);
   onMount(async () => {
-    setPath((await core.defaultWorkspacePath()) ?? "");
-    // The benchmark (ticket 05) opens its repository without anyone clicking.
-    if (path() && (await core.benchMode())) {
-      try {
-        props.onOpened(await core.openWorkspace(path()));
-      } catch (err) {
-        setError(String(err));
-      }
+    const path = (await core.defaultWorkspacePath()) ?? "";
+    if (!path) return setPicker({ text: "", error: "" });
+    try {
+      props.onOpened(await core.openWorkspace(path));
+    } catch (err) {
+      setPicker({ text: path, error: String(err) });
     }
   });
-
-  const open = async (e: Event) => {
-    e.preventDefault();
-    setError("");
-    try {
-      props.onOpened(await core.openWorkspace(path().trim()));
-    } catch (err) {
-      setError(String(err));
-    }
-  };
-
   return (
-    <div class="startup">
-      <div class="startup-card">
-        <AppMark />
-        <h1>Open a repository</h1>
-        <form onSubmit={open}>
-          <input class="mono" value={path()} onInput={(e) => setPath(e.currentTarget.value)} placeholder="Path to a git repository" autofocus spellcheck={false} />
-          <button type="submit" class="primary" disabled={!path().trim()}>
-            Open <kbd>Enter</kbd>
-          </button>
-        </form>
-        <Show when={error()}>
-          <p class="error small">{error()}</p>
-        </Show>
-      </div>
-    </div>
+    <Show when={picker()}>
+      {(p) => <WorkspacePicker header={<AppMark />} onOpened={props.onOpened} initialText={p().text} error={p().error} />}
+    </Show>
   );
 }
 

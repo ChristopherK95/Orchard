@@ -256,6 +256,8 @@ pub enum CoreError {
     NoPopOut,
     #[error("that session isn't in this Worktree's Recent sessions")]
     UnknownRecentSession,
+    #[error("couldn't save the Recent Workspaces: {0}")]
+    StateNotSaved(String),
     #[error("the Agent session isn't waiting for a permission answer")]
     NoPendingPermission,
     #[error("`{0}` isn't one of the options the Agent offered")]
@@ -289,6 +291,26 @@ pub struct WorkspaceInfo {
     pub root: PathBuf,
     pub name: String,
 }
+
+/// One of the Recent Workspaces, as the Workspace picker lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentWorkspace {
+    /// The main checkout's root.
+    pub root: PathBuf,
+    pub name: String,
+    /// When it was last opened (ms since the Unix epoch); none if before this was recorded.
+    pub opened: Option<u64>,
+    /// How many Tabs opening it restores.
+    pub sessions: usize,
+    /// Its folder is there (one that isn't can't be opened, but stays listed).
+    pub exists: bool,
+    /// Byte offsets into `root` of the characters the filter matched.
+    pub indices: Vec<u32>,
+}
+
+/// How many Recent Workspaces the picker lists.
+pub const RECENT_WORKSPACES: usize = 20;
 
 /// Small broadcast events. Transcript content is never broadcast; it streams only to watchers.
 #[derive(Debug, Clone, Serialize)]
@@ -498,6 +520,8 @@ struct State {
     bases: BTreeMap<PathBuf, String>,
     /// The Worktrees pinned as columns of the Columns view (shown in Worktree row order).
     pinned: Vec<PathBuf>,
+    /// When the Workspace was opened (ms since the Unix epoch), for the Recent Workspaces.
+    opened: Option<u64>,
     sessions: HashMap<SessionId, Arc<Session>>,
     by_acp_id: HashMap<String, SessionId>,
     next_session: u64,
@@ -923,16 +947,72 @@ impl Core {
             let mut state = self.inner.state.lock().expect("state lock");
             state.workspace = Some(workspace.clone());
             state.worktrees = listed;
+            state.opened = Some(unix_millis());
             // Setups belong to the previous Workspace's Worktrees.
             for (_, run) in state.setups.drain() {
                 run.stop();
             }
         }
         self.inner.restore(&workspace.root);
+        // (So it heads the Recent Workspaces even if no Tab is ever opened in it.)
+        self.inner.persist();
         self.inner.watch_worktrees(&workspace.root).await;
         self.inner.update_actors().await;
         self.start_monitor();
         Ok(workspace)
+    }
+
+    /// The Recent Workspaces matching `query` (best first; all of them, newest first, when it's
+    /// empty), at most `RECENT_WORKSPACES`.
+    pub fn recent_workspaces(&self, query: &str) -> Vec<RecentWorkspace> {
+        let saved = self.inner.saved_state();
+        let listed = app_state::recent_workspaces(&saved);
+        let found: Vec<(usize, Vec<u32>)> = if query.trim().is_empty() {
+            (0..listed.len()).map(|i| (i, vec![])).collect()
+        } else {
+            let roots: Vec<String> = listed
+                .iter()
+                .map(|(root, _)| root.to_string_lossy().into_owned())
+                .collect();
+            crate::files::find(&roots, query, RECENT_WORKSPACES)
+                .into_iter()
+                .filter_map(|m| Some((roots.iter().position(|r| *r == m.path)?, m.indices)))
+                .collect()
+        };
+        found
+            .into_iter()
+            .take(RECENT_WORKSPACES)
+            .map(|(i, indices)| {
+                let (root, saved) = listed[i];
+                RecentWorkspace {
+                    root: root.clone(),
+                    name: root
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    opened: saved.opened,
+                    sessions: saved.tabs.len(),
+                    exists: root.is_dir(),
+                    indices,
+                }
+            })
+            .collect()
+    }
+
+    /// Takes a Workspace off the Recent Workspaces; its saved Tabs and Recent sessions stay, and
+    /// opening it again lists it again.
+    pub fn remove_recent_workspace(&self, root: &Path) -> Result<(), CoreError> {
+        let Some(path) = self
+            .inner
+            .config
+            .state_path
+            .as_ref()
+            .filter(|_| self.inner.state_writable)
+        else {
+            return Ok(());
+        };
+        let _in_order = self.inner.persist_lock.lock().expect("persist lock");
+        app_state::hide_workspace(path, root).map_err(CoreError::StateNotSaved)
     }
 
     /// Checks the Agents' memory and Idle times every `MONITOR_INTERVAL` from now on.
@@ -3146,6 +3226,9 @@ impl Inner {
                 active: state.active.clone(),
                 bases: state.bases.clone(),
                 pinned: state.pinned.clone(),
+                opened: state.opened,
+                // (Opening a Workspace lists it again.)
+                hidden: false,
             };
             (workspace.root.clone(), saved)
         };
@@ -3154,17 +3237,32 @@ impl Inner {
         }
     }
 
+    /// The app state as saved now (the file can change after startup: this editor saves into it,
+    /// and so may another one); what was loaded at startup if it can't be read.
+    fn saved_state(&self) -> AppState {
+        match self
+            .config
+            .state_path
+            .as_ref()
+            .filter(|_| self.state_writable)
+        {
+            Some(path) => {
+                let _in_order = self.persist_lock.lock().expect("persist lock");
+                app_state::load(path)
+                    .unwrap_or_else(|_| self.app_state.lock().expect("app state lock").clone())
+            }
+            None => self.app_state.lock().expect("app state lock").clone(),
+        }
+    }
+
     /// Brings back the Tabs open when the editor last closed this Workspace, Suspended (no Agent
     /// starts until one is used), in their Worktrees and order, and its Recent sessions. Ones whose
     /// Worktree is gone are dropped (but not because listing the Worktrees failed).
     fn restore(&self, root: &Path) {
         let saved = self
-            .app_state
-            .lock()
-            .expect("app state lock")
+            .saved_state()
             .workspaces
-            .get(root)
-            .cloned()
+            .remove(root)
             .unwrap_or_default();
         let mut created = vec![];
         {
@@ -4068,4 +4166,11 @@ impl Session {
             Err(broadcast::error::RecvError::Closed) => None,
         }
     }
+}
+
+/// Now, in milliseconds since the Unix epoch.
+fn unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
 }

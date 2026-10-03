@@ -17,3 +17,5 @@ tauri = { version = "2", features = [] }
 notify-rust = "4.18"
 # Links in the chat open in the system browser instead of navigating the app.
 tauri-plugin-opener = "2"
+# The Workspace picker's Browse… (the native folder dialog).
+tauri-plugin-dialog = "2"

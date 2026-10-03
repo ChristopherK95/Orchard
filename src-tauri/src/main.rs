@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use editor_core::{
     check_prerequisites, AdapterCommand, BranchList, Core, CoreConfig, CoreError, CreatedWorktree,
     DirEntry, FileMatch, LoadedSettings, MissingPrerequisite, NewWorktree, OpenedFile,
-    PermissionMode, PoppedOutFile, RecentSession, RemovalCheck, RemoveWorktree, RemovedWorktree,
-    SaveOver, SessionId, SessionInfo, SetupInfo, SlashCommand, Tools, TranscriptDelta,
-    TranscriptPage, WorkspaceInfo, WorktreeInfo,
+    PermissionMode, PoppedOutFile, RecentSession, RecentWorkspace, RemovalCheck, RemoveWorktree,
+    RemovedWorktree, SaveOver, SessionId, SessionInfo, SetupInfo, SlashCommand, Tools,
+    TranscriptDelta, TranscriptPage, WorkspaceInfo, WorktreeInfo,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -51,11 +51,47 @@ fn default_workspace_path() -> Option<String> {
         .or_else(|| std::env::var("AGENT_EDITOR_WORKSPACE").ok())
 }
 
+/// Opens the repository containing `path`; a leading `~` is the home folder.
 #[tauri::command]
-async fn open_workspace(core: State<'_, Core>, path: String) -> CommandResult<WorkspaceInfo> {
-    core.open_workspace(path.as_ref())
-        .await
+async fn open_workspace(
+    app: AppHandle,
+    core: State<'_, Core>,
+    path: String,
+) -> CommandResult<WorkspaceInfo> {
+    let home = app.path().home_dir().ok();
+    let path = match (path.strip_prefix('~'), home) {
+        (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with(['/', '\\']) => {
+            home.join(rest.trim_start_matches(['/', '\\']))
+        }
+        _ => PathBuf::from(path),
+    };
+    core.open_workspace(&path).await.map_err(|e| e.to_string())
+}
+
+/// The Workspace picker's list: the Recent Workspaces matching `query`.
+#[tauri::command]
+fn recent_workspaces(core: State<'_, Core>, query: String) -> Vec<RecentWorkspace> {
+    core.recent_workspaces(&query)
+}
+
+#[tauri::command]
+fn remove_recent_workspace(core: State<'_, Core>, root: String) -> CommandResult<()> {
+    core.remove_recent_workspace(root.as_ref())
         .map_err(|e| e.to_string())
+}
+
+/// The native folder dialog (the Workspace picker's Browse…); `None` if it was cancelled.
+#[tauri::command]
+async fn pick_folder(window: tauri::Window) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    window
+        .dialog()
+        .file()
+        .set_title("Open a repository")
+        .set_parent(&window)
+        .blocking_pick_folder()
+        .and_then(|folder| folder.into_path().ok())
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -743,6 +779,7 @@ async fn show_session(
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         // A closed window's files are no longer open (however it closed).
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
@@ -793,6 +830,9 @@ fn main() {
             prerequisites,
             default_workspace_path,
             open_workspace,
+            recent_workspaces,
+            remove_recent_workspace,
+            pick_folder,
             new_session,
             new_session_in,
             worktrees,

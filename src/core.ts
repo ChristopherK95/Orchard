@@ -11,6 +11,20 @@ export interface WorkspaceInfo {
   name: string;
 }
 
+/** One of the Recent Workspaces, as the Workspace picker lists it. */
+export interface RecentWorkspace {
+  root: string;
+  name: string;
+  /** When it was last opened (ms since the Unix epoch); null if before this was recorded. */
+  opened: number | null;
+  /** How many Tabs opening it restores. */
+  sessions: number;
+  /** Its folder is there (one that isn't can't be opened). */
+  exists: boolean;
+  /** Byte offsets into `root` of the characters the filter matched. */
+  indices: number[];
+}
+
 /** The Tabs view's view slot (each Columns view column has its own). */
 export const TABS_SLOT = "tabs";
 
@@ -398,7 +412,14 @@ export type CoreEvent =
 export const core = {
   prerequisites: () => invoke<MissingPrerequisite[]>("prerequisites"),
   defaultWorkspacePath: () => invoke<string | null>("default_workspace_path"),
+  /** Opens the repository containing `path` (a leading `~` is the home folder). */
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
+  /** The Workspace picker's list: the Recent Workspaces matching `query` (all, newest first, if empty). */
+  recentWorkspaces: (query: string) => invoke<RecentWorkspace[]>("recent_workspaces", { query }),
+  /** Takes a Workspace off the Recent Workspaces; its saved Tabs stay. */
+  removeRecentWorkspace: (root: string) => invoke<void>("remove_recent_workspace", { root }),
+  /** The native folder dialog; null if it was cancelled. */
+  pickFolder: () => invoke<string | null>("pick_folder"),
   newSession: () => invoke<SessionId>("new_session"),
   newSessionIn: (worktree: string) => invoke<SessionId>("new_session_in", { worktree }),
   /** The Worktree being looked at (its files are indexed and watched). */
