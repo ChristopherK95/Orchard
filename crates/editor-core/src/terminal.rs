@@ -1,8 +1,10 @@
 //! Worktree terminals: one interactive shell per Worktree, in a pseudo-terminal (ConPTY on Windows),
 //! started when the Terminal panel first asks for it. It keeps running out of sight until it exits,
-//! is closed, or its Worktree or Workspace goes. The panel draws it (xterm.js); the core keeps its
-//! latest output, so the panel can come back to a shell it left.
+//! is closed, or its Worktree or Workspace goes. A Terminal panel draws it (xterm.js): the Tabs
+//! view's, or a column's in the Columns view, each a view slot of its own. The core keeps its latest
+//! output, so a panel can come back to a shell it left.
 
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -28,7 +30,7 @@ pub enum TerminalOutput {
     Exited { code: Option<u32> },
 }
 
-/// A terminal's output for the panel: what it kept first, then what it prints from now on. Ends when
+/// A terminal's output for a panel: what it kept first, then what it prints from now on. Ends when
 /// the panel shows another terminal, or this one goes.
 pub struct TerminalStream(mpsc::UnboundedReceiver<TerminalOutput>);
 
@@ -73,19 +75,16 @@ pub(crate) struct Terminal {
 struct Shared {
     /// The latest `SCROLLBACK` bytes of output.
     output: String,
-    /// The panel, while it shows this terminal.
-    viewer: Option<mpsc::UnboundedSender<TerminalOutput>>,
+    /// The panels showing this terminal, by view slot.
+    viewers: HashMap<String, mpsc::UnboundedSender<TerminalOutput>>,
     /// How the shell exited, once it has (told again to a panel that comes back after).
     exited: Option<Option<u32>>,
 }
 
 impl Shared {
     fn send(&mut self, message: TerminalOutput) {
-        if let Some(viewer) = &self.viewer {
-            if viewer.send(message).is_err() {
-                self.viewer = None;
-            }
-        }
+        self.viewers
+            .retain(|_, viewer| viewer.send(message.clone()).is_ok());
     }
 }
 
@@ -186,10 +185,10 @@ impl Terminal {
         }))
     }
 
-    /// Makes the panel this terminal's viewer: its kept output comes first, as a `Replay` if
-    /// `returning` (a new shell's first output still wants its queries answered). A viewer before
-    /// it stops getting anything.
-    pub(crate) fn attach(&self, returning: bool) -> TerminalStream {
+    /// Shows this terminal in view slot `slot`: its kept output comes first, as a `Replay` if
+    /// `returning` (a new shell's first output still wants its queries answered). What the slot
+    /// was sent before ends.
+    pub(crate) fn attach(&self, slot: &str, returning: bool) -> TerminalStream {
         let (tx, rx) = mpsc::unbounded_channel();
         let mut shared = self.shared.lock().expect("terminal lock");
         if !shared.output.is_empty() {
@@ -202,13 +201,17 @@ impl Terminal {
         if let Some(code) = shared.exited {
             let _ = tx.send(TerminalOutput::Exited { code });
         }
-        shared.viewer = Some(tx);
+        shared.viewers.insert(slot.to_owned(), tx);
         TerminalStream(rx)
     }
 
-    /// Nothing shows this terminal now; its output is only kept.
-    pub(crate) fn detach(&self) {
-        self.shared.lock().expect("terminal lock").viewer = None;
+    /// View slot `slot` no longer shows this terminal.
+    pub(crate) fn detach(&self, slot: &str) {
+        self.shared
+            .lock()
+            .expect("terminal lock")
+            .viewers
+            .remove(slot);
     }
 
     pub(crate) fn write(&self, data: &str) {

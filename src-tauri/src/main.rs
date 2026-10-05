@@ -934,19 +934,21 @@ async fn show_session(
     Ok(())
 }
 
-/// Shows the Worktree's terminal in the Terminal panel (starting its shell, `cols` x `rows`, if it
-/// has none) and streams its output over a dedicated channel: what it kept first, then what it
-/// prints, whatever has arrived sent in one go. The terminal shown before stops sending.
+/// Shows the Worktree's terminal in view slot `slot`'s Terminal panel (starting its shell,
+/// `cols` x `rows`, if it has none) and streams its output over a dedicated channel: what it kept
+/// first, then what it prints, whatever has arrived sent in one go. The terminal the slot showed
+/// before stops sending there.
 #[tauri::command]
 async fn open_terminal(
     core: State<'_, Core>,
+    slot: String,
     worktree: PathBuf,
     cols: u16,
     rows: u16,
     on_output: Channel<Vec<TerminalOutput>>,
 ) -> CommandResult<()> {
     let mut stream = core
-        .open_terminal(&worktree, cols, rows)
+        .open_terminal(&slot, &worktree, cols, rows)
         .await
         .map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn(async move {
@@ -978,10 +980,10 @@ fn resize_terminal(
         .map_err(|e| e.to_string())
 }
 
-/// The Terminal panel is hidden; the shells keep running.
+/// View slot `slot`'s Terminal panel is hidden; the shells keep running.
 #[tauri::command]
-fn hide_terminal(core: State<'_, Core>) {
-    core.hide_terminal();
+fn hide_terminal(core: State<'_, Core>, slot: String) {
+    core.hide_terminal(&slot);
 }
 
 /// Stops the Worktree's shell and everything it started.

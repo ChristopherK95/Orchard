@@ -651,18 +651,19 @@ export const core = {
   /** Up to a page of items just before index `before` (for scrolling back). */
   transcriptPageBefore: (sessionId: SessionId, before: number) =>
     invoke<TranscriptPage>("transcript_page_before", { sessionId, before }),
-  /** Shows the Worktree's terminal in the Terminal panel, starting its shell (`cols` x `rows`) if it
-   *  has none; its output streams to `onOutput`. The terminal shown before stops sending. */
-  openTerminal: (worktree: string, cols: number, rows: number, onOutput: (batch: TerminalOutput[]) => void) => {
+  /** Shows the Worktree's terminal in view slot `slot`'s Terminal panel, starting its shell
+   *  (`cols` x `rows`) if it has none; its output streams to `onOutput`. The terminal the slot
+   *  showed before stops sending there. */
+  openTerminal: (slot: string, worktree: string, cols: number, rows: number, onOutput: (batch: TerminalOutput[]) => void) => {
     const channel = new Channel<TerminalOutput[]>();
     channel.onmessage = onOutput;
-    return invoke<void>("open_terminal", { worktree, cols, rows, onOutput: channel });
+    return invoke<void>("open_terminal", { slot, worktree, cols, rows, onOutput: channel });
   },
   /** Types keystrokes (or a paste) into the Worktree's terminal. */
   terminalInput: (worktree: string, data: string) => invoke<void>("terminal_input", { worktree, data }),
   resizeTerminal: (worktree: string, cols: number, rows: number) => invoke<void>("resize_terminal", { worktree, cols, rows }),
-  /** The Terminal panel is hidden; the shells keep running. */
-  hideTerminal: () => invoke<void>("hide_terminal"),
+  /** View slot `slot`'s Terminal panel is hidden; the shells keep running. */
+  hideTerminal: (slot: string) => invoke<void>("hide_terminal", { slot }),
   /** Stops the Worktree's shell and everything it started. */
   closeTerminal: (worktree: string) => invoke<void>("close_terminal", { worktree }),
   /** True when launched by the memory benchmark (ticket 05). */

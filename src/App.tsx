@@ -297,6 +297,17 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   /** The Tabs view's Terminal panel (the active Worktree's shell), and its width. */
   const [terminalOpen, setTerminalOpen] = createSignal(false);
   const [terminalWidth, setTerminalWidth] = createSignal(560);
+  /** The columns with their Terminal panel open (by Worktree), and the panels' height. */
+  const [columnTerminals, setColumnTerminals] = createSignal<string[]>([]);
+  const [columnTerminalHeight, setColumnTerminalHeight] = createSignal(280);
+  const toggleColumnTerminal = (path: string) =>
+    setColumnTerminals((open) => (open.includes(path) ? open.filter((p) => p !== path) : [...open, path]));
+  /** Ctrl+` and the title bar's button: the Tabs view's panel, or the focused column's. */
+  const toggleTerminal = () => {
+    setBoardOpen(false);
+    if (mainView() === "columns") toggleColumnTerminal(activeWorktree());
+    else setTerminalOpen((open) => !open);
+  };
   /** The drawer the title bar's button opens: the one last shown. */
   let lastDrawer: "files" | "git" = "files";
   const toggleDrawer = (which: "files" | "git") => {
@@ -632,10 +643,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       // (By position: the key under Esc, whatever the layout prints on it.)
       if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === "Backquote") {
         e.preventDefault();
-        if (!e.repeat && mainView() === "tabs") {
-          setBoardOpen(false);
-          setTerminalOpen((open) => !open);
-        }
+        if (!e.repeat) toggleTerminal();
         return;
       }
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "t") {
@@ -831,20 +839,15 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           Search files
           <kbd>Ctrl+P</kbd>
         </button>
-        <Show when={mainView() === "tabs"}>
-          <button
-            class="ghost icon"
-            classList={{ on: terminalOpen() }}
-            onClick={() => {
-              setBoardOpen(false);
-              setTerminalOpen((open) => !open);
-            }}
-            title="A terminal in this Worktree (Ctrl+`)"
-            aria-label="Terminal"
-          >
-            <SquareTerminal />
-          </button>
-        </Show>
+        <button
+          class="ghost icon"
+          classList={{ on: mainView() === "columns" ? columnTerminals().includes(activeWorktree()) : terminalOpen() }}
+          onClick={toggleTerminal}
+          title={mainView() === "columns" ? "A terminal in the focused column's Worktree (Ctrl+`)" : "A terminal in this Worktree (Ctrl+`)"}
+          aria-label="Terminal"
+        >
+          <SquareTerminal />
+        </button>
         <button
           class="ghost icon"
           classList={{ on: drawer() !== null }}
@@ -1173,6 +1176,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onRemove={setRemoving}
           onOpenSettings={() => openSettingsPage("repo")}
           onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })}
+          terminalOpen={(path) => columnTerminals().includes(path)}
+          onToggleTerminal={toggleColumnTerminal}
+          terminalHeight={columnTerminalHeight()}
+          onTerminalHeight={setColumnTerminalHeight}
           onError={setError}
         />
       </Show>
@@ -1235,11 +1242,14 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       </Show>
       <Show when={terminalOpen() && mainView() === "tabs"}>
         <TerminalPanel
+          slot={TABS_SLOT}
           worktree={activeWorktree()}
           label={worktree() ? worktreeLabel(worktree()!) : ""}
           colour={worktreeColour(activeWorktree())}
-          width={terminalWidth()}
-          onWidth={setTerminalWidth}
+          placement="side"
+          size={terminalWidth()}
+          onSize={setTerminalWidth}
+          takeFocus
           onClose={() => setTerminalOpen(false)}
         />
       </Show>

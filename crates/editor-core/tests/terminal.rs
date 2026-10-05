@@ -5,7 +5,7 @@ mod support;
 use std::path::Path;
 use std::time::Duration;
 
-use editor_core::{Core, NewWorktree, RemoveWorktree, TerminalOutput, TerminalStream};
+use editor_core::{Core, NewWorktree, RemoveWorktree, TerminalOutput, TerminalStream, TABS_SLOT};
 use support::*;
 
 /// A shell can take a while to start (PowerShell loads the user's profile).
@@ -73,7 +73,7 @@ async fn a_worktrees_shell_runs_in_its_folder_and_keeps_its_output_while_out_of_
     let (_fake, core) = core();
     let root = core.open_workspace(&setup.repo()).await.unwrap().root;
 
-    let mut stream = core.open_terminal(&root, 120, 30).await.unwrap();
+    let mut stream = core.open_terminal(TABS_SLOT, &root, 120, 30).await.unwrap();
     core.terminal_input(&root, print_marker_and_folder())
         .unwrap();
     let seen = output_until(&core, &root, &mut stream, "[Orchard]").await;
@@ -82,8 +82,8 @@ async fn a_worktrees_shell_runs_in_its_folder_and_keeps_its_output_while_out_of_
     assert!(seen.contains(&folder), "{seen}");
 
     // Hidden, then shown again: the same shell, with what it printed.
-    core.hide_terminal();
-    let mut again = core.open_terminal(&root, 100, 30).await.unwrap();
+    core.hide_terminal(TABS_SLOT);
+    let mut again = core.open_terminal(TABS_SLOT, &root, 100, 30).await.unwrap();
     match again.next().await {
         Some(TerminalOutput::Replay { text }) => assert!(text.contains("[Orchard]"), "{text}"),
         other => panic!("expected the kept output first, got {other:?}"),
@@ -96,7 +96,7 @@ async fn an_exited_shell_is_replaced_by_a_new_one_when_asked_again() {
     let (_fake, core) = core();
     let root = core.open_workspace(&setup.repo()).await.unwrap().root;
 
-    let mut stream = core.open_terminal(&root, 80, 24).await.unwrap();
+    let mut stream = core.open_terminal(TABS_SLOT, &root, 80, 24).await.unwrap();
     core.terminal_input(&root, print_marker_and_folder())
         .unwrap();
     output_until(&core, &root, &mut stream, "[Orchard]").await;
@@ -107,7 +107,7 @@ async fn an_exited_shell_is_replaced_by_a_new_one_when_asked_again() {
     })
     .await;
 
-    let mut fresh = core.open_terminal(&root, 80, 24).await.unwrap();
+    let mut fresh = core.open_terminal(TABS_SLOT, &root, 80, 24).await.unwrap();
     core.terminal_input(&root, print_marker_and_folder())
         .unwrap();
     output_until(&core, &root, &mut fresh, "[Orchard]").await;
@@ -128,7 +128,7 @@ async fn removing_a_worktree_stops_the_shell_standing_in_it() {
         .worktree
         .path;
 
-    let mut stream = core.open_terminal(&path, 80, 24).await.unwrap();
+    let mut stream = core.open_terminal(TABS_SLOT, &path, 80, 24).await.unwrap();
     core.terminal_input(&path, print_marker_and_folder())
         .unwrap();
     output_until(&core, &path, &mut stream, "[Orchard]").await;
@@ -149,4 +149,33 @@ async fn removing_a_worktree_stops_the_shell_standing_in_it() {
         core.terminal_input(&path, "x").is_err(),
         "its shell is gone"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn each_column_shows_its_own_worktrees_shell_at_once() {
+    let setup = RepoWithOrigin::new();
+    let (_fake, core) = core();
+    let root = core.open_workspace(&setup.repo()).await.unwrap().root;
+    let other = core
+        .create_worktree(NewWorktree::NewBranch {
+            name: "agent/other".into(),
+            start_point: Some("main".into()),
+        })
+        .await
+        .unwrap()
+        .worktree
+        .path;
+
+    let mut left = core.open_terminal("column:a", &root, 80, 24).await.unwrap();
+    let mut right = core
+        .open_terminal("column:b", &other, 80, 24)
+        .await
+        .unwrap();
+    core.terminal_input(&root, print_marker_and_folder())
+        .unwrap();
+    core.terminal_input(&other, print_marker_and_folder())
+        .unwrap();
+    // Both stream: the one shown second didn't take the first one's panel away.
+    output_until(&core, &root, &mut left, "[Orchard]").await;
+    output_until(&core, &other, &mut right, "[Orchard]").await;
 }

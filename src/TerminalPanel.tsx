@@ -1,6 +1,7 @@
-// The Terminal panel: the active Worktree's shell, docked beside the transcript in the Tabs view.
-// The core runs one shell per Worktree, which keeps running out of sight; the panel shows whichever
-// Worktree is active and comes back to what its shell printed. xterm.js does the drawing.
+// The Terminal panel: a Worktree's shell, docked beside the transcript in the Tabs view (following
+// the active Worktree) or under a column's in the Columns view. The core runs one shell per
+// Worktree, which keeps running out of sight; a panel comes back to what its shell printed. Each
+// panel is a view slot of its own, so the columns' terminals stream side by side. xterm.js draws.
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -8,17 +9,25 @@ import { createEffect, createSignal, getOwner, on, onCleanup, onMount, runWithOw
 import { core, type TerminalOutput } from "./core";
 import { GitBranch, SquareTerminal, Trash2, X } from "./icons";
 
-/** The panel's narrowest width, and the least it leaves the transcript. */
+/** The panel's smallest size, and the least it leaves the transcript (beside it, or above it). */
 const MIN_WIDTH = 280;
 const MIN_LEFT = 420;
+const MIN_HEIGHT = 120;
+const MIN_ABOVE = 260;
 
 export function TerminalPanel(props: {
+  /** Its view slot: the Tabs view's, or its column's. */
+  slot: string;
   worktree: string;
   /** The Worktree's branch (or label) and colour. */
   label: string;
   colour: string;
-  width: number;
-  onWidth: (px: number) => void;
+  /** Beside the transcript (its width set), or under it (its height). */
+  placement: "side" | "bottom";
+  size: number;
+  onSize: (px: number) => void;
+  /** Whether showing a Worktree's shell takes the keyboard (not an unfocused column's). */
+  takeFocus: boolean;
   onClose: () => void;
 }) {
   let body!: HTMLDivElement;
@@ -65,7 +74,7 @@ export function TerminalPanel(props: {
     term.loadAddon(fit);
     term.open(body);
     onCleanup(() => {
-      void core.hideTerminal().catch(() => {});
+      void core.hideTerminal(props.slot).catch(() => {});
       term.dispose();
     });
 
@@ -95,8 +104,8 @@ export function TerminalPanel(props: {
           }
         }
       };
-      core.openTerminal(path, term.cols, term.rows, onOutput).catch((err) => mine === showing && setError(String(err)));
-      term.focus();
+      core.openTerminal(props.slot, path, term.cols, term.rows, onOutput).catch((err) => mine === showing && setError(String(err)));
+      if (props.takeFocus) term.focus();
     };
     createEffect(on(() => props.worktree, show));
 
@@ -138,17 +147,18 @@ export function TerminalPanel(props: {
     });
   };
 
-  /** Dragging the left edge sets the width. */
+  /** Dragging the inner edge (left beside, top under) sets the size. */
   const resize = (e: PointerEvent) => {
     const handle = e.currentTarget as HTMLElement;
     handle.setPointerCapture(e.pointerId);
-    const startX = e.clientX;
-    const startWidth = props.width;
+    const side = props.placement === "side";
+    const start = side ? e.clientX : e.clientY;
+    const startSize = props.size;
+    const [min, max] = side
+      ? [MIN_WIDTH, Math.max(MIN_WIDTH, window.innerWidth - MIN_LEFT)]
+      : [MIN_HEIGHT, Math.max(MIN_HEIGHT, window.innerHeight - MIN_ABOVE)];
     setDragging(true);
-    const move = (m: PointerEvent) => {
-      const max = Math.max(MIN_WIDTH, window.innerWidth - MIN_LEFT);
-      props.onWidth(Math.min(max, Math.max(MIN_WIDTH, startWidth + startX - m.clientX)));
-    };
+    const move = (m: PointerEvent) => props.onSize(Math.min(max, Math.max(min, startSize + start - (side ? m.clientX : m.clientY))));
     const up = () => {
       setDragging(false);
       handle.removeEventListener("pointermove", move);
@@ -159,7 +169,10 @@ export function TerminalPanel(props: {
   };
 
   return (
-    <aside class="terminal-panel" style={{ width: `${props.width}px`, "--c": props.colour }}>
+    <aside
+      class={`terminal-panel ${props.placement}`}
+      style={{ [props.placement === "side" ? "width" : "height"]: `${props.size}px`, "--c": props.colour }}
+    >
       <div class="terminal-resize" classList={{ dragging: dragging() }} onPointerDown={resize} />
       <div class="drawer-head">
         <SquareTerminal />

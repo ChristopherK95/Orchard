@@ -722,11 +722,15 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .board-card .card-actions { display: flex; }
 .board-card .card-actions button { min-height: 24px; font-size: 12.5px; font-weight: 400; gap: 6px; background: transparent; }
 
-/* Terminal panel (Tabs view): the active Worktree's shell, docked beside the transcript. */
-.terminal-panel { position: relative; flex: none; min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bg-1); }
+/* Terminal panel: a Worktree's shell, beside the transcript (Tabs view) or under it (a column). */
+.terminal-panel { position: relative; flex: none; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg-1); }
+.terminal-panel.side { border-left: 1px solid var(--line); }
+.terminal-panel.bottom { border-top: 1px solid var(--line); }
 .terminal-panel .terminal-title { font-weight: 600; color: var(--fg-2); }
 .terminal-panel .drawer-head .lucide:first-child { color: var(--fg-2); }
-.terminal-resize { position: absolute; z-index: 2; top: 0; bottom: 0; left: -3px; width: 6px; cursor: col-resize; touch-action: none; }
+.terminal-resize { position: absolute; z-index: 2; touch-action: none; }
+.side > .terminal-resize { top: 0; bottom: 0; left: -3px; width: 6px; cursor: col-resize; }
+.bottom > .terminal-resize { left: 0; right: 0; top: -3px; height: 6px; cursor: row-resize; }
 .terminal-resize:hover, .terminal-resize.dragging { background: var(--accent-dim); }
 .terminal-error { flex: none; padding: 8px 12px; border-bottom: 1px solid var(--danger-border); background: var(--danger-tint); color: var(--danger); font-size: 12px; }
 .terminal-body { flex: 1; min-height: 0; padding: 6px 0 4px 10px; }
@@ -784,6 +788,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .column .tabs { border-bottom: 1px solid var(--line); background: var(--bg-1); }
 .column.focused .tabs { background: var(--bg-2); }
 .column-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.column .tabs .terminal-toggle { margin-left: auto; flex: none; }
 .column-head { background: var(--bg-2); box-shadow: inset 3px 0 color-mix(in srgb, var(--c) 55%, transparent); }
 .column-head .badge.needs { height: 18px; padding: 0 7px; font-size: 11px; }
 .column:not(.focused) .transcript { opacity: 0.92; }

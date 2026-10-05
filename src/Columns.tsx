@@ -2,15 +2,18 @@
 // transcript, streamed in its own view slot. One column has focus: it's the active Worktree, so the
 // next prompt, Y / N, the drawer and the palette all follow it. Only the focused column has the
 // full composer; the others show a one-line stub that focuses them.
-import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, For, lazy, onCleanup, Show } from "solid-js";
 import { Banner, Composer, FindOtherConversations, RecentList, reportHeight, STATE_LABEL } from "./Chat";
 import type { OtherConversation, RecentSession, SessionId, SessionInfo } from "./core";
-import { CirclePause, GitBranch, Pin, Plus, Sparkles, X } from "./icons";
+import { CirclePause, GitBranch, Pin, Plus, Sparkles, SquareTerminal, X } from "./icons";
 import { Setup, type SetupView } from "./Setup";
 import { StateDot } from "./StateDot";
 import { createTabView, type TabView } from "./TabView";
 import { Transcript } from "./Transcript";
 import { ContextBar, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
+
+// (xterm.js loads with the first Terminal panel.)
+const TerminalPanel = lazy(() => import("./TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 
 /** The narrowest window the Columns view is offered at. */
 export const COLUMNS_MIN_WIDTH = 1600;
@@ -43,6 +46,12 @@ export interface ColumnsProps {
   onRemove: (worktree: WorktreeTab) => void;
   onOpenSettings: () => void;
   onOpenSnippet: (code: string, label: string) => void;
+  /** Whether a column's Terminal panel (its Worktree's shell, under the transcript) is open. */
+  terminalOpen: (path: string) => boolean;
+  onToggleTerminal: (path: string) => void;
+  /** The columns' Terminal panels' height (one for all, so they line up). */
+  terminalHeight: number;
+  onTerminalHeight: (px: number) => void;
   onError: (message: string) => void;
 }
 
@@ -142,6 +151,16 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
           <Plus />
           session
         </button>
+        <button
+          class="ghost icon terminal-toggle"
+          classList={{ on: props.terminalOpen(path) }}
+          onClick={() => props.onToggleTerminal(path)}
+          title="A terminal in this Worktree, under its transcript (Ctrl+` in the focused column)"
+          aria-label="Terminal"
+          disabled={props.worktree.removed}
+        >
+          <SquareTerminal />
+        </button>
       </nav>
       <Show when={sessions().length > 1}>
         <Banner tone="warn">{sessions().length} Agent sessions share this Worktree, so they can edit the same files.</Banner>
@@ -198,6 +217,19 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
           )}
         </Show>
       </div>
+      <Show when={props.terminalOpen(path) && !props.worktree.removed}>
+        <TerminalPanel
+          slot={`column:${path}`}
+          worktree={path}
+          label={worktreeLabel(props.worktree)}
+          colour={worktreeColour(path)}
+          placement="bottom"
+          size={props.terminalHeight}
+          onSize={props.onTerminalHeight}
+          takeFocus={props.isFocused}
+          onClose={() => props.onToggleTerminal(path)}
+        />
+      </Show>
     </section>
   );
 }

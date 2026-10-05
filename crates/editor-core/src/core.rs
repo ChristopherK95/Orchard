@@ -1365,11 +1365,13 @@ impl Core {
         self.inner.refresh_worktrees().await;
     }
 
-    /// The Worktree's terminal for the Terminal panel, started at `cols` x `rows` in the repo's shell
-    /// if it has none: its kept output comes first, then what it prints from now on. The terminal
-    /// the panel showed before stops sending (it keeps running).
+    /// The Worktree's terminal for the Terminal panel in view slot `slot` (the Tabs view's, or a
+    /// column's), started at `cols` x `rows` in the repo's shell if it has none: its kept output
+    /// comes first, then what it prints from now on. The terminal the slot showed before stops
+    /// sending there (it keeps running).
     pub async fn open_terminal(
         &self,
+        slot: &str,
         worktree: &Path,
         cols: u16,
         rows: u16,
@@ -1384,10 +1386,10 @@ impl Core {
         };
         for (path, other) in self.inner.terminals.lock().expect("terminals lock").iter() {
             if *path != worktree {
-                other.detach();
+                other.detach(slot);
             }
         }
-        Ok(terminal.attach(returning))
+        Ok(terminal.attach(slot, returning))
     }
 
     async fn start_terminal(
@@ -1450,8 +1452,9 @@ impl Core {
             .map_err(CoreError::Terminal)
     }
 
-    /// The Terminal panel is hidden: no terminal sends it anything (they keep running).
-    pub fn hide_terminal(&self) {
+    /// View slot `slot`'s Terminal panel is hidden: no terminal sends it anything (they keep
+    /// running).
+    pub fn hide_terminal(&self, slot: &str) {
         for terminal in self
             .inner
             .terminals
@@ -1459,7 +1462,7 @@ impl Core {
             .expect("terminals lock")
             .values()
         {
-            terminal.detach();
+            terminal.detach(slot);
         }
     }
 
