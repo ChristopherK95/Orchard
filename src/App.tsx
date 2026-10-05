@@ -43,9 +43,21 @@ import { ChevronDown, GitBranch, Loader, PanelRight, Plus, Search, Settings, Spa
 
 export function App() {
   const [problems, setProblems] = createSignal<MissingPrerequisite[] | null>(null);
+  // The ACP adapter, which an installed app fetches on its first run: null until that's known.
+  const [adapter, setAdapter] = createSignal<"installing" | "ready" | { error: string } | null>(null);
   const [workspace, setWorkspace] = createSignal<WorkspaceInfo | null>(null);
 
-  onMount(async () => setProblems(await core.prerequisites()));
+  const installAdapter = async () => {
+    setAdapter("installing");
+    setAdapter(await core.installAdapter().then(() => "ready" as const, (e) => ({ error: String(e) })));
+  };
+  onMount(async () => {
+    const found = await core.prerequisites();
+    setProblems(found);
+    if (found.length) return;
+    if (await core.adapterMissing()) await installAdapter();
+    else setAdapter("ready");
+  });
   // The chosen fonts from the start (the Workspace keeps them up to date after).
   onMount(() => void core.settings().then((loaded) => applyAppearance(loaded.settings.appearance), () => {}));
 
@@ -68,7 +80,16 @@ export function App() {
             <Match when={problems()?.length}>
               <Prerequisites problems={problems()!} />
             </Match>
-            <Match when={problems()}>
+            <Match when={adapter() === "installing"}>
+              <div class="center muted small">
+                <Loader class="spin" />
+                &nbsp;Installing the Claude agent (first run only)…
+              </div>
+            </Match>
+            <Match when={typeof adapter() === "object" && adapter()}>
+              {(failed) => <AdapterFailed error={(failed() as { error: string }).error} onRetry={installAdapter} />}
+            </Match>
+            <Match when={adapter() === "ready"}>
               <OpenWorkspace onOpened={setWorkspace} />
             </Match>
           </Switch>
@@ -109,6 +130,24 @@ function Prerequisites(props: { problems: MissingPrerequisite[] }) {
           </For>
         </div>
         <p class="muted small">Restart the editor afterwards.</p>
+      </div>
+    </div>
+  );
+}
+
+function AdapterFailed(props: { error: string; onRetry: () => void }) {
+  return (
+    <div class="startup">
+      <div class="startup-card">
+        <AppMark />
+        <h1>The Claude agent couldn't be installed:</h1>
+        <pre class="list-box startup-error">{props.error}</pre>
+        <div class="startup-actions">
+          <button class="primary" onClick={props.onRetry}>
+            Retry
+          </button>
+          <span class="muted small">It's fetched with npm, so it needs an internet connection.</span>
+        </div>
       </div>
     </div>
   );

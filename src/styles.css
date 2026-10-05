@@ -163,6 +163,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .list-box-row { display: flex; align-items: center; gap: 10px; padding: 11px 14px; }
 .list-box-row > .lucide { color: var(--danger); }
 .startup-actions { display: flex; align-items: center; gap: 12px; }
+.startup-error { margin: 0; padding: 11px 14px; max-height: 40vh; overflow: auto; white-space: pre-wrap; font: 12px/1.5 var(--mono); }
 /* The Workspace picker (ticket 29): Ctrl+P's search and list in a startup box. */
 .picker { background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
 .picker .palette-search button { flex: none; }

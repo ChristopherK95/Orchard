@@ -2,7 +2,7 @@
 //! (ADR 0003).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use editor_core::{
     check_prerequisites, AdapterCommand, BranchList, Core, CoreConfig, CoreError, CreatedWorktree,
@@ -16,10 +16,26 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 mod notifications;
 
-/// The pinned ACP adapter installed by `pnpm install` (see the root `package.json`).
+/// The pinned `claude-agent-acp` (its version comes from the root `package.json`, see `build.rs`).
+const ADAPTER_PACKAGE: &str = "@agentclientprotocol/claude-agent-acp";
+const ADAPTER_VERSION: &str = env!("ORCHARD_ACP_VERSION");
+
+/// Where an installed app keeps the adapter `install_adapter` fetched.
+fn installed_adapter_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("acp-adapter").join(ADAPTER_VERSION)
+}
+
+fn adapter_script(node_modules_parent: &Path) -> PathBuf {
+    node_modules_parent
+        .join("node_modules")
+        .join(ADAPTER_PACKAGE)
+        .join("dist/index.js")
+}
+
+/// Dev builds run the copy `pnpm install` put in the repo; installed (release) builds the one
+/// `install_adapter` fetched into the app's data folder.
 /// `ORCHARD_ACP_ADAPTER` swaps in another executable, e.g. the fake agent for demos.
-/// The path is fixed at build time, which only suits dev builds; distribution is out of scope for v1.
-fn adapter_command() -> AdapterCommand {
+fn adapter_command(data_dir: Option<&Path>) -> AdapterCommand {
     if let Some(program) = std::env::var_os("ORCHARD_ACP_ADAPTER") {
         return AdapterCommand {
             program: program.into(),
@@ -27,13 +43,74 @@ fn adapter_command() -> AdapterCommand {
             env: vec![],
         };
     }
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js");
+    let script = match data_dir {
+        Some(data_dir) if !cfg!(debug_assertions) => {
+            adapter_script(&installed_adapter_dir(data_dir))
+        }
+        _ => adapter_script(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")),
+    };
     AdapterCommand {
         program: "node".into(),
         args: vec![script.display().to_string()],
         env: vec![],
     }
+}
+
+/// Whether the adapter still has to be fetched before a session can start.
+#[tauri::command]
+fn adapter_missing(app: AppHandle) -> bool {
+    if cfg!(debug_assertions) || std::env::var_os("ORCHARD_ACP_ADAPTER").is_some() {
+        return false;
+    }
+    app.path()
+        .app_data_dir()
+        .map_or(true, |dir| !adapter_script(&installed_adapter_dir(&dir)).is_file())
+}
+
+/// Fetches the pinned adapter with npm into the app's data folder (an installed app's first run),
+/// replacing any other version there. Staged in a side folder, so a failed install leaves nothing
+/// that looks installed.
+#[tauri::command]
+async fn install_adapter(app: AppHandle) -> CommandResult<()> {
+    static INSTALLING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one_at_a_time = INSTALLING.lock().await;
+    if !adapter_missing(app.clone()) {
+        return Ok(());
+    }
+    let dir = installed_adapter_dir(&app.path().app_data_dir().map_err(|e| e.to_string())?);
+    let root = dir.parent().expect("the version folder has a parent");
+    let staging = root.join(format!("{ADAPTER_VERSION}.partial"));
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+
+    let mut npm = tokio::process::Command::new(if cfg!(windows) { "npm.cmd" } else { "npm" });
+    npm.arg("install")
+        .arg("--prefix")
+        .arg(&staging)
+        .args(["--omit=dev", "--no-audit", "--no-fund", "--loglevel=error"])
+        .arg(format!("{ADAPTER_PACKAGE}@{ADAPTER_VERSION}"))
+        .stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    npm.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let output = npm
+        .output()
+        .await
+        .map_err(|e| format!("Couldn't run npm (it comes with Node.js): {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("npm install failed:
+{}", stderr.trim()));
+    }
+
+    // Older versions are no longer used.
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            if entry.path() != staging {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    std::fs::rename(&staging, &dir).map_err(|e| e.to_string())
 }
 
 type CommandResult<T> = Result<T, String>;
@@ -871,7 +948,7 @@ fn main() {
                     .ok()
                     .filter(|_| !bench_mode())
                     .map(|dir| dir.join("state.json")),
-                ..CoreConfig::new(adapter_command())
+                ..CoreConfig::new(adapter_command(app.path().app_data_dir().ok().as_deref()))
             });
             let mut events = core.subscribe();
             let handle = app.handle().clone();
@@ -893,6 +970,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             prerequisites,
+            adapter_missing,
+            install_adapter,
             default_workspace_path,
             open_workspace,
             workspace_for,

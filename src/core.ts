@@ -453,6 +453,10 @@ export type CoreEvent =
 
 export const core = {
   prerequisites: () => invoke<MissingPrerequisite[]>("prerequisites"),
+  /** Whether an installed app still has to fetch the ACP adapter (its first run). */
+  adapterMissing: () => invoke<boolean>("adapter_missing"),
+  /** Fetches the pinned ACP adapter with npm; rejects with npm's error. */
+  installAdapter: () => invoke<void>("install_adapter"),
   defaultWorkspacePath: () => invoke<string | null>("default_workspace_path"),
   /** Opens the repository containing `path` (a leading `~` is the home folder). */
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),

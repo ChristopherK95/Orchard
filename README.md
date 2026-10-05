@@ -28,6 +28,22 @@ Set `ORCHARD_ACP_ADAPTER` to another ACP agent executable to use it instead of t
 `claude-agent-acp`. For example, point it at `target/debug/fake-acp-agent` to click around without
 spending subscription usage.
 
+## Install
+
+Installers come from the **Installers** GitHub workflow: push a `v*` tag (e.g. `v0.1.0`) to get a
+draft release with all of them, or run the workflow by hand to get them as workflow artifacts.
+
+- **Windows:** `Orchard_<version>_x64-setup.exe` (installs for the current user, no admin) or the
+  `.msi`.
+- **Linux:** the `.deb` (Debian/Ubuntu), the `.rpm` (Fedora), or the `.AppImage` (anything, Arch
+  included: `chmod +x` and run it).
+
+The installed app still needs git ≥ 2.55, Node.js ≥ 22.12 (with npm) and a logged-in Claude Code.
+On its first run it fetches the pinned `claude-agent-acp` with npm into its data folder.
+
+To build the installers for the machine you're on: `pnpm tauri build` (output in
+`target/release/bundle/`).
+
 ## Test
 
 ```sh
