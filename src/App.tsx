@@ -40,6 +40,7 @@ import { BareTitlebar, WindowControls } from "./WindowControls";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { SettingsPage, type SettingsSection } from "./SettingsPage";
 import { applyAppearance } from "./appearance";
+import orchardMark from "./assets/orchard-mark.svg";
 import { ChevronDown, FolderGit2, GitBranch, Loader, PanelRight, Plus, Search, Settings, Sparkles, X } from "./icons";
 
 export function App() {
@@ -72,9 +73,14 @@ export function App() {
           <BareTitlebar />
           <Switch
             fallback={
-              <div class="center muted small">
-                <Loader class="spin" />
-                &nbsp;Checking prerequisites…
+              <div class="startup">
+                <div class="startup-card">
+                  <AppMark />
+                  <div class="muted small">
+                    <Loader class="spin" />
+                    &nbsp;Checking prerequisites…
+                  </div>
+                </div>
               </div>
             }
           >
@@ -103,12 +109,11 @@ export function App() {
   );
 }
 
+/** The logo lockup the startup panels open with: the mark and the wordmark. */
 function AppMark() {
   return (
     <div class="app-mark">
-      <span class="mark">
-        <Sparkles />
-      </span>
+      <img src={orchardMark} alt="" draggable={false} />
       Orchard
     </div>
   );
@@ -119,7 +124,7 @@ function Prerequisites(props: { problems: MissingPrerequisite[] }) {
     <div class="startup">
       <div class="startup-card">
         <AppMark />
-        <h1>The editor can't start until these are installed:</h1>
+        <h1>Orchard can't start until these are installed:</h1>
         <div class="list-box">
           <For each={props.problems}>
             {(p) => (
@@ -130,7 +135,7 @@ function Prerequisites(props: { problems: MissingPrerequisite[] }) {
             )}
           </For>
         </div>
-        <p class="muted small">Restart the editor afterwards.</p>
+        <p class="muted small">Restart Orchard afterwards.</p>
       </div>
     </div>
   );
@@ -721,6 +726,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     <div class="workspace" classList={{ "board-open": view() === "board" }}>
       {/* The window's title bar (no native one): drag it by any bare part; double-click maximises. */}
       <header class="titlebar" ref={titlebar} data-tauri-drag-region>
+        <img class="logo" src={orchardMark} alt="Orchard" draggable={false} data-tauri-drag-region />
         <button class="name switch-workspace" onClick={() => setSwitching(true)} title="Switch repository (Ctrl+Shift+O)">
           {props.workspace.name}
           <ChevronDown />
