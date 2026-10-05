@@ -824,6 +824,20 @@ async fn show_session(
     Ok(())
 }
 
+/// The identifier the app had as Agent Editor, which names its old config and data folders.
+const OLD_IDENTIFIER: &str = "dev.agent-editor.app";
+
+/// Moves a folder from before the rename to Orchard into place, unless Orchard already has one.
+fn adopt_old_dir(dir: Option<std::path::PathBuf>) {
+    let Some(dir) = dir else { return };
+    let Some(old) = dir.parent().map(|parent| parent.join(OLD_IDENTIFIER)) else {
+        return;
+    };
+    if !dir.exists() && old.is_dir() {
+        let _ = std::fs::rename(&old, &dir);
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -841,6 +855,9 @@ fn main() {
             }
         })
         .setup(|app| {
+            // On Windows both are the same folder, so the second finds it already moved.
+            adopt_old_dir(app.path().app_config_dir().ok());
+            adopt_old_dir(app.path().app_data_dir().ok());
             let core = Core::new(CoreConfig {
                 settings_path: app
                     .path()
