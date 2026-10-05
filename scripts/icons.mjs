@@ -19,7 +19,8 @@ const tauriIcon = (input, ...args) =>
   execFileSync("pnpm", ["tauri", "icon", input, "-o", ...args], { stdio: "inherit", shell: true });
 
 try {
-  // The icon with the compact cut in place of the mark, in the same inset (the mark's group).
+  // The icon with the compact cut in place of the mark, in the same inset (the mark's group). Its
+  // outer fruit overhang its viewBox, so that mustn't clip.
   const svg = readFileSync(source, "utf8");
   const inset = /<g transform="translate\(([\d.]+) ([\d.]+)\) scale\(([\d.]+)\)">[\s\S]*<\/g>/;
   const [, x, y, scale] = svg.match(inset) ?? [];
@@ -29,7 +30,7 @@ try {
   const drawing = mark.match(/<svg[^>]*>([\s\S]*)<\/svg>/)?.[1];
   if (!viewBox || !drawing) throw new Error("orchard-mark-small.svg: no viewBox or drawing");
   const size = 320 * Number(scale);
-  const compact = svg.replace(inset, `<svg x="${x}" y="${y}" width="${size}" height="${size}" viewBox="${viewBox}">${drawing}</svg>`);
+  const compact = svg.replace(inset, `<svg x="${x}" y="${y}" width="${size}" height="${size}" viewBox="${viewBox}" overflow="visible">${drawing}</svg>`);
   const noHairline = compact.replace(/ stroke="[^"]*" stroke-width="[^"]*"/, "");
   if (noHairline === compact) throw new Error("orchard-icon.svg: the hairline's stroke attributes weren't found");
   const small = join(temp, "orchard-icon-32.svg");

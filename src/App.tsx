@@ -40,8 +40,9 @@ import { BareTitlebar, WindowControls } from "./WindowControls";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { SettingsPage, type SettingsSection } from "./SettingsPage";
 import { applyAppearance } from "./appearance";
-// The compact cut of the mark: the one for 32 px and below.
-import orchardMark from "./assets/orchard-mark-small.svg";
+// The compact cut of the mark: the one for 32 px and below. Inline, not an <img>: its outer fruit
+// overhang its box, and an <img> would clip them.
+import orchardMark from "./assets/orchard-mark-small.svg?raw";
 import { ChevronDown, FolderGit2, GitBranch, Loader, PanelRight, Plus, Search, Settings, Sparkles, X } from "./icons";
 
 export function App() {
@@ -114,7 +115,7 @@ export function App() {
 function AppMark() {
   return (
     <div class="app-mark">
-      <img src={orchardMark} alt="" draggable={false} />
+      <span class="mark" aria-hidden="true" innerHTML={orchardMark} />
       Orchard
     </div>
   );
@@ -727,7 +728,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     <div class="workspace" classList={{ "board-open": view() === "board" }}>
       {/* The window's title bar (no native one): drag it by any bare part; double-click maximises. */}
       <header class="titlebar" ref={titlebar} data-tauri-drag-region>
-        <img class="logo" src={orchardMark} alt="Orchard" draggable={false} data-tauri-drag-region />
+        <span class="logo" innerHTML={orchardMark} data-tauri-drag-region />
         <button class="name switch-workspace" onClick={() => setSwitching(true)} title="Switch repository (Ctrl+Shift+O)">
           {props.workspace.name}
           <ChevronDown />

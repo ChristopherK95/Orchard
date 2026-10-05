@@ -154,7 +154,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .startup-card { width: min(620px, 100%); display: flex; flex-direction: column; gap: 16px; }
 /* The logo lockup: the mark (never tiled, never recoloured) and the wordmark. */
 .app-mark { display: flex; align-items: center; gap: 11px; font: 600 16px/1 "Space Grotesk", var(--ui); letter-spacing: -0.3px; color: #d7dae0; }
-.app-mark img { flex: none; width: 24px; height: 24px; }
+.app-mark .mark { flex: none; display: flex; width: 24px; height: 24px; }
 .startup h1 { margin: 0; font-size: 20px; line-height: 1.35; font-weight: 600; }
 .startup form { display: flex; gap: 8px; }
 .startup form input { flex: 1; height: 32px; }
@@ -231,7 +231,9 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 
 /* Title bar · 36 px. */
 .titlebar { flex: none; height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 12px; background: var(--bg-2); border-bottom: 1px solid var(--line); }
-.titlebar .logo { flex: none; width: 18px; height: 18px; }
+.titlebar .logo { flex: none; display: flex; width: 18px; height: 18px; }
+/* The mark's outer fruit overhang its box (as drawn); clicks go to the box (a drag region). */
+.app-mark .mark svg, .titlebar .logo svg { width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .titlebar .name { font-size: 13.5px; font-weight: 600; }
 .titlebar .path { font: 11.5px var(--mono); color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .needs-you-button { min-height: 24px; padding: 0 10px 0 9px; gap: 7px; border: 0; border-radius: 999px; background: var(--needs-you); color: var(--on-needs); font-size: 12px; font-weight: 600; }
