@@ -656,6 +656,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .mode-pill:focus-within { outline: 2px solid var(--ring); outline-offset: 2px; }
 .mode-pill.acceptEdits { border-color: var(--needs-border); color: var(--needs-text); }
 .mode-pill.plan { border-color: var(--info-border); color: var(--info); }
+.mode-pill.auto { border-color: var(--needs-border); color: var(--needs-text); }
 
 /* Edit notes: chips above the composer, removable one by one. */
 .edit-notes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

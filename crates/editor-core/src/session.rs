@@ -34,6 +34,9 @@ pub enum PermissionMode {
     AskForEdits,
     AcceptEdits,
     Plan,
+    /// The Agent decides what needs asking (the adapter drops to Accept edits on a model
+    /// without it, and says so).
+    Auto,
 }
 
 impl PermissionMode {
@@ -43,11 +46,12 @@ impl PermissionMode {
             Self::AskForEdits => "default",
             Self::AcceptEdits => "acceptEdits",
             Self::Plan => "plan",
+            Self::Auto => "auto",
         }
     }
 
     pub(crate) fn from_acp_id(id: &str) -> Option<Self> {
-        [Self::AskForEdits, Self::AcceptEdits, Self::Plan]
+        [Self::AskForEdits, Self::AcceptEdits, Self::Plan, Self::Auto]
             .into_iter()
             .find(|m| m.acp_id() == id)
     }

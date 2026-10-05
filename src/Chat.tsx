@@ -166,6 +166,7 @@ const MODE_LABEL: Record<PermissionMode, string> = {
   askForEdits: "Ask for edits",
   acceptEdits: "Accept edits",
   plan: "Plan",
+  auto: "Auto",
 };
 
 /** Unsent composer text and attachments by session. */
@@ -456,6 +457,9 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
                 </Match>
                 <Match when={props.session.permissionMode === "plan"}>
                   <BookOpen />
+                </Match>
+                <Match when={props.session.permissionMode === "auto"}>
+                  <Sparkles />
                 </Match>
               </Switch>
               {MODE_LABEL[props.session.permissionMode]}

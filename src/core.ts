@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type SessionId = number;
 export type SessionState = "working" | "needsYou" | "idle" | "suspended" | "exited";
-export type PermissionMode = "askForEdits" | "acceptEdits" | "plan";
+export type PermissionMode = "askForEdits" | "acceptEdits" | "plan" | "auto";
 
 export interface WorkspaceInfo {
   root: string;
