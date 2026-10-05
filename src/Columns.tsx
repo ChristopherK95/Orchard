@@ -1,25 +1,27 @@
-// The Columns view (ticket 28): each pinned Worktree gets a column with its own session Tabs and
+// The Columns view (ticket 28): each pinned Worktree gets a panel with its own session tabs and
 // transcript, streamed in its own view slot. One column has focus: it's the active Worktree, so the
 // next prompt, Y / N, the drawer and the palette all follow it. Only the focused column has the
-// full composer; the others show a one-line stub that focuses them.
-import { createEffect, createSignal, For, lazy, onCleanup, Show } from "solid-js";
-import { Banner, Composer, FindOtherConversations, RecentList, reportHeight, STATE_LABEL } from "./Chat";
+// full composer; the others show a one-line stub that focuses them. Each column's tab list ends
+// with Terminal: its Worktree's shell, in place of the transcript.
+import { createEffect, createSignal, For, lazy, Match, onCleanup, Show, Switch } from "solid-js";
+import { Banner, Composer, FindOtherConversations, RecentList, reportHeight } from "./Chat";
 import type { OtherConversation, RecentSession, SessionId, SessionInfo } from "./core";
-import { CirclePause, GitBranch, Pin, Plus, Sparkles, SquareTerminal, X } from "./icons";
+import { ArrowUp, CirclePause, CirclePlay, Ellipsis, GitBranch, Pin, Plus, Sparkles, SquareTerminal, Trash2, X } from "./icons";
 import { Setup, type SetupView } from "./Setup";
-import { StateDot } from "./StateDot";
+import { shellRunning } from "./shells";
+import { StateBadge } from "./StateDot";
 import { createTabView, type TabView } from "./TabView";
 import { Transcript } from "./Transcript";
-import { ContextBar, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
+import { worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 
-// (xterm.js loads with the first Terminal panel.)
+// (xterm.js loads with the first Terminal tab shown.)
 const TerminalPanel = lazy(() => import("./TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 
 /** The narrowest window the Columns view is offered at. */
 export const COLUMNS_MIN_WIDTH = 1600;
 
 export interface ColumnsProps {
-  /** The pinned Worktrees, in Worktree row order. */
+  /** The pinned Worktrees, in sidebar order. */
   worktrees: WorktreeTab[];
   /** The Worktrees without a column (offered when none has one). */
   unpinned: WorktreeTab[];
@@ -46,12 +48,9 @@ export interface ColumnsProps {
   onRemove: (worktree: WorktreeTab) => void;
   onOpenSettings: () => void;
   onOpenSnippet: (code: string, label: string) => void;
-  /** Whether a column's Terminal panel (its Worktree's shell, under the transcript) is open. */
+  /** Whether a column shows its Terminal tab (its Worktree's shell) rather than a session. */
   terminalOpen: (path: string) => boolean;
   onToggleTerminal: (path: string) => void;
-  /** The columns' Terminal panels' height (one for all, so they line up). */
-  terminalHeight: number;
-  onTerminalHeight: (px: number) => void;
   onError: (message: string) => void;
 }
 
@@ -69,7 +68,7 @@ export function Columns(props: ColumnsProps) {
           <div class="list-box">
             <div class="section-label">
               Worktrees
-              <span class="note">more later with “+ column” in the title bar</span>
+              <span class="note">more later from the sidebar</span>
             </div>
             <For each={props.unpinned}>
               {(w) => (
@@ -112,11 +111,17 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
   });
   const sessions = () => props.sessionsIn(path);
   const session = () => sessions().find((s) => s.id === view.shown());
+  const terminal = () => props.terminalOpen(path) && !props.worktree.removed;
   /** The floating composer's (or stub's) height: the transcript's last item stays above it. */
   const [composerHeight, setComposerHeight] = createSignal(0);
   const setup = () => {
     const s = props.setupOf(path);
     return s && s.status.kind !== "done" ? s : undefined;
+  };
+  /** A session tab: shows it (in place of the terminal, if that's up). */
+  const showSession = (id: SessionId) => {
+    if (props.terminalOpen(path)) props.onToggleTerminal(path);
+    props.onShow(path, id);
   };
 
   return (
@@ -128,172 +133,225 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
       onMouseDown={() => !props.isFocused && props.onFocus(path)}
     >
       <ColumnHeader {...props} session={session()} />
-      <nav class="tabs">
-        <For each={sessions()}>
-          {(s) => (
-            <span class={`tab-wrap ${s.id === view.shown() ? "active" : ""}`}>
-              <button class="tab" onClick={() => props.onShow(path, s.id)} onAuxClick={(e) => e.button === 1 && props.onCloseTab(s.id)}>
-                <Sparkles />
-                <StateDot state={s.state} title={STATE_LABEL[s.state]} />
-                <span class="name">{s.name}</span>
-                <Show when={s.id === view.shown()} fallback={<Show when={s.unread}>{(n) => <span class="badge">{n()}</span>}</Show>}>
-                  <span class="sep">·</span>
-                  <span class={`state ${s.state}`}>{STATE_LABEL[s.state]}</span>
+      <nav class="column-tabs">
+        <div class="tabs-list">
+          <For each={sessions()}>
+            {(s) => (
+              <span class="trigger-wrap" classList={{ on: s.id === view.shown() && !terminal() }}>
+                <button class="trigger" onClick={() => showSession(s.id)} onAuxClick={(e) => e.button === 1 && props.onCloseTab(s.id)}>
+                  {s.name}
+                  <Show when={s.state === "needsYou"}>
+                    <span class="needs-dot" title="Needs you" />
+                  </Show>
+                  <Show when={s.unread > 0 && (s.id !== view.shown() || terminal())}>
+                    <span class="unread">{s.unread}</span>
+                  </Show>
+                </button>
+                <button class="close-tab" aria-label={`Close ${s.name}`} title="Close (it stays in Recent sessions; Ctrl+Shift+T reopens)" onClick={() => props.onCloseTab(s.id)}>
+                  <X />
+                </button>
+              </span>
+            )}
+          </For>
+          <Show when={!props.worktree.removed}>
+            <Show when={sessions().length > 0}>
+              <span class="divider" />
+            </Show>
+            <span class="trigger-wrap" classList={{ on: terminal() }}>
+              <button
+                class="trigger"
+                onClick={() => !terminal() && props.onToggleTerminal(path)}
+                title="This Worktree's shell (Ctrl+` in the focused column)"
+              >
+                <SquareTerminal />
+                Terminal
+                <Show when={shellRunning(path)}>
+                  <span class="shell-dot" title="A shell is running" />
                 </Show>
               </button>
-              <button class="close-tab" aria-label={`Close ${s.name}`} title="Close (it stays in Recent sessions; Ctrl+Shift+T reopens)" onClick={() => props.onCloseTab(s.id)}>
-                <X />
-              </button>
             </span>
-          )}
-        </For>
-        <button class="ghost add-tab" onClick={() => props.onNewSession(path)} title="New Agent session in this Worktree" disabled={props.worktree.removed || !!setup()}>
-          <Plus />
-          session
-        </button>
+          </Show>
+        </div>
         <button
-          class="ghost icon terminal-toggle"
-          classList={{ on: props.terminalOpen(path) }}
-          onClick={() => props.onToggleTerminal(path)}
-          title="A terminal in this Worktree, under its transcript (Ctrl+` in the focused column)"
-          aria-label="Terminal"
-          disabled={props.worktree.removed}
+          class="ghost icon"
+          onClick={() => props.onNewSession(path)}
+          title="New Agent session in this Worktree"
+          aria-label="New Agent session"
+          disabled={props.worktree.removed || !!setup()}
         >
-          <SquareTerminal />
+          <Plus />
         </button>
       </nav>
-      <Show when={sessions().length > 1}>
+      <Show when={sessions().length > 1 && !terminal()}>
         <Banner tone="warn">{sessions().length} Agent sessions share this Worktree, so they can edit the same files.</Banner>
       </Show>
       <div class="column-body">
         <Show
-          when={session()}
-          keyed
+          when={!terminal()}
           fallback={
-            <Show
-              when={setup()}
-              fallback={
-                <div class="center empty-worktree">
-                  <GitBranch />
-                  <p>No Agent sessions in this Worktree yet.</p>
-                  <Show when={!props.worktree.removed}>
-                    <button class="primary" onClick={() => props.onNewSession(path)}>
-                      <Sparkles />
-                      New Agent session here
-                    </button>
-                  </Show>
-                  <Show when={props.recentIn(path).length}>
-                    <RecentList sessions={props.recentIn(path)} onReopen={props.onReopen} />
-                  </Show>
-                  <Show when={!props.worktree.removed}>
-                    <FindOtherConversations worktree={path} onOpen={props.onOpenOther} />
-                  </Show>
-                </div>
-              }
-            >
-              {(s) => <Setup worktree={path} setup={s()} onError={props.onError} onOpenSettings={props.onOpenSettings} />}
-            </Show>
+            <TerminalPanel
+              slot={`column:${path}`}
+              worktree={path}
+              label={worktreeLabel(props.worktree)}
+              colour={worktreeColour(path)}
+              placement="fill"
+              takeFocus={props.isFocused}
+            />
           }
         >
-          {(s) => (
-            <>
-              <Transcript
-                sessionId={s.id}
-                items={view.items}
-                start={view.start()}
-                onLoadEarlier={view.loadEarlier}
-                onError={props.onError}
-                onOpenSnippet={props.onOpenSnippet}
-                answerKeys={() => props.isFocused}
-                bottomInset={composerHeight}
-              />
+          <Show
+            when={session()}
+            keyed
+            fallback={
               <Show
-                when={props.isFocused}
-                fallback={<ComposerStub worktree={props.worktree} session={s} onFocus={() => props.onFocus(path)} onHeight={setComposerHeight} />}
+                when={setup()}
+                fallback={
+                  <div class="center empty-worktree">
+                    <GitBranch />
+                    <p>No Agent sessions in this Worktree yet.</p>
+                    <Show when={!props.worktree.removed}>
+                      <button class="primary" onClick={() => props.onNewSession(path)}>
+                        <Sparkles />
+                        New Agent session here
+                      </button>
+                    </Show>
+                    <Show when={props.recentIn(path).length}>
+                      <RecentList sessions={props.recentIn(path)} onReopen={props.onReopen} />
+                    </Show>
+                    <Show when={!props.worktree.removed}>
+                      <FindOtherConversations worktree={path} onOpen={props.onOpenOther} />
+                    </Show>
+                  </div>
+                }
               >
-                <Composer session={s} onHeight={setComposerHeight} />
+                {(s) => <Setup worktree={path} setup={s()} onError={props.onError} onOpenSettings={props.onOpenSettings} />}
               </Show>
-            </>
-          )}
+            }
+          >
+            {(s) => (
+              <>
+                <Transcript
+                  sessionId={s.id}
+                  items={view.items}
+                  start={view.start()}
+                  onLoadEarlier={view.loadEarlier}
+                  onError={props.onError}
+                  onOpenSnippet={props.onOpenSnippet}
+                  answerKeys={() => props.isFocused}
+                  bottomInset={composerHeight}
+                />
+                <Show
+                  when={props.isFocused}
+                  fallback={<ComposerStub worktree={props.worktree} session={s} onFocus={() => props.onFocus(path)} onHeight={setComposerHeight} />}
+                >
+                  <Composer session={s} onHeight={setComposerHeight} />
+                </Show>
+              </>
+            )}
+          </Show>
         </Show>
       </div>
-      <Show when={props.terminalOpen(path) && !props.worktree.removed}>
-        <TerminalPanel
-          slot={`column:${path}`}
-          worktree={path}
-          label={worktreeLabel(props.worktree)}
-          colour={worktreeColour(path)}
-          placement="bottom"
-          size={props.terminalHeight}
-          onSize={props.onTerminalHeight}
-          takeFocus={props.isFocused}
-          onClose={() => props.onToggleTerminal(path)}
-        />
-      </Show>
     </section>
   );
 }
 
-/** The focused column's header is the full context bar; the others say only which Worktree. */
+/** A column's header: its Worktree, how it stands, the most urgent state, and a menu. */
 function ColumnHeader(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolean; session: SessionInfo | undefined }) {
-  const needYou = () => props.sessionsIn(props.worktree.path).filter((s) => s.state === "needsYou").length;
+  const path = props.worktree.path;
+  const needYou = () => props.sessionsIn(path).filter((s) => s.state === "needsYou").length;
+  /** The badge: Needs you if any session here does (so it can't hide behind another tab or the
+   *  shell), else the shown session's state. */
+  const state = () => (needYou() > 0 ? "needsYou" : props.session?.state);
+  const [menuAt, setMenuAt] = createSignal<{ left: number; top: number } | null>(null);
+  const close = (e: MouseEvent) => !(e.target as Element | null)?.closest?.(".column-menu, .column-menu-button") && setMenuAt(null);
+  window.addEventListener("click", close);
+  onCleanup(() => window.removeEventListener("click", close));
+  const run = (action: () => void) => () => {
+    setMenuAt(null);
+    action();
+  };
   return (
-    <Show
-      when={!props.isFocused}
-      fallback={
-        <ContextBar
-          worktree={props.worktree}
-          session={props.session}
-          stateLabel={STATE_LABEL}
-          onUnpin={() => props.onUnpin(props.worktree.path)}
-          onRemove={() => props.onRemove(props.worktree)}
-          onSuspend={props.onSuspend}
-          onResume={props.onResume}
-        />
-      }
-    >
-      <div class="context-bar column-head">
-        <GitBranch />
-        <span class="ctx-branch">{worktreeLabel(props.worktree)}</span>
-        <Show when={props.worktree.ahead !== null}>
-          <span class="counts">
-            ↑{props.worktree.ahead} ↓{props.worktree.behind}
-          </span>
-        </Show>
-        <span class="bar-actions">
-          <Show
-            when={needYou() > 0}
-            fallback={
-              <Show when={props.session?.state === "idle" ? props.session : undefined}>
+    <div class="column-head">
+      <span class="swatch" />
+      <span class="branch" title={path}>
+        {props.worktree.removed ? path.split(/[\\/]/).pop() : worktreeLabel(props.worktree)}
+      </span>
+      <Show when={props.worktree.removed}>
+        <span class="gone">folder removed</span>
+      </Show>
+      <Show when={props.worktree.ahead !== null}>
+        <span class="counts">
+          ↑{props.worktree.ahead} ↓{props.worktree.behind}
+        </span>
+      </Show>
+      <Show when={props.worktree.changed > 0}>
+        <span class="changed">{props.worktree.changed} changed</span>
+      </Show>
+      <span class="grow" />
+      <Show when={state()}>{(s) => <StateBadge state={s()} label={needYou() > 1 ? `${needYou()} need you` : undefined} />}</Show>
+      <button
+        class="ghost icon column-menu-button"
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setMenuAt((now) => (now ? null : { left: r.right - 220, top: r.bottom + 4 }));
+        }}
+        title="More for this column"
+        aria-label="Column menu"
+      >
+        <Ellipsis />
+      </button>
+      <Show when={menuAt()}>
+        {(at) => (
+          <div class="menu column-menu" style={{ left: `${at().left}px`, top: `${at().top}px` }}>
+            <Switch>
+              <Match when={props.session?.state === "idle" && props.session}>
                 {(s) => (
-                  <button onClick={() => props.onSuspend(s())} title="Stop this session's Agent to free memory; sending a message resumes it">
+                  <button class="menu-item" onClick={run(() => props.onSuspend(s()))} title="Stop this session's Agent to free memory; sending a message resumes it">
                     <CirclePause />
-                    Suspend
+                    Suspend {s().name}
                   </button>
                 )}
-              </Show>
-            }
-          >
-            <span class="badge needs">{needYou()} need{needYou() === 1 ? "s" : ""} you</span>
-          </Show>
-          <button class="icon" onClick={() => props.onUnpin(props.worktree.path)} title="Close this column (its sessions keep running)" aria-label="Close this column">
-            <X />
-          </button>
-        </span>
-      </div>
-    </Show>
+              </Match>
+              <Match when={props.session?.state === "exited" && props.session}>
+                {(s) => (
+                  <button class="menu-item" onClick={run(() => props.onResume(s()))} title="Bring the Agent back with this conversation">
+                    <CirclePlay />
+                    Resume {s().name}
+                  </button>
+                )}
+              </Match>
+            </Switch>
+            <Show when={!props.worktree.isMain && !props.worktree.removed}>
+              <button class="menu-item" onClick={run(() => props.onRemove(props.worktree))} title="Remove this Worktree (asks first)">
+                <Trash2 />
+                Remove Worktree…
+              </button>
+            </Show>
+            <button class="menu-item" onClick={run(() => props.onUnpin(path))} title="Its sessions keep running">
+              <X />
+              Close column
+            </button>
+          </div>
+        )}
+      </Show>
+    </div>
   );
 }
 
-/** An unfocused column's composer: one dimmed line that focuses the column. */
+/** An unfocused column's composer: one line that focuses the column. */
 function ComposerStub(props: { worktree: WorktreeTab; session: SessionInfo; onFocus: () => void; onHeight: (px: number) => void }) {
   const branch = () => worktreeLabel(props.worktree);
   return (
     <div class="composer stub" ref={(el) => reportHeight(el, props.onHeight)}>
       <button class="composer-stub" onClick={() => props.onFocus()}>
-        <Show when={props.session.state !== "needsYou"} fallback="Answer the permission above, or click to focus">
-          Message <GitBranch /> {branch()}
-          {props.session.state === "suspended" ? " — sending resumes it" : ""}
+        <span class="grow ellipsis">
+          <Show when={props.session.state !== "needsYou"} fallback="Answer the permission above, or click to focus">
+            Message {branch()}
+            {props.session.state === "suspended" ? " — sending resumes it" : ""}
+          </Show>
+        </span>
+        <Show when={props.session.state === "needsYou"} fallback={<ArrowUp />}>
+          <kbd>Alt ←→</kbd>
         </Show>
       </button>
     </div>

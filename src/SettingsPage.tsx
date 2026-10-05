@@ -124,7 +124,7 @@ export function SettingsPage(props: {
                 <Row label="Interface font" hint="Menus, the chat, and everything else that isn't code.">
                   <FontPicker
                     value={app()?.appearance.uiFont ?? null}
-                    defaultName="Inter"
+                    defaultName="Geist"
                     fonts={fonts()}
                     onChange={(family) => void change({ kind: "uiFont", family })}
                   />
@@ -132,7 +132,7 @@ export function SettingsPage(props: {
                 <Row label="Code font" hint="The Manual editor, code in the chat, paths and branch names.">
                   <FontPicker
                     value={app()?.appearance.codeFont ?? null}
-                    defaultName="JetBrains Mono"
+                    defaultName="Geist Mono"
                     fonts={fonts()}
                     monospace
                     onChange={(family) => void change({ kind: "codeFont", family })}

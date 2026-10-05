@@ -67,7 +67,7 @@ interface Outcome {
 
 export function WorktreesOverview(props: {
   root: string;
-  /** The Worktree row's list: a change (one removed, files changed) looks again. */
+  /** The sidebar's list: a change (one removed, files changed) looks again. */
   worktrees: WorktreeTab[];
   label: (path: string) => string;
   sessionCount: (path: string) => number;
@@ -84,7 +84,7 @@ export function WorktreesOverview(props: {
   const [fetched, setFetched] = createSignal(0);
   const listed = () => props.worktrees.map((w) => `${w.path} ${w.head} ${w.changed}`).join("\n");
   const [rows] = createResource(() => [listed(), fetched()] as const, () => core.mergeOverview());
-  // Ready to remove first; the rest as the Worktree row orders them.
+  // Ready to remove first; the rest as the sidebar orders them.
   const sorted = createMemo(() => {
     const all = rows.latest ?? [];
     return [...all.filter(ready), ...all.filter((r) => !ready(r))];

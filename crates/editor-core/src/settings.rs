@@ -34,9 +34,9 @@ pub struct Notifications {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
 pub struct Appearance {
-    /// The interface font's family (none: Inter, which comes with the editor).
+    /// The interface font's family (none: Geist, which comes with the editor).
     pub ui_font: Option<String>,
-    /// The code font's family, for all monospace text (none: JetBrains Mono, which comes with it).
+    /// The code font's family, for all monospace text (none: Geist Mono, which comes with it).
     pub code_font: Option<String>,
     /// The Manual editor's font size in px (`CODE_FONT_SIZES`).
     pub code_font_size: u32,
@@ -438,8 +438,8 @@ const FILE_HEADER: &str = "\
 # Orchard settings. Saved changes apply straight away.
 
 [appearance]
-# ui_font = \"Segoe UI\"     # the interface font (default: Inter)
-# code_font = \"Consolas\"   # the code font, for all monospace text (default: JetBrains Mono)
+# ui_font = \"Segoe UI\"     # the interface font (default: Geist)
+# code_font = \"Consolas\"   # the code font, for all monospace text (default: Geist Mono)
 # The Manual editor's font size in px (9-28).
 code_font_size = 13
 # Ligatures (=> and != drawn as one symbol) where code is shown.

@@ -245,7 +245,7 @@ export interface SetupInfo {
 }
 
 export interface Appearance {
-  /** null: the bundled default (Inter / JetBrains Mono). */
+  /** null: the bundled default (Geist / Geist Mono). */
   uiFont: string | null;
   codeFont: string | null;
   codeFontSize: number;

@@ -31,11 +31,12 @@ const ManualEditor = lazy(() => import("./ManualEditor").then((m) => ({ default:
 const TerminalPanel = lazy(() => import("./TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 import { Board } from "./Board";
 import { Transcript } from "./Transcript";
-import { ContextBar, removedWorktree, worktreeColour, worktreeLabel, WorktreeRow, type WorktreeTab } from "./Worktrees";
+import { ContextStrip, removedWorktree, Sidebar, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 import { notify, onNotificationClicked } from "./notify";
 import { keepOutput, Setup, type SetupView } from "./Setup";
-import { StateDot } from "./StateDot";
-import { Banner, Composer, FindOtherConversations, OtherConversations, RecentList, STATE_LABEL } from "./Chat";
+import { StateBadge } from "./StateDot";
+import { shellRunning } from "./shells";
+import { Banner, Composer, FindOtherConversations, OtherConversations, RecentList } from "./Chat";
 import { Columns, COLUMNS_MIN_WIDTH } from "./Columns";
 import { createTabView, type TabView } from "./TabView";
 import { BareTitlebar, WindowControls } from "./WindowControls";
@@ -45,7 +46,7 @@ import { applyAppearance } from "./appearance";
 // The compact cut of the mark: the one for 32 px and below. Inline, not an <img>: its outer fruit
 // overhang its box, and an <img> would clip them.
 import orchardMark from "./assets/orchard-mark-small.svg?raw";
-import { ChevronDown, FolderGit2, GitBranch, Loader, PanelRight, Plus, Search, Settings, Sparkles, SquareTerminal, X } from "./icons";
+import { Bell, ChevronRight, GitBranch, GitCompareArrows, Loader, PanelLeft, PanelRight, Search, Sparkles, SquareTerminal, X } from "./icons";
 
 export function App() {
   const [problems, setProblems] = createSignal<MissingPrerequisite[] | null>(null);
@@ -209,7 +210,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   const [mainView, setMainView] = createSignal<"tabs" | "columns">("tabs");
   const [boardOpen, setBoardOpen] = createSignal(false);
   const view = () => (boardOpen() ? "board" : mainView());
-  /** The Worktrees pinned as columns, and those in Worktree row order. */
+  /** The Worktrees pinned as columns, and those in sidebar order. */
   const [pinned, setPinnedList] = createSignal<string[]>([]);
   const pinnedRow = () => rowWorktrees().filter((w) => pinned().includes(w.path));
   const setPinned = (path: string, on: boolean) =>
@@ -230,8 +231,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     if (path === activeWorktree() && next) setActiveWorktree(next.path);
     void setPinned(path, false);
   };
-  /** The title bar's "+ column" menu. */
-  const [addColumnAt, setAddColumnAt] = createSignal<{ left: number; top: number } | null>(null);
+  /** The sidebar folded to its icon rail, per view (the Columns view starts folded, for room). */
+  const [railIn, setRailIn] = createStore({ tabs: false, columns: true });
+  const collapsed = () => railIn[mainView()];
   /** The Columns view is offered from COLUMNS_MIN_WIDTH up. */
   const [wide, setWide] = createSignal(window.innerWidth >= COLUMNS_MIN_WIDTH);
   /** Each column's view slot, by Worktree (Y / N answer the focused one's card). */
@@ -282,7 +284,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   /** Each Worktree's Recent sessions (closed Tabs), as the core last reported them. */
   const [recent, setRecent] = createStore<Record<string, RecentSession[]>>({});
   const [recentOpen, setRecentOpen] = createSignal(false);
-  /** Where the Recent menu opens (it's fixed, so the scrolling session row doesn't clip it). */
+  /** Where the Recent menu opens (it's fixed, so the scrolling sidebar doesn't clip it). */
   const [recentAt, setRecentAt] = createSignal({ left: 0, top: 0 });
   createEffect(() => {
     const path = activeWorktree();
@@ -294,24 +296,22 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   const filesOpen = () => drawer() === "files";
   const gitOpen = () => drawer() === "git";
   const setFilesOpen = (open: boolean) => setDrawer(open ? "files" : null);
-  /** The Worktrees with their Terminal panel open, in both views: beside the Tabs view's
-   *  transcript while one is active, under its column's. Each view keeps its own panel size. */
+  /** The Worktrees with their terminal open, in both views: the Tabs view's panel beside the
+   *  transcript while one is active, its column's Terminal tab. */
   const [openTerminals, setOpenTerminals] = createSignal<string[]>([]);
   const terminalOpen = (path: string) => openTerminals().includes(path);
   const toggleTerminalOf = (path: string) =>
     setOpenTerminals((open) => (open.includes(path) ? open.filter((p) => p !== path) : [...open, path]));
   const [terminalWidth, setTerminalWidth] = createSignal(560);
-  const [columnTerminalHeight, setColumnTerminalHeight] = createSignal(280);
-  /** Ctrl+` and the title bar's button: the active Worktree's (the focused column's). */
+  /** The Tabs view's terminal takes the transcript's room too. */
+  const [terminalMaximized, setTerminalMaximized] = createSignal(false);
+  /** Ctrl+` and the header's button: the active Worktree's (the focused column's). */
   const toggleTerminal = () => {
     setBoardOpen(false);
     toggleTerminalOf(activeWorktree());
   };
-  /** The drawer the title bar's button opens: the one last shown. */
-  let lastDrawer: "files" | "git" = "files";
   const toggleDrawer = (which: "files" | "git") => {
     setBoardOpen(false); // (the drawers are beside the Tabs or columns)
-    lastDrawer = which;
     setDrawer((now) => (now === which ? null : which));
   };
   const [paletteOpen, setPaletteOpen] = createSignal(false);
@@ -403,11 +403,6 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         change(all[worktree]);
       }),
     );
-  /** The active Worktree's first session comes from its setup (or Start anyway), not "＋ session". */
-  const settingUp = () => {
-    const setup = setups[activeWorktree()];
-    return !!setup && setup.status.kind !== "done";
-  };
   const [settings, setSettings] = createSignal<LoadedSettings | null>(null);
   createEffect(() => settings() && applyAppearance(settings()!.settings.appearance));
   /** Something to know that isn't an error (e.g. a fetch failed, so a Worktree started from stale refs). */
@@ -685,7 +680,6 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     const onClick = (e: MouseEvent) => {
       if ((e.target as Element | null)?.closest?.(".recent-menu, .menu")) return;
       setRecentOpen(false);
-      setAddColumnAt(null);
     };
     window.addEventListener("click", onClick);
     untilGone(() => window.removeEventListener("click", onClick));
@@ -747,16 +741,89 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
 
   return (
     <div class="workspace" classList={{ "board-open": view() === "board" }}>
+      <Sidebar
+        workspaceName={props.workspace.name}
+        workspaceRoot={props.workspace.root}
+        collapsed={collapsed()}
+        mark={orchardMark}
+        worktrees={rowWorktrees()}
+        active={activeWorktree()}
+        pinned={mainView() === "columns" ? pinned() : null}
+        sessionsIn={sessionsIn}
+        activeSession={activeId()}
+        settingUp={(path) => !!setups[path] && setups[path].status.kind !== "done"}
+        onSelect={(path) => {
+          setBoardOpen(false);
+          if (mainView() === "columns" && !pinned().includes(path)) void pin(path);
+          else selectWorktree(path);
+        }}
+        onShowSession={(id) => void show(id)}
+        onCloseSession={(id) => void closeTab(id)}
+        onNewSession={(path) => void newSession(path)}
+        onRecent={(r) => {
+          setRecentAt({ left: r.left, top: r.bottom + 4 });
+          setRecentOpen((open) => !open);
+        }}
+        onNewWorktree={() => setCreatingWorktree(true)}
+        onOverview={() => setOverviewOpen(true)}
+        onSwitchWorkspace={() => setSwitching(true)}
+        onSearch={() => !removing() && !creatingWorktree() && setPaletteOpen(true)}
+        onSettings={() => openSettingsPage()}
+      />
+      <Show when={recentOpen() && mainView() === "tabs"}>
+        <div class="menu scroll" style={{ left: `${recentAt().left}px`, top: `${recentAt().top}px` }}>
+          <Show when={recent[activeWorktree()]?.length}>
+            <div class="menu-label">Recent sessions</div>
+            <For each={recent[activeWorktree()] ?? []}>
+              {(r) => (
+                <button class="menu-item" onClick={() => void reopen(core.reopenSession(r.acpId))} title="Reopen with its conversation">
+                  <Sparkles />
+                  {r.name}
+                </button>
+              )}
+            </For>
+            <div class="menu-sep" />
+          </Show>
+          <OtherConversations worktree={activeWorktree()} inMenu onOpen={(c) => void reopen(core.openConversation(c))} />
+        </div>
+      </Show>
+      <div class="inset">
       {/* The window's title bar (no native one): drag it by any bare part; double-click maximises. */}
-      <header class="titlebar" ref={titlebar} data-tauri-drag-region>
-        <span class="logo" innerHTML={orchardMark} data-tauri-drag-region />
-        <button class="name switch-workspace" onClick={() => setSwitching(true)} title="Switch repository (Ctrl+Shift+O)">
-          {props.workspace.name}
-          <ChevronDown />
+      <header class="app-header" ref={titlebar} data-tauri-drag-region>
+        <button
+          class="ghost icon"
+          onClick={() => setRailIn(mainView(), (now) => !now)}
+          title={collapsed() ? "Open the sidebar" : "Fold the sidebar to icons"}
+          aria-label="Toggle the sidebar"
+        >
+          <PanelLeft />
         </button>
-        <span class="path" title={props.workspace.root} data-tauri-drag-region>
-          {props.workspace.root}
-        </span>
+        <span class="vsep" />
+        <nav class="breadcrumb" data-tauri-drag-region>
+          <span class="crumb">{props.workspace.name}</span>
+          <ChevronRight />
+          <Show
+            when={mainView() === "tabs"}
+            fallback={
+              <span class="crumb current">
+                {pinned().length} of {rowWorktrees().filter((w) => !w.removed).length} Worktrees pinned
+              </span>
+            }
+          >
+            <span class="crumb" classList={{ current: !session() }}>
+              {worktree() ? worktreeLabel(worktree()!) : ""}
+            </span>
+            <Show when={session()}>
+              {(s) => (
+                <>
+                  <ChevronRight />
+                  <span class="crumb current">{s().name}</span>
+                  <StateBadge state={s().state} />
+                </>
+              )}
+            </Show>
+          </Show>
+        </nav>
         <span class="grow" data-tauri-drag-region />
         <div class="segmented">
           <button classList={{ on: view() === "tabs" }} onClick={() => chooseView("tabs")} title="One session at a time">
@@ -774,90 +841,38 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             Board
           </button>
         </div>
-        <Show when={mainView() === "columns"}>
-          <span class="recent-menu">
-            <button
-              class="add-worktree"
-              onClick={(e) => {
-                const r = e.currentTarget.getBoundingClientRect();
-                setAddColumnAt((now) => (now ? null : { left: r.left, top: r.bottom + 4 }));
-              }}
-              title="Give another Worktree a column"
-            >
-              <Plus />
-              column
-            </button>
-            <Show when={addColumnAt()}>
-              {(at) => (
-                <div class="menu" style={{ left: `${at().left}px`, top: `${at().top}px` }}>
-                  <For each={rowWorktrees().filter((w) => !w.removed && !pinned().includes(w.path))}>
-                    {(w) => (
-                      <button
-                        class="menu-item"
-                        style={{ "--c": worktreeColour(w.path) }}
-                        onClick={() => {
-                          setAddColumnAt(null);
-                          void pin(w.path);
-                        }}
-                      >
-                        <GitBranch class="wt-glyph" />
-                        <span class="mono">{worktreeLabel(w)}</span>
-                        <Show when={sessionsIn(w.path).some((s) => s.state === "needsYou")}>
-                          <span class="badge needs">{sessionsIn(w.path).filter((s) => s.state === "needsYou").length}</span>
-                        </Show>
-                      </button>
-                    )}
-                  </For>
-                  <div class="menu-sep" />
-                  <button
-                    class="menu-item"
-                    onClick={() => {
-                      setAddColumnAt(null);
-                      setCreatingWorktree(true);
-                    }}
-                  >
-                    <Plus />
-                    New Worktree…
-                  </button>
-                </div>
-              )}
-            </Show>
-          </span>
-        </Show>
         <Show when={needYou() > 0}>
-          <button class="needs-you-button" onClick={() => setBoardOpen(true)} title="See them on the Board">
+          <button class="outline needs-you-button" onClick={() => setBoardOpen(true)} title="See them on the Board">
+            <Bell />
             {needYou()} need{needYou() === 1 ? "s" : ""} you
           </button>
         </Show>
-        <button class="ghost worktrees-button" onClick={() => setOverviewOpen(true)} title="Every Worktree, and which are merged and can be removed">
-          <FolderGit2 />
-          Worktrees
-        </button>
-        <button class="search-button" onClick={() => !removing() && !creatingWorktree() && setPaletteOpen(true)} title="Go to a file in this Worktree, or start a session">
-          <Search />
-          Search files
-          <kbd>Ctrl+P</kbd>
-        </button>
+        <Show when={collapsed()}>
+          <button class="search-button" onClick={() => !removing() && !creatingWorktree() && setPaletteOpen(true)} title="Go to a file in this Worktree, or start a session">
+            <Search />
+            <span class="grow">Search files…</span>
+            <kbd>Ctrl P</kbd>
+          </button>
+        </Show>
         <button
-          class="ghost icon"
-          classList={{ on: terminalOpen(activeWorktree()) }}
+          class="terminal-button"
+          classList={{ outline: !terminalOpen(activeWorktree()) }}
           onClick={toggleTerminal}
-          title={mainView() === "columns" ? "A terminal in the focused column's Worktree (Ctrl+`)" : "A terminal in this Worktree (Ctrl+`)"}
-          aria-label="Terminal"
+          title={mainView() === "columns" ? "The focused column's Terminal tab (Ctrl+`)" : "A terminal in this Worktree (Ctrl+`)"}
         >
           <SquareTerminal />
+          <span class="label">Terminal</span>
+          <Show when={shellRunning(activeWorktree())}>
+            <span class="shell-dot" title="This Worktree has a shell running" />
+          </Show>
+          <kbd>Ctrl `</kbd>
         </button>
-        <button
-          class="ghost icon"
-          classList={{ on: drawer() !== null }}
-          onClick={() => (drawer() ? setDrawer(null) : toggleDrawer(lastDrawer))}
-          title="Files and Git of this Worktree (Ctrl+Shift+E, Ctrl+Shift+G)"
-          aria-label="Files and Git drawer"
-        >
+        <button class="outline changes-button" classList={{ on: gitOpen() }} onClick={() => toggleDrawer("git")} title="This Worktree's changes, commits and branches (Ctrl+Shift+G)">
+          <GitCompareArrows />
+          <span class="label">Changes</span>
+        </button>
+        <button class="ghost icon" classList={{ on: filesOpen() }} onClick={() => toggleDrawer("files")} title="This Worktree's files (Ctrl+Shift+E)" aria-label="Files drawer">
           <PanelRight />
-        </button>
-        <button class="ghost icon" onClick={() => openSettingsPage()} title="Settings (Ctrl+,)" aria-label="Settings">
-          <Settings />
         </button>
         <WindowControls />
       </header>
@@ -886,18 +901,6 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             setBoardOpen(false);
             if (mainView() === "columns" || id !== activeId()) void show(id);
           }}
-        />
-      </Show>
-      {/* (The Columns view has no Worktree row: its column headers say which Worktree is where.) */}
-      <Show when={mainView() === "tabs"}>
-        <WorktreeRow
-          worktrees={rowWorktrees()}
-          active={activeWorktree()}
-          sessionsIn={sessionsIn}
-          settingUp={(path) => !!setups[path] && setups[path].status.kind !== "done"}
-          onSelect={selectWorktree}
-          onNewSession={(path) => void newSession(path)}
-          onNewWorktree={() => setCreatingWorktree(true)}
         />
       </Show>
       <Show when={creatingWorktree()}>
@@ -931,80 +934,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         />
       </Show>
       <Show when={mainView() === "tabs"}>
-      <nav class="tabs" style={{ "--c": worktreeColour(activeWorktree()) }}>
-        <For each={sessionsIn(activeWorktree()).map((s) => s.id)}>
-          {(id) => (
-            <span class={`tab-wrap ${id === activeId() ? "active" : ""}`}>
-              <button
-                class="tab"
-                onClick={() => id !== activeId() && void show(id)}
-                onAuxClick={(e) => e.button === 1 && void closeTab(id)}
-              >
-                <Sparkles />
-                <StateDot state={sessions[id].state} title={STATE_LABEL[sessions[id].state]} />
-                <span class="name">{sessions[id].name}</span>
-                <Show when={id === activeId()} fallback={<Show when={sessions[id].unread}>{(n) => <span class="badge">{n()}</span>}</Show>}>
-                  <span class="sep">·</span>
-                  <span class={`state ${sessions[id].state}`}>{STATE_LABEL[sessions[id].state]}</span>
-                </Show>
-              </button>
-              <button
-                class="close-tab"
-                aria-label={`Close ${sessions[id].name}`}
-                title="Close (it stays in Recent sessions; Ctrl+Shift+T reopens)"
-                onClick={() => void closeTab(id)}
-              >
-                <X />
-              </button>
-            </span>
-          )}
-        </For>
-        <button class="ghost add-tab" onClick={() => void newSession()} title="New Agent session in this Worktree" disabled={worktree()?.removed || settingUp()}>
-          <Plus />
-          session
-        </button>
-        <Show when={!worktree()?.removed}>
-          <span class="recent-menu">
-            <button
-              class="ghost"
-              onClick={(e) => {
-                const r = e.currentTarget.getBoundingClientRect();
-                setRecentAt({ left: r.left, top: r.bottom + 4 });
-                setRecentOpen((open) => !open);
-              }}
-              title="Closed sessions in this Worktree, and its conversations started elsewhere"
-            >
-              Recent
-              <ChevronDown />
-            </button>
-            <Show when={recentOpen()}>
-              <div class="menu scroll" style={{ left: `${recentAt().left}px`, top: `${recentAt().top}px` }}>
-                <Show when={recent[activeWorktree()]?.length}>
-                  <div class="menu-label">Recent sessions</div>
-                  <For each={recent[activeWorktree()] ?? []}>
-                    {(r) => (
-                      <button class="menu-item" onClick={() => void reopen(core.reopenSession(r.acpId))} title="Reopen with its conversation">
-                        <Sparkles />
-                        {r.name}
-                      </button>
-                    )}
-                  </For>
-                  <div class="menu-sep" />
-                </Show>
-                <OtherConversations worktree={activeWorktree()} inMenu onOpen={(c) => void reopen(core.openConversation(c))} />
-              </div>
-            </Show>
-          </span>
-        </Show>
-      </nav>
-      <ContextBar
-        worktree={worktree()}
-        session={session()}
-        stateLabel={STATE_LABEL}
-        onRemove={() => setRemoving(worktree() ?? null)}
-        onSuspend={(s) => core.suspendSession(s.id).catch((err) => setError(String(err)))}
-        onResume={(s) => core.resumeSession(s.id).catch((err) => setError(String(err)))}
-      />
+        <ContextStrip
+          worktree={worktree()}
+          session={session()}
+          onRemove={() => setRemoving(worktree() ?? null)}
+          onSuspend={(s) => core.suspendSession(s.id).catch((err) => setError(String(err)))}
+          onResume={(s) => core.resumeSession(s.id).catch((err) => setError(String(err)))}
+        />
       </Show>
       <Show when={settingsAt()}>
         {(section) => (
@@ -1177,13 +1113,11 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })}
           terminalOpen={terminalOpen}
           onToggleTerminal={toggleTerminalOf}
-          terminalHeight={columnTerminalHeight()}
-          onTerminalHeight={setColumnTerminalHeight}
           onError={setError}
         />
       </Show>
       <Show when={mainView() === "tabs"}>
-      <div class="main-col">
+      <div class="main-col" classList={{ hidden: terminalOpen(activeWorktree()) && terminalMaximized() }}>
       <Show
         when={session()}
         keyed
@@ -1248,6 +1182,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           placement="side"
           size={terminalWidth()}
           onSize={setTerminalWidth}
+          maximized={terminalMaximized()}
+          onMaximize={() => setTerminalMaximized((now) => !now)}
           takeFocus
           onClose={() => toggleTerminalOf(activeWorktree())}
         />
@@ -1293,6 +1229,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onClose={() => setDrawer(null)}
         />
       </Show>
+      </div>
       </div>
     </div>
   );

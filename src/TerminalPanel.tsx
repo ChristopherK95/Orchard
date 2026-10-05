@@ -1,5 +1,5 @@
 // The Terminal panel: a Worktree's shell, docked beside the transcript in the Tabs view (following
-// the active Worktree) or under a column's in the Columns view. The core runs one shell per
+// the active Worktree) or filling a column in the Columns view, as its Terminal tab. The core runs one shell per
 // Worktree, which keeps running out of sight; a panel comes back to what its shell printed. Each
 // panel is a view slot of its own, so the columns' terminals stream side by side. xterm.js draws.
 import { FitAddon } from "@xterm/addon-fit";
@@ -7,13 +7,12 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { createEffect, createSignal, getOwner, on, onCleanup, onMount, runWithOwner, Show } from "solid-js";
 import { core, type TerminalOutput } from "./core";
-import { GitBranch, SquareTerminal, Trash2, X } from "./icons";
+import { Eraser, Folder, GitBranch, Maximize2, Minimize2, SquareTerminal, Trash2, X } from "./icons";
+import { setShellRunning } from "./shells";
 
-/** The panel's smallest size, and the least it leaves the transcript (beside it, or above it). */
+/** The panel's smallest width, and the least it leaves the transcript beside it. */
 const MIN_WIDTH = 280;
 const MIN_LEFT = 420;
-const MIN_HEIGHT = 120;
-const MIN_ABOVE = 260;
 
 export function TerminalPanel(props: {
   /** Its view slot: the Tabs view's, or its column's. */
@@ -22,15 +21,19 @@ export function TerminalPanel(props: {
   /** The Worktree's branch (or label) and colour. */
   label: string;
   colour: string;
-  /** Beside the transcript (its width set), or under it (its height). */
-  placement: "side" | "bottom";
-  size: number;
-  onSize: (px: number) => void;
+  /** Beside the transcript (its width set, resizable), or filling a column in its place. */
+  placement: "side" | "fill";
+  size?: number;
+  onSize?: (px: number) => void;
+  /** Beside the transcript: whether it takes the transcript's room too. */
+  maximized?: boolean;
+  onMaximize?: () => void;
   /** Whether showing a Worktree's shell takes the keyboard (not an unfocused column's). */
   takeFocus: boolean;
-  onClose: () => void;
+  onClose?: () => void;
 }) {
   let body!: HTMLDivElement;
+  let clear = () => {};
   const [exited, setExited] = createSignal(false);
   const [error, setError] = createSignal("");
   const [dragging, setDragging] = createSignal(false);
@@ -57,10 +60,10 @@ export function TerminalPanel(props: {
       cursorBlink: true,
       scrollback: 5000,
       theme: {
-        background: token("--bg-1"),
+        background: token("--code-bg"),
         foreground: token("--fg-1"),
         cursor: token("--accent"),
-        cursorAccent: token("--bg-1"),
+        cursorAccent: token("--code-bg"),
         selectionBackground: token("--accent-dim"),
         red: token("--danger"),
         green: token("--ok"),
@@ -73,6 +76,7 @@ export function TerminalPanel(props: {
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(body);
+    clear = () => term.clear();
     onCleanup(() => {
       void core.hideTerminal(props.slot).catch(() => {});
       term.dispose();
@@ -99,12 +103,16 @@ export function TerminalPanel(props: {
           } else if (out.kind === "output") term.write(out.text);
           else {
             setExited(true);
+            setShellRunning(path, false);
             const code = out.code === null ? "" : ` with code ${out.code}`;
             term.write(`\r\n\x1b[2m[The shell exited${code}. Press Enter for a new one.]\x1b[0m\r\n`);
           }
         }
       };
-      core.openTerminal(props.slot, path, term.cols, term.rows, onOutput).catch((err) => mine === showing && setError(String(err)));
+      core
+        .openTerminal(props.slot, path, term.cols, term.rows, onOutput)
+        .then(() => mine === showing && !exited() && setShellRunning(path, true))
+        .catch((err) => mine === showing && setError(String(err)));
       if (props.takeFocus) term.focus();
     };
     createEffect(on(() => props.worktree, show));
@@ -147,18 +155,15 @@ export function TerminalPanel(props: {
     });
   };
 
-  /** Dragging the inner edge (left beside, top under) sets the size. */
+  /** Dragging the left edge sets the width. */
   const resize = (e: PointerEvent) => {
     const handle = e.currentTarget as HTMLElement;
     handle.setPointerCapture(e.pointerId);
-    const side = props.placement === "side";
-    const start = side ? e.clientX : e.clientY;
-    const startSize = props.size;
-    const [min, max] = side
-      ? [MIN_WIDTH, Math.max(MIN_WIDTH, window.innerWidth - MIN_LEFT)]
-      : [MIN_HEIGHT, Math.max(MIN_HEIGHT, window.innerHeight - MIN_ABOVE)];
+    const start = e.clientX;
+    const startSize = props.size ?? MIN_WIDTH;
+    const max = Math.max(MIN_WIDTH, window.innerWidth - MIN_LEFT);
     setDragging(true);
-    const move = (m: PointerEvent) => props.onSize(Math.min(max, Math.max(min, startSize + start - (side ? m.clientX : m.clientY))));
+    const move = (m: PointerEvent) => props.onSize?.(Math.min(max, Math.max(MIN_WIDTH, startSize + start - m.clientX)));
     const up = () => {
       setDragging(false);
       handle.removeEventListener("pointermove", move);
@@ -168,29 +173,60 @@ export function TerminalPanel(props: {
     handle.addEventListener("pointerup", up);
   };
 
+  const stop = () =>
+    core
+      .closeTerminal(props.worktree)
+      .then(() => setShellRunning(props.worktree, false))
+      .catch((err) => setError(String(err)));
+  const side = () => props.placement === "side";
+
   return (
     <aside
       class={`terminal-panel ${props.placement}`}
-      style={{ [props.placement === "side" ? "width" : "height"]: `${props.size}px`, "--c": props.colour }}
+      classList={{ maximized: side() && props.maximized }}
+      style={{ width: side() && !props.maximized ? `${props.size}px` : undefined, "--c": props.colour }}
     >
-      <div class="terminal-resize" classList={{ dragging: dragging() }} onPointerDown={resize} />
-      <div class="drawer-head">
-        <SquareTerminal />
-        <span class="terminal-title">Terminal</span>
-        <GitBranch />
-        <span class="drawer-branch">{props.label}</span>
+      <Show when={side() && !props.maximized}>
+        <div class="terminal-resize" classList={{ dragging: dragging() }} onPointerDown={resize}>
+          <span class="grip" />
+        </div>
+      </Show>
+      <Show when={side()}>
+        <div class="terminal-head">
+          <div class="tabs-list">
+            <span class="trigger on">
+              <SquareTerminal />
+              Terminal
+            </span>
+          </div>
+          <span class="grow" />
+          <button
+            class="ghost icon"
+            onClick={() => props.onMaximize?.()}
+            title={props.maximized ? "Back beside the conversation" : "Take the conversation's room too"}
+            aria-label={props.maximized ? "Restore the terminal" : "Maximise the terminal"}
+          >
+            {props.maximized ? <Minimize2 /> : <Maximize2 />}
+          </button>
+          <button class="ghost icon" onClick={() => props.onClose?.()} title="Hide the terminal; its shell keeps running (Ctrl+`)" aria-label="Hide the terminal">
+            <X />
+          </button>
+        </div>
+      </Show>
+      <div class="terminal-cwd">
+        <Show when={side()} fallback={<Folder />}>
+          <GitBranch class="wt-glyph" />
+          <span class="branch">{props.label}</span>
+        </Show>
+        <span class="path" title={props.worktree}>
+          {props.worktree}
+        </span>
         <span class="grow" />
-        <button
-          class="ghost icon"
-          onClick={() => void core.closeTerminal(props.worktree).catch((err) => setError(String(err)))}
-          disabled={exited()}
-          title="Stop this shell and everything it started"
-          aria-label="Stop the shell"
-        >
-          <Trash2 />
+        <button class="ghost icon" onClick={() => clear()} title="Clear the screen" aria-label="Clear the screen">
+          <Eraser />
         </button>
-        <button class="ghost icon" onClick={() => props.onClose()} title="Hide the terminal; its shell keeps running (Ctrl+`)" aria-label="Hide the terminal">
-          <X />
+        <button class="ghost icon" onClick={() => void stop()} disabled={exited()} title="Stop this shell and everything it started" aria-label="Stop the shell">
+          <Trash2 />
         </button>
       </div>
       <Show when={error()}>

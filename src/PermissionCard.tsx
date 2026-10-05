@@ -11,10 +11,30 @@ import {
 } from "./core";
 import { hasUnsavedChanges } from "./documents";
 import { highlightCode, languageOfPath } from "./highlight";
-import { Ban, Check, TriangleAlert } from "./icons";
-import { StateDot } from "./StateDot";
+import { Ban, Check, ShieldAlert, TriangleAlert } from "./icons";
+import type { DiffLine } from "./core";
 
-const DIFF_PREFIX = { hunk: "", context: " ", added: "+", removed: "−" } as const;
+const DIFF_SIGN = { hunk: "", context: "", added: "+", removed: "−" } as const;
+
+/** Each diff line with its line number: the new file's, or the old one's for a removed line
+ *  (counted from the hunk headers; none before the first). */
+export function numberDiff(diff: DiffLine[]): { line: DiffLine; no: number | null }[] {
+  let old: number | null = null;
+  let now: number | null = null;
+  return diff.map((line) => {
+    if (line.kind === "hunk") {
+      const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line.text);
+      old = m ? Number(m[1]) : null;
+      now = m ? Number(m[2]) : null;
+      return { line, no: null };
+    }
+    if (line.kind === "removed") return { line, no: old === null ? null : old++ };
+    const no = now;
+    if (now !== null) now++;
+    if (line.kind === "context" && old !== null) old++;
+    return { line, no };
+  });
+}
 
 /** The option `Y` picks: allow once. */
 export const yesOption = (request: PermissionRequest) => request.options.find((o) => o.kind === "allowOnce");
@@ -78,6 +98,7 @@ export function PermissionCard(props: {
     return `You chose: ${props.request.options.find((o) => o.id === outcome.optionId)?.name ?? outcome.optionId}`;
   };
   const cancelled = () => props.outcome?.kind === "cancelled";
+  const stat = () => (props.request.diff ? ` · +${counts().added} −${counts().removed}` : "");
   const counts = () => {
     const diff = props.request.diff ?? [];
     return { added: diff.filter((l) => l.kind === "added").length, removed: diff.filter((l) => l.kind === "removed").length };
@@ -88,12 +109,16 @@ export function PermissionCard(props: {
   return (
     <div ref={card} class={`permission ${pending() ? "pending" : "answered"}`} classList={{ cancelled: cancelled() }} tabindex={-1}>
       <div class="permission-head">
-        {pending() ? <StateDot state="needsYou" /> : cancelled() ? <Ban /> : <Check />}
-        <span class="title">{props.request.title}</span>
-        <Show when={props.request.target && !props.request.title.includes(props.request.target)}>
-          <span class="target">{props.request.target}</span>
-        </Show>
-        <span class="outcome">{pending() ? "Permission requested" : chosen()}</span>
+        <span class="icon-box">{pending() ? <ShieldAlert /> : cancelled() ? <Ban /> : <Check />}</span>
+        <div class="titles">
+          <div class="title-row">
+            <span class="title">{props.request.title}</span>
+            <Show when={props.request.target && !props.request.title.includes(props.request.target)}>
+              <span class="target">{props.request.target}</span>
+            </Show>
+          </div>
+          <span class="outcome">{pending() ? `Permission requested${stat()}` : chosen()}</span>
+        </div>
       </div>
       <Show when={pending() && props.request.file && hasUnsavedChanges(props.request.file)}>
         <p class="permission-warning">
@@ -101,51 +126,49 @@ export function PermissionCard(props: {
           You have unsaved changes in this file. If you allow this, you'll be asked which version to keep.
         </p>
       </Show>
-      <Show when={props.request.diff || command()}>
-        <div class="permission-body">
-          <Show when={props.request.diff}>
-            {(diff) => (
-              <>
-                <div class="permission-stat">
-                  <span class="add">+{counts().added}</span>
-                  <span class="del">−{counts().removed}</span>
-                  <span>{props.request.target}</span>
-                </div>
-                <pre class="diff">
-                  <For each={diff()}>
-                    {(line) =>
-                      line.kind === "hunk" ? (
-                        <span class="line hunk">{line.text}</span>
-                      ) : (
-                        // Each line is highlighted on its own: cheap, and good enough for short snippets.
-                        <span class={`line ${line.kind}`}>
-                          {DIFF_PREFIX[line.kind]}
-                          <span innerHTML={highlightCode(line.text, language())} />
-                        </span>
-                      )
-                    }
-                  </For>
-                </pre>
-              </>
-            )}
-          </Show>
-          <Show when={command()}>
-            {(cmd) => (
-              <pre class="diff command">
-                <span class="line">
-                  <span class="dim">$ </span>
-                  <span class="cmd">{cmd()}</span>
-                </span>
-              </pre>
-            )}
-          </Show>
-        </div>
+      <Show when={pending() && props.request.diff}>
+        {(diff) => (
+          <pre class="diff numbered">
+            <For each={numberDiff(diff())}>
+              {({ line, no }) =>
+                line.kind === "hunk" ? (
+                  <span class="line hunk">
+                    <span class="no" />
+                    <span class="sign" />
+                    {line.text}
+                  </span>
+                ) : (
+                  // Each line is highlighted on its own: cheap, and good enough for short snippets.
+                  <span class={`line ${line.kind}`}>
+                    <span class="no">{no ?? ""}</span>
+                    <span class="sign">{DIFF_SIGN[line.kind]}</span>
+                    <span innerHTML={highlightCode(line.text, language())} />
+                  </span>
+                )
+              }
+            </For>
+          </pre>
+        )}
+      </Show>
+      <Show when={pending() && command()}>
+        {(cmd) => (
+          <pre class="diff command">
+            <span class="line">
+              <span class="dim">$ </span>
+              <span class="cmd">{cmd()}</span>
+            </span>
+          </pre>
+        )}
       </Show>
       <Show when={pending()}>
         <div class="permission-actions">
           <For each={props.request.options}>
             {(option) => (
-              <button class={option.kind === "allowOnce" ? "primary" : ""} disabled={sending()} onClick={() => void answer(option)}>
+              <button
+                class={option.kind === "allowOnce" ? "primary" : option.kind.startsWith("reject") ? "ghost" : "outline"}
+                disabled={sending()}
+                onClick={() => void answer(option)}
+              >
                 {option.name}
                 <Show when={keys() && option === yesOption(props.request)}>
                   <kbd>Y</kbd>
@@ -156,7 +179,7 @@ export function PermissionCard(props: {
               </button>
             )}
           </For>
-          <span class="hint">{keys() ? "Y / N answer the oldest open card" : "focus this column to answer with Y / N"}</span>
+          <span class="hint">{keys() ? "Y / N answer the oldest open card" : "Focus this column to answer with Y / N"}</span>
         </div>
       </Show>
       <Show when={error()}>

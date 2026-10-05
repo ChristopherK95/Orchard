@@ -1,19 +1,13 @@
 // Pieces of the chat surface shared by the Tabs view and each column of the Columns view: the
 // composer, banners, the Recent sessions list and the state labels.
 import { createEffect, createResource, createSignal, For, type JSX, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
-import { core, type OtherConversation, type PermissionMode, type RecentSession, type SessionId, type SessionInfo, type SessionState } from "./core";
+import { core, type OtherConversation, type PermissionMode, type RecentSession, type SessionId, type SessionInfo } from "./core";
 import { EditNotes } from "./EditNotes";
 import { createSlashMenu, SlashMenu, useSlashCommands } from "./SlashCommands";
-import { BookOpen, ChevronDown, CirclePlay, Info, Loader, ShieldQuestion, Sparkles, SquareTerminal, TriangleAlert, X, Zap } from "./icons";
+import { ArrowUp, BookOpen, ChevronDown, CirclePlay, Info, Loader, ShieldQuestion, Sparkles, SquareTerminal, TriangleAlert, X, Zap } from "./icons";
 import { worktreeColour } from "./Worktrees";
 
-export const STATE_LABEL: Record<SessionState, string> = {
-  working: "Working",
-  needsYou: "Needs you",
-  idle: "Idle",
-  suspended: "Suspended",
-  exited: "Exited",
-};
+export { STATE_LABEL } from "./stateLabels";
 
 export function RecentList(props: { sessions: RecentSession[]; onReopen: (session: RecentSession) => void }) {
   return (
@@ -133,7 +127,7 @@ export function FindOtherConversations(props: { worktree: string; onOpen: (c: Ot
   );
 }
 
-export /** One line between the context bar and the content: a standing fact, a notice or an error. */
+export /** One line between the context strip and the content: a standing fact, a notice or an error. */
 function Banner(props: { tone: "warn" | "info" | "error"; children: JSX.Element; action?: JSX.Element; onDismiss?: () => void }) {
   return (
     <div class={`banner ${props.tone}`} role={props.tone === "error" ? "alert" : "status"}>
@@ -290,8 +284,8 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
             <Show
               when={props.session.state === "exited"}
               fallback={
-                <button class="primary send" onClick={send} disabled={disabled() || !text().trim()}>
-                  Send <kbd>Enter</kbd>
+                <button class="primary send icon-only" onClick={send} disabled={disabled() || !text().trim()} title="Send (Enter)" aria-label="Send">
+                  <ArrowUp />
                 </button>
               }
             >

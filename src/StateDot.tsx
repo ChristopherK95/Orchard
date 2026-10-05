@@ -2,6 +2,7 @@
 // Agent session states). Drawn on a 14 px box; the Working ring breathes unless motion is reduced.
 import { Match, Switch } from "solid-js";
 import type { SessionState } from "./core";
+import { STATE_LABEL } from "./stateLabels";
 
 export function StateDot(props: { state: SessionState; title?: string }) {
   return (
@@ -28,5 +29,15 @@ export function StateDot(props: { state: SessionState; title?: string }) {
         </Match>
       </Switch>
     </svg>
+  );
+}
+
+/** A session's state as a pill: a dot and its name, tinted by state (Badge · session state). */
+export function StateBadge(props: { state: SessionState; label?: string }) {
+  return (
+    <span class={`state-badge ${props.state}`}>
+      <span class="dot" />
+      {props.label ?? STATE_LABEL[props.state]}
+    </span>
   );
 }
