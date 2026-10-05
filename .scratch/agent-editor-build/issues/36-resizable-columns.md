@@ -19,4 +19,4 @@ Notes:
 **Notes (done):**
 - Core: `column_shares()` / `set_column_shares()` (and the commands of the same names), saved in the Workspace's state next to the pins as whole numbers (1000 per column when even; a column without one counts as 1000). Only pinned Worktrees keep a share; an unknown Worktree is refused. Pinning or unpinning a Worktree clears them all (re-pinning one that's pinned changes nothing). Test: `tests/columns.rs`.
 - Frontend: each column's `flex-grow` is its share, from a 0 px basis, so widths follow the shares while every column is over 640 px. A drag works out the two columns' new shares from their widths on screen and saves when let go; while dragging, only the screen changes.
-- **Deviation:** the handle is the 8 px gap the columns already had (with a 3 px wider grab area each side), not 12 px: a 12 px gap looked loose next to the 8 px padding round the row.
+- **Deviation:** the handle is the 8 px gap the columns already had (with a 3 px wider grab area each side), not 12 px, to keep the gap the same as the 8 px padding round the row. Not checked on screen.
