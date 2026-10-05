@@ -305,7 +305,7 @@ export function ManualEditor(props: {
     if (content.kind !== "text") {
       const placeholder =
         content.kind === "binary"
-          ? `A binary file (${megabytes(content.bytes)}): nothing to show.`
+          ? `Binary file — ${megabytes(content.bytes)}, not shown\nOrchard does not open binary files. Reveal it in your file manager if you need it.`
           : content.kind === "notUtf8"
             ? "This file isn't UTF-8 text, so it can't be shown or edited here."
             : `Too big to open here (${megabytes(content.bytes)}).`;
@@ -710,7 +710,15 @@ export function ManualEditor(props: {
         </div>
       </Show>
       <Show when={active()?.note}>{(note) => <div class="editor-banner muted">{note()}</div>}</Show>
-      <Show when={active()?.placeholder}>{(text) => <div class="center muted editor-placeholder">{text()}</div>}</Show>
+      <Show when={active()?.placeholder}>
+        {(text) => (
+          <div class="center muted editor-placeholder">
+            {/* (A second line, if any, is the smaller explanation under it.) */}
+            <div>{text().split("\n")[0]}</div>
+            <Show when={text().split("\n")[1]}>{(sub) => <div class="small">{sub()}</div>}</Show>
+          </div>
+        )}
+      </Show>
       <Show when={diff()?.tabId === activeId() ? diff() : undefined}>
         {(d) => (
           <DiffPanel

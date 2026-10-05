@@ -231,7 +231,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 
 /* Title bar · 36 px. */
 .titlebar { flex: none; height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 12px; background: var(--bg-2); border-bottom: 1px solid var(--line); }
-.titlebar .logo { flex: none; width: 16px; height: 16px; }
+.titlebar .logo { flex: none; width: 18px; height: 18px; }
 .titlebar .name { font-size: 13.5px; font-weight: 600; }
 .titlebar .path { font: 11.5px var(--mono); color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .needs-you-button { min-height: 24px; padding: 0 10px 0 9px; gap: 7px; border: 0; border-radius: 999px; background: var(--needs-you); color: var(--on-needs); font-size: 12px; font-weight: 600; }
@@ -751,7 +751,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .editor-host .cm-panels { background: var(--bg-2); color: var(--fg-1); border-color: var(--line); }
 .editor-host .cm-panels input, .editor-host .cm-panels button { height: auto; min-height: 24px; font-size: 12px; }
 .editor-host .cm-matchingBracket { outline: 1px solid var(--accent); background: transparent; }
-.editor-placeholder { flex: 1; }
+.editor-placeholder { flex: 1; flex-direction: column; gap: 4px; text-align: center; }
 .popout .manual-editor { border-left: 0; }
 .diff-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 1px solid var(--line); font-size: 12px; background: var(--bg-2); }
 .diff-head button { min-height: 24px; padding: 0 9px; font-size: 12px; }

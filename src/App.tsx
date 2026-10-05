@@ -40,7 +40,8 @@ import { BareTitlebar, WindowControls } from "./WindowControls";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { SettingsPage, type SettingsSection } from "./SettingsPage";
 import { applyAppearance } from "./appearance";
-import orchardMark from "./assets/orchard-mark.svg";
+// The compact cut of the mark: the one for 32 px and below.
+import orchardMark from "./assets/orchard-mark-small.svg";
 import { ChevronDown, FolderGit2, GitBranch, Loader, PanelRight, Plus, Search, Settings, Sparkles, X } from "./icons";
 
 export function App() {
