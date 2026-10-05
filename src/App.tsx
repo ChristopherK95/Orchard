@@ -294,19 +294,18 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   const filesOpen = () => drawer() === "files";
   const gitOpen = () => drawer() === "git";
   const setFilesOpen = (open: boolean) => setDrawer(open ? "files" : null);
-  /** The Tabs view's Terminal panel (the active Worktree's shell), and its width. */
-  const [terminalOpen, setTerminalOpen] = createSignal(false);
+  /** The Worktrees with their Terminal panel open, in both views: beside the Tabs view's
+   *  transcript while one is active, under its column's. Each view keeps its own panel size. */
+  const [openTerminals, setOpenTerminals] = createSignal<string[]>([]);
+  const terminalOpen = (path: string) => openTerminals().includes(path);
+  const toggleTerminalOf = (path: string) =>
+    setOpenTerminals((open) => (open.includes(path) ? open.filter((p) => p !== path) : [...open, path]));
   const [terminalWidth, setTerminalWidth] = createSignal(560);
-  /** The columns with their Terminal panel open (by Worktree), and the panels' height. */
-  const [columnTerminals, setColumnTerminals] = createSignal<string[]>([]);
   const [columnTerminalHeight, setColumnTerminalHeight] = createSignal(280);
-  const toggleColumnTerminal = (path: string) =>
-    setColumnTerminals((open) => (open.includes(path) ? open.filter((p) => p !== path) : [...open, path]));
-  /** Ctrl+` and the title bar's button: the Tabs view's panel, or the focused column's. */
+  /** Ctrl+` and the title bar's button: the active Worktree's (the focused column's). */
   const toggleTerminal = () => {
     setBoardOpen(false);
-    if (mainView() === "columns") toggleColumnTerminal(activeWorktree());
-    else setTerminalOpen((open) => !open);
+    toggleTerminalOf(activeWorktree());
   };
   /** The drawer the title bar's button opens: the one last shown. */
   let lastDrawer: "files" | "git" = "files";
@@ -841,7 +840,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         </button>
         <button
           class="ghost icon"
-          classList={{ on: mainView() === "columns" ? columnTerminals().includes(activeWorktree()) : terminalOpen() }}
+          classList={{ on: terminalOpen(activeWorktree()) }}
           onClick={toggleTerminal}
           title={mainView() === "columns" ? "A terminal in the focused column's Worktree (Ctrl+`)" : "A terminal in this Worktree (Ctrl+`)"}
           aria-label="Terminal"
@@ -1176,8 +1175,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onRemove={setRemoving}
           onOpenSettings={() => openSettingsPage("repo")}
           onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })}
-          terminalOpen={(path) => columnTerminals().includes(path)}
-          onToggleTerminal={toggleColumnTerminal}
+          terminalOpen={terminalOpen}
+          onToggleTerminal={toggleTerminalOf}
           terminalHeight={columnTerminalHeight()}
           onTerminalHeight={setColumnTerminalHeight}
           onError={setError}
@@ -1240,7 +1239,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onError={setError}
         />
       </Show>
-      <Show when={terminalOpen() && mainView() === "tabs"}>
+      <Show when={mainView() === "tabs" && terminalOpen(activeWorktree())}>
         <TerminalPanel
           slot={TABS_SLOT}
           worktree={activeWorktree()}
@@ -1250,7 +1249,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           size={terminalWidth()}
           onSize={setTerminalWidth}
           takeFocus
-          onClose={() => setTerminalOpen(false)}
+          onClose={() => toggleTerminalOf(activeWorktree())}
         />
       </Show>
       <Show when={filesOpen()}>

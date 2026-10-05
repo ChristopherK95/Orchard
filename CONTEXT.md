@@ -74,7 +74,7 @@ Where the user views and hand-edits a file in a Worktree (or the settings file, 
 _Avoid_: Text editor window, code view
 
 **Terminal panel**:
-The user's own shell in a Worktree's folder: docked beside the chat in the Tabs view, following the active Worktree, and under the transcript of each column that opens one in the Columns view (Ctrl+` toggles the Tabs view's, or the focused column's). Each Worktree has one shell, started the first time a panel shows that Worktree. It keeps running while out of sight (a dev server, say) and a panel comes back to its output. It stops when the user stops it, or when its Worktree is removed or the Workspace closes. It runs the repo's Windows shell setting on Windows, and `$SHELL` on Linux.
+The user's own shell in a Worktree's folder: docked beside the chat in the Tabs view and under the column's transcript in the Columns view. Opening or closing it is per Worktree and holds in both views (Ctrl+` toggles the active Worktree's, which in the Columns view is the focused column's). Each Worktree has one shell, started the first time a panel shows that Worktree. It keeps running while out of sight (a dev server, say) and a panel comes back to its output. It stops when the user stops it, or when its Worktree is removed or the Workspace closes. It runs the repo's Windows shell setting on Windows, and `$SHELL` on Linux.
 _Avoid_: Console, integrated terminal
 
 **Agent**:
