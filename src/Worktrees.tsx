@@ -72,6 +72,8 @@ export interface SidebarProps {
   /** A Worktree setup is running there (its first session hasn't started yet). */
   settingUp: (path: string) => boolean;
   onSelect: (path: string) => void;
+  /** The branch picker for a Worktree, under `anchor`. */
+  onSwitchBranch: (path: string, anchor: Element) => void;
   onShowSession: (id: SessionId) => void;
   onCloseSession: (id: SessionId) => void;
   onNewSession: (path: string) => void;
@@ -155,17 +157,29 @@ export function Sidebar(props: SidebarProps) {
               const sessions = () => props.sessionsIn(w.path);
               return (
                 <>
-                  <button
-                    class="sidebar-item"
-                    classList={{ on: w.path === props.active, dimmed: dimmed(w), removed: !!w.removed }}
-                    style={{ "--c": worktreeColour(w.path) }}
-                    title={title(w)}
-                    onClick={() => props.onSelect(w.path)}
-                  >
-                    <GitBranch class="wt-glyph" />
-                    <span class="label">{w.removed ? w.path.split(/[\\/]/).pop() : worktreeLabel(w)}</span>
-                    {worktreeSignal(sessions(), props.settingUp(w.path))}
-                  </button>
+                  <span class="sidebar-item-wrap">
+                    <button
+                      class="sidebar-item"
+                      classList={{ on: w.path === props.active, dimmed: dimmed(w), removed: !!w.removed }}
+                      style={{ "--c": worktreeColour(w.path) }}
+                      title={title(w)}
+                      onClick={() => props.onSelect(w.path)}
+                    >
+                      <GitBranch class="wt-glyph" />
+                      <span class="label">{w.removed ? w.path.split(/[\\/]/).pop() : worktreeLabel(w)}</span>
+                      {worktreeSignal(sessions(), props.settingUp(w.path))}
+                    </button>
+                    <Show when={!w.removed}>
+                      <button
+                        class="ghost icon branch-switch opens-branches"
+                        onClick={(e) => props.onSwitchBranch(w.path, e.currentTarget)}
+                        title="Switch this Worktree's branch"
+                        aria-label={`Switch ${worktreeLabel(w)}'s branch`}
+                      >
+                        <ChevronsUpDown />
+                      </button>
+                    </Show>
+                  </span>
                   <Show when={!props.pinned && w.path === props.active}>
                     <SessionList {...props} worktree={w} sessions={sessions()} />
                   </Show>

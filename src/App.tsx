@@ -23,6 +23,7 @@ import { RemoveWorktreeDialog } from "./RemoveWorktreeDialog";
 import { WorktreesOverview } from "./WorktreesOverview";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
 import { FilesDrawer } from "./FilesDrawer";
+import { type BranchPopover, BranchSwitcher, popoverUnder } from "./BranchPicker";
 import { GitDrawer } from "./GitDrawer";
 import type { OpenRequest } from "./ManualEditor";
 // CodeMirror loads with the first file opened, not at startup.
@@ -46,7 +47,7 @@ import { applyAppearance } from "./appearance";
 // The compact cut of the mark: the one for 32 px and below. Inline, not an <img>: its outer fruit
 // overhang its box, and an <img> would clip them.
 import orchardMark from "./assets/orchard-mark-small.svg?raw";
-import { Bell, ChevronRight, GitBranch, GitCompareArrows, Loader, PanelLeft, PanelRight, Search, Sparkles, SquareTerminal, X } from "./icons";
+import { Bell, ChevronDown, ChevronRight, GitBranch, GitCompareArrows, Loader, PanelLeft, PanelRight, Search, Sparkles, SquareTerminal, X } from "./icons";
 
 export function App() {
   const [problems, setProblems] = createSignal<MissingPrerequisite[] | null>(null);
@@ -290,6 +291,14 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   const needYou = () => order().filter((id) => sessions[id]?.state === "needsYou").length;
   /** "New Worktree from this branch" (from the Git drawer's branch picker). */
   const [creatingFrom, setCreatingFrom] = createSignal<string | undefined>(undefined);
+  const newWorktreeFrom = (branch: string) => {
+    setCreatingFrom(branch);
+    setCreatingWorktree(true);
+  };
+  /** The branch picker opened from a branch name (a column's header, the breadcrumb, the sidebar). */
+  const [branchPopover, setBranchPopover] = createSignal<BranchPopover | null>(null);
+  const toggleBranches = (worktree: string, anchor: Element) =>
+    setBranchPopover((open) => (open?.worktree === worktree ? null : popoverUnder(worktree, anchor)));
   /** Each Worktree's Recent sessions (closed Tabs), as the core last reported them. */
   const [recent, setRecent] = createStore<Record<string, RecentSession[]>>({});
   const [recentOpen, setRecentOpen] = createSignal(false);
@@ -783,6 +792,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         }}
         onNewWorktree={() => setCreatingWorktree(true)}
         onOverview={() => setOverviewOpen(true)}
+        onSwitchBranch={toggleBranches}
         onSwitchWorkspace={() => setSwitching(true)}
         onSearch={() => !removing() && !creatingWorktree() && setPaletteOpen(true)}
         onSettings={() => openSettingsPage()}
@@ -827,9 +837,21 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
               </span>
             }
           >
-            <span class="crumb" classList={{ current: !session() }}>
-              {worktree() ? worktreeLabel(worktree()!) : ""}
-            </span>
+            <Show when={worktree()} fallback={<span class="crumb" />}>
+              {(w) => (
+                <Show when={!w().removed} fallback={<span class="crumb">{worktreeLabel(w())}</span>}>
+                  <button
+                    class="crumb branch-crumb opens-branches"
+                    classList={{ current: !session() }}
+                    onClick={(e) => toggleBranches(w().path, e.currentTarget)}
+                    title="Switch this Worktree's branch"
+                  >
+                    {worktreeLabel(w())}
+                    <ChevronDown class="chev" />
+                  </button>
+                </Show>
+              )}
+            </Show>
             <Show when={session()}>
               {(s) => (
                 <>
@@ -1060,6 +1082,11 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onClose={() => setOverviewOpen(false)}
         />
       </Show>
+      <Show when={branchPopover()}>
+        {(at) => (
+          <BranchSwitcher at={at()} onGoToWorktree={selectWorktree} onNewWorktreeFrom={newWorktreeFrom} onClose={() => setBranchPopover(null)} />
+        )}
+      </Show>
       <Show when={removing()}>
         {(w) => (
           <RemoveWorktreeDialog
@@ -1126,6 +1153,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onSuspend={(s) => core.suspendSession(s.id).catch((err) => setError(String(err)))}
           onResume={(s) => core.resumeSession(s.id).catch((err) => setError(String(err)))}
           onRemove={setRemoving}
+          onSwitchBranch={toggleBranches}
           onOpenSettings={() => openSettingsPage("repo")}
           onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })}
           onOpenProposal={(sessionId, request) => openInEditor({ kind: "proposal", sessionId, request })}
@@ -1239,10 +1267,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
               lines: diff.lines,
             })
           }
-          onNewWorktreeFrom={(branch) => {
-            setCreatingFrom(branch);
-            setCreatingWorktree(true);
-          }}
+          onNewWorktreeFrom={newWorktreeFrom}
           label={drawerTab() ? worktreeLabel(drawerTab()!) : ""}
           colour={worktreeColour(drawerWorktree())}
           pin={drawerPinControl()}

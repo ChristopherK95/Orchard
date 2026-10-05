@@ -294,6 +294,10 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .sidebar-item { flex: none; justify-content: flex-start; gap: 8px; min-height: 32px; padding: 0 8px; background: transparent; border: 0; color: var(--fg-2); font-weight: 400; text-align: left; }
 .sidebar-item:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-1); }
 .sidebar-item.on { background: var(--bg-4); color: var(--fg-1); font-weight: 500; }
+.sidebar-item-wrap { position: relative; flex: none; display: flex; flex-direction: column; }
+.sidebar-item-wrap .branch-switch { position: absolute; top: 4px; right: 4px; min-height: 24px; width: 24px; padding: 0; visibility: hidden; background: var(--bg-3); color: var(--fg-3); }
+.sidebar-item-wrap:hover .branch-switch, .sidebar-item-wrap .branch-switch:focus-visible { visibility: visible; }
+.sidebar-item-wrap .branch-switch .lucide { width: 13px; height: 13px; }
 .sidebar-item .wt-glyph { color: var(--c); }
 .sidebar-item .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sidebar-item.dimmed .wt-glyph { color: var(--fg-dim); }
@@ -905,6 +909,17 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .column-head { flex: none; height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .column-head .swatch { flex: none; width: 3px; height: 18px; border-radius: 2px; background: var(--c); }
 .column-head .branch { min-width: 0; overflow: hidden; text-overflow: ellipsis; font: 500 13px var(--mono); }
+.column-head button.branch { min-height: 28px; gap: 4px; padding: 0 6px; margin-left: -6px; background: transparent; color: var(--fg-1); }
+.column-head button.branch:hover:not(:disabled) { background: var(--bg-3); }
+.column-head button.branch .chev, .branch-crumb .chev { flex: none; width: 12px; height: 12px; color: var(--fg-3); }
+.breadcrumb .branch-crumb { min-height: 26px; gap: 4px; padding: 0 6px; margin: 0 -6px; background: transparent; color: inherit; font-weight: inherit; cursor: pointer; }
+.breadcrumb .branch-crumb.current { font-weight: 500; }
+.breadcrumb .branch-crumb:hover:not(:disabled) { background: var(--bg-3); }
+.branch-popover { width: 360px; max-height: min(480px, 70vh); padding: 0; overflow: hidden; }
+.branch-popover .branch-picker { max-height: none; border-bottom: 0; }
+.branch-popover > .muted { margin: 10px; }
+.branch-confirm { padding: 10px; display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; line-height: 1.5; }
+.branch-confirm .actions { display: flex; gap: 6px; }
 .column-head .counts { font: 12px var(--mono); color: var(--fg-3); }
 .column-head .changed { font-size: 12px; color: var(--fg-2); }
 .column-head .gone { font-size: 12px; color: var(--danger); }
@@ -940,6 +955,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 /* The windows' own title bar (no native decorations): the header is the drag region, with
    Windows-style minimise / maximise / close at the right edge, full height. */
 .app-header .breadcrumb .crumb, .titlebar .name { cursor: default; }
+.app-header .breadcrumb .branch-crumb { cursor: pointer; }
 .window-controls { display: flex; align-self: stretch; }
 .window-controls button { min-height: 0; height: 100%; width: 46px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--fg-2); }
 .window-controls button:hover:not(:disabled) { background: var(--bg-4); color: var(--fg-1); }

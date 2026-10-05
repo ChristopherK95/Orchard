@@ -5,9 +5,9 @@
 // The branch name opens a picker to switch branches (ticket 20: not while a session there is
 // mid-turn; branches checked out elsewhere lead to their Worktree); a merge or rebase in progress
 // shows a banner with its conflicted files and Abort.
-import { createEffect, createMemo, createResource, createSignal, For, on, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
 import { core, type BaseChange, type BaseChanges, type BranchInfo, type CommitRequest, type DiffLine, type GitFile, type GitStatus } from "./core";
-import { hasUnsavedChangesUnder } from "./documents";
+import { BranchList, SwitchQuestion } from "./BranchPicker";
 import { DrawerHead, type DrawerPin } from "./FilesDrawer";
 import { ArrowDown, ArrowUp, ChevronDown, CircleMinus, CirclePlus, GitBranch, RefreshCw, TriangleAlert, Undo2 } from "./icons";
 
@@ -150,31 +150,8 @@ export function GitDrawer(props: {
     }
   };
 
-  // The branch picker: every branch, fetched first (as the New Worktree dialog lists them).
+  // The branch picker (the list is `BranchList`'s).
   const [picking, setPicking] = createSignal(false);
-  const [pickFilter, setPickFilter] = createSignal("");
-  const [branchList] = createResource(picking, () =>
-    core.branches().catch((err) => ({ branches: [] as BranchInfo[], warning: `Couldn't list the branches: ${err}` })),
-  );
-  const picks = createMemo(() => {
-    const words = pickFilter().toLowerCase();
-    return (branchList()?.branches ?? []).filter((b) => b.name.toLowerCase().includes(words));
-  });
-  /** The local branch a row comes to (a remote one's local branch of the same name, if any). */
-  const localOf = (branch: BranchInfo) => {
-    if (!branch.remote) return branch;
-    const name = branch.name.slice(branch.name.indexOf("/") + 1);
-    return branchList()?.branches.find((b) => !b.remote && b.name === name) ?? null;
-  };
-  /** Where `branch` (or its local branch) is checked out, if that's another Worktree. */
-  const elsewhere = (branch: BranchInfo) => {
-    const at = localOf(branch)?.checkedOutIn;
-    return at && at !== props.worktree ? at : null;
-  };
-  const current = (branch: BranchInfo) => {
-    const local = localOf(branch);
-    return !!local && local.name === status()?.branch;
-  };
   /** What a switch said when it couldn't (shown in the picker). */
   const [pickError, setPickError] = createSignal("");
   const switchTo = (branch: BranchInfo) =>
@@ -189,7 +166,6 @@ export function GitDrawer(props: {
       }
     });
   const togglePicker = () => {
-    setPickFilter("");
     setPickError("");
     setPicking(!picking());
   };
@@ -268,8 +244,6 @@ export function GitDrawer(props: {
       if (worktree === props.worktree) setNotice({ text: "Fetched.", tone: "ok" });
     }, true);
 
-  /** A file in this Worktree has unsaved changes in some Manual editor. */
-  const unsavedHere = () => hasUnsavedChangesUnder(props.worktree);
 
   const canCommit = () => !busy() && (amend() || (staged().length > 0 && message().trim() !== ""));
   const deleted = (file: GitFile) => file.staged === "D" || file.unstaged === "D";
@@ -389,70 +363,16 @@ export function GitDrawer(props: {
               )}
             </Show>
             <Show when={picking()}>
-              <div
-                class="branch-picker"
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    e.stopPropagation();
-                    setPicking(false);
-                  }
-                }}
-              >
-                <Show when={s().midTurn.length > 0}>
-                  <p class="warning small">
-                    {s().midTurn.join(", ")} {s().midTurn.length === 1 ? "is" : "are"} in the middle of a turn here: switch branches once{" "}
-                    {s().midTurn.length === 1 ? "it's" : "they're"} done.
-                  </p>
-                </Show>
-                <Show when={s().operation}>
-                  {(operation) => <p class="warning small">Finish or abort the {OPERATION[operation()].name} first.</p>}
-                </Show>
-                <Show when={pickError()}>
-                  <p class="error small">{pickError()}</p>
-                </Show>
-                <input placeholder="Filter branches" value={pickFilter()} onInput={(e) => setPickFilter(e.currentTarget.value)} autofocus />
-                <Show when={branchList()?.warning}>{(w) => <p class="warning small">{w()}</p>}</Show>
-                <div class="branch-list">
-                  <Show when={!branchList.loading} fallback={<p class="muted">Fetching branches…</p>}>
-                    <For each={picks()} fallback={<p class="muted">No matching branches.</p>}>
-                      {(b) => (
-                        <div class="branch-row" classList={{ taken: !!elsewhere(b) }}>
-                          <button
-                            class="branch"
-                            disabled={busy() || current(b) || !!elsewhere(b) || s().midTurn.length > 0 || !!s().operation}
-                            onClick={() => setAsk({ kind: "switch", branch: b, worktree: props.worktree })}
-                            title={elsewhere(b) ? `Checked out in ${elsewhere(b)}` : current(b) ? "The branch this Worktree is on" : `Switch to ${b.name}`}
-                          >
-                            <span class="mono">{b.name}</span>
-                            <Show when={b.remote}>
-                              <span class="muted small">remote</span>
-                            </Show>
-                            <Show when={current(b)}>
-                              <span class="muted small">current</span>
-                            </Show>
-                          </button>
-                          <Show
-                            when={elsewhere(b)}
-                            fallback={
-                              <Show when={!current(b)}>
-                                <button class="ghost small" onClick={() => props.onNewWorktreeFrom(b.name)} title="A new Worktree on this branch, with its own session">
-                                  New Worktree from this branch
-                                </button>
-                              </Show>
-                            }
-                          >
-                            {(path) => (
-                              <button class="ghost small" onClick={() => props.onGoToWorktree(path())}>
-                                Go to that Worktree
-                              </button>
-                            )}
-                          </Show>
-                        </div>
-                      )}
-                    </For>
-                  </Show>
-                </div>
-              </div>
+              <BranchList
+                worktree={props.worktree}
+                status={s()}
+                busy={busy()}
+                error={pickError()}
+                onPick={(branch) => setAsk({ kind: "switch", branch, worktree: props.worktree })}
+                onGoToWorktree={props.onGoToWorktree}
+                onNewWorktreeFrom={props.onNewWorktreeFrom}
+                onClose={() => setPicking(false)}
+              />
             </Show>
             <div class="git-mode">
               <div class="segmented full">
@@ -599,14 +519,7 @@ export function GitDrawer(props: {
           <Show when={asking("switch")}>
             {(sw) => (
               <>
-                <span>
-                  Switch this Worktree to <span class="mono">{sw().branch.name}</span>? Its sessions stay with it and will see that
-                  branch's files. Uncommitted changes come along if git can carry them.
-                  <Show when={unsavedHere()}>
-                    {" "}
-                    Files with unsaved changes in the editor will ask which version to keep.
-                  </Show>
-                </span>
+                <SwitchQuestion branch={sw().branch.name} worktree={sw().worktree} />
                 <div class="actions">
                   <button class="primary" ref={(el) => queueMicrotask(() => el.focus())} onClick={() => void switchTo(sw().branch)}>
                     Switch

@@ -20,6 +20,8 @@
 - Abort asks first. While a session there is mid-turn or an operation is in progress, the picker's rows are disabled with the reason.
 - After a switch, open Manual editor tabs follow ticket 16's on-disk rules. The confirm mentions it when a file in the Worktree has unsaved changes.
 
+- Later (2026-10-05): the same picker opens as a popover from the branch name in a column's header and the Tabs view's breadcrumb, and from a button on the sidebar's Worktree row (on hover), so a Worktree (the main checkout too) can switch branch without opening the Git drawer. The list is `BranchList` in `src/BranchPicker.tsx`, shared with the drawer.
+
 Not covered yet:
 - The picker's branch list duplicates the New Worktree dialog's. Extract it when ticket 21's Base picker needs a third copy.
 - The mid-turn check and the switch aren't atomic (a prompt sent in that instant would start mid-switch). Commit and pull have the same small window.

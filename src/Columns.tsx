@@ -7,7 +7,7 @@
 import { createEffect, createSignal, For, lazy, Match, onCleanup, Show, Switch } from "solid-js";
 import { Banner, Composer, FindOtherConversations, RecentList, reportHeight } from "./Chat";
 import type { OtherConversation, PermissionRequest, RecentSession, SessionId, SessionInfo } from "./core";
-import { ArrowUp, CirclePause, CirclePlay, Ellipsis, GitBranch, Pin, Plus, Sparkles, SquareTerminal, Trash2, X } from "./icons";
+import { ArrowUp, ChevronDown, CirclePause, CirclePlay, Ellipsis, GitBranch, Pin, Plus, Sparkles, SquareTerminal, Trash2, X } from "./icons";
 import { Setup, type SetupView } from "./Setup";
 import { shellRunning } from "./shells";
 import { StateBadge } from "./StateDot";
@@ -51,6 +51,8 @@ export interface ColumnsProps {
   onSuspend: (session: SessionInfo) => void;
   onResume: (session: SessionInfo) => void;
   onRemove: (worktree: WorktreeTab) => void;
+  /** The branch name was clicked: the branch picker, under `anchor`. */
+  onSwitchBranch: (worktree: string, anchor: Element) => void;
   onOpenSettings: () => void;
   onOpenSnippet: (code: string, label: string) => void;
   /** "Open in editor" on a permission card: the column takes focus too. */
@@ -343,9 +345,19 @@ function ColumnHeader(props: ColumnsProps & { worktree: WorktreeTab; isFocused: 
   return (
     <div class="column-head">
       <span class="swatch" />
-      <span class="branch" title={path}>
-        {props.worktree.removed ? path.split(/[\\/]/).pop() : worktreeLabel(props.worktree)}
-      </span>
+      <Show
+        when={!props.worktree.removed}
+        fallback={
+          <span class="branch" title={path}>
+            {path.split(/[\\/]/).pop()}
+          </span>
+        }
+      >
+        <button class="branch opens-branches" onClick={(e) => props.onSwitchBranch(path, e.currentTarget)} title={`${path}: switch branch`}>
+          {worktreeLabel(props.worktree)}
+          <ChevronDown class="chev" />
+        </button>
+      </Show>
       <Show when={props.worktree.removed}>
         <span class="gone">folder removed</span>
       </Show>
