@@ -27,6 +27,8 @@ import { GitDrawer } from "./GitDrawer";
 import type { OpenRequest } from "./ManualEditor";
 // CodeMirror loads with the first file opened, not at startup.
 const ManualEditor = lazy(() => import("./ManualEditor").then((m) => ({ default: m.ManualEditor })));
+// (xterm.js loads with the panel, the first time it opens.)
+const TerminalPanel = lazy(() => import("./TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 import { Board } from "./Board";
 import { Transcript } from "./Transcript";
 import { ContextBar, removedWorktree, worktreeColour, worktreeLabel, WorktreeRow, type WorktreeTab } from "./Worktrees";
@@ -43,7 +45,7 @@ import { applyAppearance } from "./appearance";
 // The compact cut of the mark: the one for 32 px and below. Inline, not an <img>: its outer fruit
 // overhang its box, and an <img> would clip them.
 import orchardMark from "./assets/orchard-mark-small.svg?raw";
-import { ChevronDown, FolderGit2, GitBranch, Loader, PanelRight, Plus, Search, Settings, Sparkles, X } from "./icons";
+import { ChevronDown, FolderGit2, GitBranch, Loader, PanelRight, Plus, Search, Settings, Sparkles, SquareTerminal, X } from "./icons";
 
 export function App() {
   const [problems, setProblems] = createSignal<MissingPrerequisite[] | null>(null);
@@ -292,6 +294,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   const filesOpen = () => drawer() === "files";
   const gitOpen = () => drawer() === "git";
   const setFilesOpen = (open: boolean) => setDrawer(open ? "files" : null);
+  /** The Tabs view's Terminal panel (the active Worktree's shell), and its width. */
+  const [terminalOpen, setTerminalOpen] = createSignal(false);
+  const [terminalWidth, setTerminalWidth] = createSignal(560);
   /** The drawer the title bar's button opens: the one last shown. */
   let lastDrawer: "files" | "git" = "files";
   const toggleDrawer = (which: "files" | "git") => {
@@ -624,6 +629,15 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         e.preventDefault();
         return void toggleDrawer("git");
       }
+      // (By position: the key under Esc, whatever the layout prints on it.)
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === "Backquote") {
+        e.preventDefault();
+        if (!e.repeat && mainView() === "tabs") {
+          setBoardOpen(false);
+          setTerminalOpen((open) => !open);
+        }
+        return;
+      }
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "t") {
         e.preventDefault();
         if (!e.repeat) void reopen(core.reopenLastClosed());
@@ -817,6 +831,20 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           Search files
           <kbd>Ctrl+P</kbd>
         </button>
+        <Show when={mainView() === "tabs"}>
+          <button
+            class="ghost icon"
+            classList={{ on: terminalOpen() }}
+            onClick={() => {
+              setBoardOpen(false);
+              setTerminalOpen((open) => !open);
+            }}
+            title="A terminal in this Worktree (Ctrl+`)"
+            aria-label="Terminal"
+          >
+            <SquareTerminal />
+          </button>
+        </Show>
         <button
           class="ghost icon"
           classList={{ on: drawer() !== null }}
@@ -1203,6 +1231,16 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           vim={settings()?.settings.editor?.vim ?? false}
           onEmpty={() => setEditorOpen(false)}
           onError={setError}
+        />
+      </Show>
+      <Show when={terminalOpen() && mainView() === "tabs"}>
+        <TerminalPanel
+          worktree={activeWorktree()}
+          label={worktree() ? worktreeLabel(worktree()!) : ""}
+          colour={worktreeColour(activeWorktree())}
+          width={terminalWidth()}
+          onWidth={setTerminalWidth}
+          onClose={() => setTerminalOpen(false)}
         />
       </Show>
       <Show when={filesOpen()}>

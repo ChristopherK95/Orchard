@@ -24,9 +24,11 @@ pub(crate) struct ProcessTree {
     group: i32,
 }
 
-// The job handle is only closed, once, in `drop`.
+// The job handle is only closed, once, in `drop` (nothing else touches it).
 #[cfg(windows)]
 unsafe impl Send for ProcessTree {}
+#[cfg(windows)]
+unsafe impl Sync for ProcessTree {}
 
 impl ProcessTree {
     /// Makes the command start its own process group, so `attach` can stop the whole tree.
@@ -42,13 +44,18 @@ impl ProcessTree {
     /// escape; a shell running a setup command hasn't started anything yet.
     #[cfg(windows)]
     pub(crate) fn attach(child: &Child) -> Option<Self> {
+        Self::attach_handle(child.raw_handle()?)
+    }
+
+    /// `attach` for a process known by its handle (a terminal's shell, say).
+    #[cfg(windows)]
+    pub(crate) fn attach_handle(process: std::os::windows::io::RawHandle) -> Option<Self> {
         use windows_sys::Win32::Foundation::CloseHandle;
         use windows_sys::Win32::System::JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
             SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
             JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         };
-        let process = child.raw_handle()?;
         // SAFETY: plain Win32 calls on handles we own; `info` lives across the call that reads it.
         unsafe {
             let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());

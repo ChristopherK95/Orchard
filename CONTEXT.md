@@ -73,6 +73,10 @@ The one column of the Columns view that takes input: the next prompt, Y / N, the
 Where the user views and hand-edits a file in a Worktree (or the settings file, or an unsaved snippet copied from a chat code block). It opens as a pane beside the chat, with a file tab per file, and can be popped out into its own window. When a file it has open changes on disk, a file tab with no unsaved changes reloads; one with unsaved changes asks (show the diff, reload and drop mine, or keep mine and overwrite on the next save).
 _Avoid_: Text editor window, code view
 
+**Terminal panel**:
+The user's own shell in the active Worktree's folder, docked beside the chat in the Tabs view (Ctrl+`). Each Worktree has one shell, started the first time the panel shows that Worktree. It keeps running while out of sight (a dev server, say) and the panel comes back to its output. It stops when the user stops it, or when its Worktree is removed or the Workspace closes. It runs the repo's Windows shell setting on Windows, and `$SHELL` on Linux.
+_Avoid_: Console, integrated terminal
+
 **Agent**:
 The coding-agent program driving an Agent session. Claude Code first; others may be supported later behind the same boundary.
 

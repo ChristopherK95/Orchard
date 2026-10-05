@@ -144,14 +144,7 @@ async fn forward(mut pipe: impl AsyncRead + Unpin, tx: mpsc::UnboundedSender<Str
             break;
         }
         pending.extend_from_slice(&buffer[..read]);
-        let complete = match std::str::from_utf8(&pending) {
-            Ok(_) => pending.len(),
-            // An incomplete character at the end waits for the rest; anything else is invalid.
-            Err(err) if err.error_len().is_none() => err.valid_up_to(),
-            Err(_) => pending.len(),
-        };
-        let text = String::from_utf8_lossy(&pending[..complete]).into_owned();
-        pending.drain(..complete);
+        let text = take_text(&mut pending);
         if !text.is_empty() && tx.send(text).is_err() {
             return;
         }
@@ -159,6 +152,20 @@ async fn forward(mut pipe: impl AsyncRead + Unpin, tx: mpsc::UnboundedSender<Str
     if !pending.is_empty() {
         let _ = tx.send(String::from_utf8_lossy(&pending).into_owned());
     }
+}
+
+/// Takes the text read so far out of `pending`, leaving a character split across reads to wait for
+/// the rest of it.
+pub(crate) fn take_text(pending: &mut Vec<u8>) -> String {
+    let complete = match std::str::from_utf8(pending) {
+        Ok(_) => pending.len(),
+        // An incomplete character at the end waits for the rest; anything else is invalid.
+        Err(err) if err.error_len().is_none() => err.valid_up_to(),
+        Err(_) => pending.len(),
+    };
+    let text = String::from_utf8_lossy(&pending[..complete]).into_owned();
+    pending.drain(..complete);
+    text
 }
 
 /// The program and arguments that run `command` in the configured shell.
@@ -200,7 +207,7 @@ async fn shell_command(
 
 /// Git for Windows' `bash.exe`, found from git's own install. Never a bare `bash`: on Windows that
 /// finds WSL's first.
-async fn git_bash() -> Result<PathBuf, String> {
+pub(crate) async fn git_bash() -> Result<PathBuf, String> {
     if let Some(exec_path) = crate::git::exec_path().await {
         for folder in exec_path.ancestors() {
             let bash = folder.join("bin").join("bash.exe");
@@ -212,7 +219,7 @@ async fn git_bash() -> Result<PathBuf, String> {
     Err("couldn't find Git Bash (bin\\bash.exe in the Git for Windows install)".into())
 }
 
-fn on_path(program: &str) -> bool {
+pub(crate) fn on_path(program: &str) -> bool {
     std::env::var_os("PATH")
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
 }

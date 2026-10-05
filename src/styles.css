@@ -722,6 +722,16 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .board-card .card-actions { display: flex; }
 .board-card .card-actions button { min-height: 24px; font-size: 12.5px; font-weight: 400; gap: 6px; background: transparent; }
 
+/* Terminal panel (Tabs view): the active Worktree's shell, docked beside the transcript. */
+.terminal-panel { position: relative; flex: none; min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bg-1); }
+.terminal-panel .terminal-title { font-weight: 600; color: var(--fg-2); }
+.terminal-panel .drawer-head .lucide:first-child { color: var(--fg-2); }
+.terminal-resize { position: absolute; z-index: 2; top: 0; bottom: 0; left: -3px; width: 6px; cursor: col-resize; touch-action: none; }
+.terminal-resize:hover, .terminal-resize.dragging { background: var(--accent-dim); }
+.terminal-error { flex: none; padding: 8px 12px; border-bottom: 1px solid var(--danger-border); background: var(--danger-tint); color: var(--danger); font-size: 12px; }
+.terminal-body { flex: 1; min-height: 0; padding: 6px 0 4px 10px; }
+.terminal-body .xterm { height: 100%; }
+
 /* Manual editor pane. */
 .manual-editor { flex: 1 1 0; min-width: 320px; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bg-1); }
 .editor-tabs { flex: none; height: 34px; display: flex; align-items: stretch; gap: 0; padding: 0 4px 0 0; background: var(--bg-2); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }

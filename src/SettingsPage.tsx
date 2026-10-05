@@ -184,7 +184,7 @@ export function SettingsPage(props: {
                       <Row label="Worktree setup" hint="Run in order in each new Worktree before its first Agent session, stopping at the first failure." block>
                         <CommandList commands={r().setup} onCommit={(commands) => void change({ kind: "setup", commands })} />
                       </Row>
-                      <Row label="Windows shell" hint="What setup runs in on Windows (Linux always uses bash).">
+                      <Row label="Windows shell" hint="What setup and the Terminal panel run on Windows (Linux: bash for setup, your $SHELL for the terminal).">
                         <div class="segmented">
                           <button classList={{ on: r().windowsShell === "powershell" }} onClick={() => void change({ kind: "windowsShell", shell: "powershell" })}>
                             PowerShell

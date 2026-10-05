@@ -9,8 +9,8 @@ use editor_core::{
     DirEntry, FileMatch, FontFamily, LoadedSettings, MissingPrerequisite, NewWorktree, OpenedFile,
     OtherConversation, PermissionMode, PoppedOutFile, RecentSession, RecentWorkspace, RemovalCheck,
     RemoveWorktree, RemovedWorktree, RepoSettings, SaveOver, SessionId, SessionInfo, SettingChange,
-    SetupInfo, SlashCommand, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo, WorktreeInfo,
-    WorktreeMerge,
+    SetupInfo, SlashCommand, TerminalOutput, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo,
+    WorktreeInfo, WorktreeMerge,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -934,6 +934,63 @@ async fn show_session(
     Ok(())
 }
 
+/// Shows the Worktree's terminal in the Terminal panel (starting its shell, `cols` x `rows`, if it
+/// has none) and streams its output over a dedicated channel: what it kept first, then what it
+/// prints, whatever has arrived sent in one go. The terminal shown before stops sending.
+#[tauri::command]
+async fn open_terminal(
+    core: State<'_, Core>,
+    worktree: PathBuf,
+    cols: u16,
+    rows: u16,
+    on_output: Channel<Vec<TerminalOutput>>,
+) -> CommandResult<()> {
+    let mut stream = core
+        .open_terminal(&worktree, cols, rows)
+        .await
+        .map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn(async move {
+        while let Some(first) = stream.next().await {
+            let mut batch = vec![first];
+            batch.extend(std::iter::from_fn(|| stream.try_next()));
+            if on_output.send(batch).is_err() {
+                break;
+            }
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn terminal_input(core: State<'_, Core>, worktree: PathBuf, data: String) -> CommandResult<()> {
+    core.terminal_input(&worktree, &data)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn resize_terminal(
+    core: State<'_, Core>,
+    worktree: PathBuf,
+    cols: u16,
+    rows: u16,
+) -> CommandResult<()> {
+    core.resize_terminal(&worktree, cols, rows)
+        .map_err(|e| e.to_string())
+}
+
+/// The Terminal panel is hidden; the shells keep running.
+#[tauri::command]
+fn hide_terminal(core: State<'_, Core>) {
+    core.hide_terminal();
+}
+
+/// Stops the Worktree's shell and everything it started.
+#[tauri::command]
+async fn close_terminal(core: State<'_, Core>, worktree: PathBuf) -> CommandResult<()> {
+    core.close_terminal(&worktree).await;
+    Ok(())
+}
+
 /// The identifier the app had as Agent Editor, which names its old config and data folders.
 const OLD_IDENTIFIER: &str = "dev.agent-editor.app";
 
@@ -1085,7 +1142,12 @@ fn main() {
             hide_tabs,
             pinned_worktrees,
             set_pinned,
-            available_commands
+            available_commands,
+            open_terminal,
+            terminal_input,
+            resize_terminal,
+            hide_terminal,
+            close_terminal
         ])
         .run(tauri::generate_context!())
         .expect("error while running the editor");

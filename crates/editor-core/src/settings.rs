@@ -98,7 +98,8 @@ pub struct RepoSettings {
     pub setup_windows: Option<Vec<String>>,
     /// Replaces `setup` on Linux.
     pub setup_linux: Option<Vec<String>>,
-    /// The shell setup runs in on Windows (Linux always uses `bash`).
+    /// The shell setup and the Terminal panel run on Windows (on Linux, setup uses `bash` and the
+    /// terminal the user's `$SHELL`).
     pub windows_shell: WindowsShell,
 }
 

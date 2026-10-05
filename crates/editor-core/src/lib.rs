@@ -21,6 +21,7 @@ mod remove_worktree;
 mod session;
 mod settings;
 mod setup;
+mod terminal;
 mod worktrees;
 
 pub use crate::acp::{AcpError, AdapterCommand, PROTOCOL_VERSION};
@@ -51,4 +52,5 @@ pub use crate::settings::{
     SettingChange, Settings, WindowsShell,
 };
 pub use crate::setup::{SetupInfo, SetupStatus};
+pub use crate::terminal::{TerminalOutput, TerminalStream};
 pub use crate::worktrees::WorktreeInfo;

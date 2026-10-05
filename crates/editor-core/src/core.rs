@@ -37,6 +37,7 @@ use crate::session::{
 };
 use crate::settings::{self, LoadedSettings, RepoSettings, SettingChange, WindowsShell};
 use crate::setup::{self, SetupInfo, SetupStatus};
+use crate::terminal::{self, Terminal, TerminalStream};
 use crate::worktrees::{self, Discovery, WorktreeInfo};
 
 /// A slash command the Agent offers (one of Claude Code's, a custom command or a skill), from ACP's
@@ -313,6 +314,10 @@ pub enum CoreError {
     SessionWontStop,
     #[error("removing it would lose {0}; choose Discard and remove to go ahead")]
     WouldDiscard(String),
+    #[error("this Worktree has no terminal running")]
+    NoTerminal,
+    #[error("{0}")]
+    Terminal(String),
     #[error(transparent)]
     Acp(#[from] AcpError),
 }
@@ -535,6 +540,10 @@ struct Inner {
     documents: Mutex<DocumentTracker>,
     /// The installed fonts, once they've been looked for.
     fonts: tokio::sync::OnceCell<Vec<crate::fonts::FontFamily>>,
+    /// Each Worktree's terminal, by Worktree path, while its shell runs.
+    terminals: Mutex<HashMap<PathBuf, Arc<Terminal>>>,
+    /// Numbers each terminal (`Terminal::id`).
+    next_terminal: AtomicU64,
 }
 
 #[derive(Default)]
@@ -758,6 +767,8 @@ impl Core {
             remote_op: tokio::sync::Mutex::new(()),
             documents: Mutex::default(),
             fonts: tokio::sync::OnceCell::new(),
+            terminals: Mutex::default(),
+            next_terminal: AtomicU64::new(0),
         });
         if let Some(path) = &inner.config.settings_path {
             let weak = Arc::downgrade(&inner);
@@ -1114,6 +1125,7 @@ impl Core {
             .expect("visible tab lock")
             .clear();
         self.inner.actors.lock().expect("actors lock").clear(); // dropping one stops it
+        self.inner.terminals.lock().expect("terminals lock").clear(); // (as does dropping a terminal)
         self.inner.status_due.lock().expect("status lock").clear();
         *self
             .inner
@@ -1353,6 +1365,141 @@ impl Core {
         self.inner.refresh_worktrees().await;
     }
 
+    /// The Worktree's terminal for the Terminal panel, started at `cols` x `rows` in the repo's shell
+    /// if it has none: its kept output comes first, then what it prints from now on. The terminal
+    /// the panel showed before stops sending (it keeps running).
+    pub async fn open_terminal(
+        &self,
+        worktree: &Path,
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalStream, CoreError> {
+        let worktree = worktrees::normalize(worktree.to_owned());
+        let (terminal, returning) = match self.terminal(&worktree) {
+            Some(terminal) => {
+                terminal.resize(cols, rows).map_err(CoreError::Terminal)?;
+                (terminal, true)
+            }
+            None => (self.start_terminal(&worktree, cols, rows).await?, false),
+        };
+        for (path, other) in self.inner.terminals.lock().expect("terminals lock").iter() {
+            if *path != worktree {
+                other.detach();
+            }
+        }
+        Ok(terminal.attach(returning))
+    }
+
+    async fn start_terminal(
+        &self,
+        worktree: &Path,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Arc<Terminal>, CoreError> {
+        let root = self.workspace()?.root;
+        if !self.worktrees().iter().any(|w| w.path == worktree) {
+            return Err(CoreError::UnknownWorktree(worktree.to_owned()));
+        }
+        if self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .removing
+            .contains(worktree)
+        {
+            return Err(CoreError::BeingRemoved);
+        }
+        let shell = terminal::shell(self.repo_shell(&root).await)
+            .await
+            .map_err(CoreError::Terminal)?;
+        let mut terminals = self.inner.terminals.lock().expect("terminals lock");
+        if let Some(terminal) = terminals.get(worktree) {
+            return Ok(terminal.clone()); // (started meanwhile, by another call)
+        }
+        let id = self.inner.next_terminal.fetch_add(1, Ordering::Relaxed);
+        let weak = Arc::downgrade(&self.inner);
+        let path = worktree.to_owned();
+        let terminal = Terminal::start(id, shell, worktree, cols, rows, move || {
+            // An exited shell goes; the panel asking again starts another.
+            if let Some(inner) = weak.upgrade() {
+                let mut terminals = inner.terminals.lock().expect("terminals lock");
+                if terminals.get(&path).is_some_and(|t| t.id == id) {
+                    terminals.remove(&path);
+                }
+            }
+        })
+        .map_err(CoreError::Terminal)?;
+        terminals.insert(worktree.to_owned(), terminal.clone());
+        Ok(terminal)
+    }
+
+    /// Types `data` (keystrokes or a paste) into the Worktree's terminal.
+    pub fn terminal_input(&self, worktree: &Path, data: &str) -> Result<(), CoreError> {
+        self.terminal(worktree)
+            .ok_or(CoreError::NoTerminal)?
+            .write(data);
+        Ok(())
+    }
+
+    /// The Terminal panel's new size, in characters.
+    pub fn resize_terminal(&self, worktree: &Path, cols: u16, rows: u16) -> Result<(), CoreError> {
+        self.terminal(worktree)
+            .ok_or(CoreError::NoTerminal)?
+            .resize(cols, rows)
+            .map_err(CoreError::Terminal)
+    }
+
+    /// The Terminal panel is hidden: no terminal sends it anything (they keep running).
+    pub fn hide_terminal(&self) {
+        for terminal in self
+            .inner
+            .terminals
+            .lock()
+            .expect("terminals lock")
+            .values()
+        {
+            terminal.detach();
+        }
+    }
+
+    /// Stops the Worktree's shell and everything it started.
+    pub async fn close_terminal(&self, worktree: &Path) {
+        let worktree = worktrees::normalize(worktree.to_owned());
+        let terminal = self
+            .inner
+            .terminals
+            .lock()
+            .expect("terminals lock")
+            .remove(&worktree);
+        if let Some(terminal) = terminal {
+            terminal.stop().await;
+        }
+    }
+
+    fn terminal(&self, worktree: &Path) -> Option<Arc<Terminal>> {
+        let worktree = worktrees::normalize(worktree.to_owned());
+        self.inner
+            .terminals
+            .lock()
+            .expect("terminals lock")
+            .get(&worktree)
+            .cloned()
+    }
+
+    /// The shell the repo's settings choose for Windows (its setup commands' and terminals').
+    async fn repo_shell(&self, root: &Path) -> WindowsShell {
+        let origin = git::origin_url(root).await;
+        // A save a moment ago may not have been reloaded yet.
+        self.inner.reload_settings();
+        let loaded = self.inner.settings.lock().expect("settings lock");
+        loaded
+            .settings
+            .repo(origin.as_deref(), root)
+            .map(|repo| repo.windows_shell)
+            .unwrap_or_default()
+    }
+
     /// Creates a Worktree next to the repo (`<repo>.worktrees/<folder>/`) and returns it, listed.
     /// A new branch starts from `start_point`, or by default from `origin/<default>` after a fetch.
     pub async fn create_worktree(&self, spec: NewWorktree) -> Result<CreatedWorktree, CoreError> {
@@ -1461,6 +1608,8 @@ impl Core {
         options: &RemoveWorktree,
     ) -> Result<RemovedWorktree, CoreError> {
         self.stop_setup(&info.path).await;
+        // Its shell stands in the folder (on Windows, enough to stop it being deleted).
+        self.close_terminal(&info.path).await;
         for session in self.sessions_in(&info.path) {
             self.close_session(session).await?;
         }
@@ -4077,6 +4226,13 @@ impl Inner {
                 });
             }
             drop(state);
+            // A removed Worktree's shell has nowhere to be (a failed listing keeps them).
+            if !listed.is_empty() {
+                self.terminals
+                    .lock()
+                    .expect("terminals lock")
+                    .retain(|path, _| listed.iter().any(|w| &w.path == path));
+            }
             let _ = self
                 .events
                 .send(CoreEvent::WorktreesChanged { worktrees: listed });

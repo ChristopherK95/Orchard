@@ -25,6 +25,13 @@ export interface RecentWorkspace {
   indices: number[];
 }
 
+/** What a Worktree's terminal sends the Terminal panel. */
+export type TerminalOutput =
+  | { kind: "output"; text: string }
+  /** What it printed before the panel came back to it: its queries were answered then. */
+  | { kind: "replay"; text: string }
+  | { kind: "exited"; code: number | null };
+
 /** The Tabs view's view slot (each Columns view column has its own). */
 export const TABS_SLOT = "tabs";
 
@@ -644,6 +651,20 @@ export const core = {
   /** Up to a page of items just before index `before` (for scrolling back). */
   transcriptPageBefore: (sessionId: SessionId, before: number) =>
     invoke<TranscriptPage>("transcript_page_before", { sessionId, before }),
+  /** Shows the Worktree's terminal in the Terminal panel, starting its shell (`cols` x `rows`) if it
+   *  has none; its output streams to `onOutput`. The terminal shown before stops sending. */
+  openTerminal: (worktree: string, cols: number, rows: number, onOutput: (batch: TerminalOutput[]) => void) => {
+    const channel = new Channel<TerminalOutput[]>();
+    channel.onmessage = onOutput;
+    return invoke<void>("open_terminal", { worktree, cols, rows, onOutput: channel });
+  },
+  /** Types keystrokes (or a paste) into the Worktree's terminal. */
+  terminalInput: (worktree: string, data: string) => invoke<void>("terminal_input", { worktree, data }),
+  resizeTerminal: (worktree: string, cols: number, rows: number) => invoke<void>("resize_terminal", { worktree, cols, rows }),
+  /** The Terminal panel is hidden; the shells keep running. */
+  hideTerminal: () => invoke<void>("hide_terminal"),
+  /** Stops the Worktree's shell and everything it started. */
+  closeTerminal: (worktree: string) => invoke<void>("close_terminal", { worktree }),
   /** True when launched by the memory benchmark (ticket 05). */
   benchMode: () => invoke<boolean>("bench_mode"),
   /** Records that the benchmark scenario reached `phase`. */
