@@ -3,6 +3,7 @@
 
 mod acp;
 mod app_state;
+mod attachments;
 mod auto_suspend;
 mod core;
 mod create_worktree;
@@ -25,10 +26,11 @@ mod terminal;
 mod worktrees;
 
 pub use crate::acp::{AcpError, AdapterCommand, PROTOCOL_VERSION};
+pub use crate::attachments::Attachment;
 pub use crate::auto_suspend::{AutoSuspendReason, Clock, MemoryProbe, MemorySample};
 pub use crate::core::{
-    AutoSuspension, Core, CoreConfig, CoreError, CoreEvent, OtherConversation, RecentSession,
-    RecentWorkspace, SlashCommand, TranscriptStream, WorkspaceInfo, TABS_SLOT,
+    AutoSuspension, Core, CoreConfig, CoreError, CoreEvent, OtherConversation, QueuedPrompt,
+    RecentSession, RecentWorkspace, SlashCommand, TranscriptStream, WorkspaceInfo, TABS_SLOT,
 };
 pub use crate::create_worktree::{BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 pub use crate::documents::{FileContent, OpenDocument, OpenedFile, PoppedOutFile, SaveOver};

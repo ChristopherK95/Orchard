@@ -12,6 +12,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::acp::{AcpError, AdapterCommand, Connection, Incoming, Responder, PROTOCOL_VERSION};
 use crate::app_state::{self, AppState, SavedSession, WorkspaceState};
+use crate::attachments::Attachment;
 use crate::auto_suspend::{
     self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, SystemClock, SystemProbe,
 };
@@ -49,6 +50,15 @@ pub struct SlashCommand {
     pub description: String,
     /// What to type after it, if it takes input (e.g. "[file]").
     pub hint: Option<String>,
+}
+
+/// A message written while the Agent was working, sent as the next prompt when the turn ends Idle
+/// (ticket 39). A session holds at most one; queuing more adds to it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueuedPrompt {
+    pub text: String,
+    pub attachments: Vec<Attachment>,
 }
 
 impl SlashCommand {
@@ -266,6 +276,9 @@ pub enum CoreError {
     UnknownSession,
     #[error("the Agent session is still working on the previous prompt")]
     SessionBusy,
+    /// A file or image that can't go with a prompt, and why.
+    #[error("{0}")]
+    Attachment(String),
     #[error("the Agent session has exited; resume it first")]
     SessionExited,
     #[error("the Agent session is running; only a Suspended or Exited one can be resumed")]
@@ -449,6 +462,13 @@ pub enum CoreEvent {
     EditNotesChanged {
         session_id: SessionId,
         notes: Vec<EditNote>,
+    },
+    /// A session's queued message changed: queued, added to, taken back to be edited, removed, or
+    /// sent (`None` then).
+    #[serde(rename_all = "camelCase")]
+    QueuedPromptChanged {
+        session_id: SessionId,
+        queued: Option<QueuedPrompt>,
     },
     /// The files open in Manual editors changed: one opened or closed, or got (or lost) unsaved
     /// changes. For permission cards warning about an edit to a file with unsaved changes.
@@ -664,6 +684,14 @@ struct KnownToolCall {
 #[derive(Default)]
 struct Control {
     in_turn: bool,
+    /// The user stopped the turn in progress (`session/cancel` sent): when it ends, the transcript
+    /// says so and the queued message stays.
+    stopping: bool,
+    /// The message to send when the turn ends Idle.
+    queued: Option<QueuedPrompt>,
+    /// This turn's `session/prompt` has gone to the Agent: a Stop before then is sent once it has
+    /// (or the Agent would get the cancel first and the prompt after).
+    prompt_sent: bool,
     exited: bool,
     /// Its Agent process was stopped on purpose; resuming brings the conversation back.
     suspended: bool,
@@ -2999,6 +3027,16 @@ impl Core {
     /// Sends a prompt; returns once it's on its way. The reply streams to watchers. A Suspended
     /// session is resumed first (the same conversation); if that fails, nothing was sent.
     pub async fn send_prompt(&self, id: SessionId, text: &str) -> Result<(), CoreError> {
+        self.send_prompt_with(id, text, vec![]).await
+    }
+
+    /// `send_prompt` with files or images attached (made by `attach_file` / `attach_data`).
+    pub async fn send_prompt_with(
+        &self,
+        id: SessionId,
+        text: &str,
+        attachments: Vec<Attachment>,
+    ) -> Result<(), CoreError> {
         let session = self.session(id)?;
         session.wait_settled().await;
         let resume_first = session.update(|control| {
@@ -3015,16 +3053,7 @@ impl Core {
                 SessionState::Working | SessionState::NeedsYou => Err(CoreError::SessionBusy),
             }
         })?;
-        let start_turn = |control: &mut Control| {
-            control.auto_suspend_failed = false;
-            session.record(|t| {
-                t.push(TranscriptItem::User {
-                    text: text.to_owned(),
-                    edit_notes: vec![],
-                })
-            });
-            control.in_turn = true;
-        };
+        let start_turn = |control: &mut Control| session.start_turn(control, text, &attachments);
         if resume_first {
             self.inner
                 .resume_claimed_then(&session, None, start_turn)
@@ -3045,61 +3074,129 @@ impl Core {
             session.update(|control| control.in_turn = false);
             return Err(CoreError::Acp(AcpError::Closed));
         };
-        // Hand edits since the Agent last looked go first (and are delivered, shown under the
-        // message they went with).
-        let delivery = session.edit_notes.lock().expect("edit notes lock").take();
-        let mut prompt = vec![];
-        if let Some(delivery) = &delivery {
-            prompt.push(json!({ "type": "text", "text": delivery.text }));
-            session.tag_last_message(delivery.tags.clone());
-            let _ = self.inner.events.send(CoreEvent::EditNotesChanged {
-                session_id: id,
-                notes: vec![],
-            });
-        }
-        prompt.push(json!({ "type": "text", "text": text }));
-        let params = json!({ "sessionId": session.acp_id, "prompt": prompt });
-        if !session.started.swap(true, Ordering::SeqCst) {
-            self.inner.persist(); // (it has a conversation to bring back now)
-        }
-        let inner = self.inner.clone();
-        tokio::spawn(async move {
-            let result = connection.request("session/prompt", params).await;
-            if let (Err(_), Some(delivery)) = (&result, delivery) {
-                // It never got them (the adapter crashed, say): they wait for the next prompt.
-                let mut notes = session.edit_notes.lock().expect("edit notes lock");
-                notes.put_back(delivery);
-                let _ = inner.events.send(CoreEvent::EditNotesChanged {
-                    session_id: id,
-                    notes: notes.notes(),
-                });
-            }
-            // The Agent may have committed or changed files: refresh ahead/changed counts.
-            let refresh = inner.clone();
-            tokio::spawn(async move { refresh.refresh_worktrees().await });
-            session.update(|control| {
-                // The adapter crashed and the session has been resumed elsewhere since (or closed):
-                // this turn's ending is old news.
-                let current = session.connection();
-                if control.closed || !current.is_some_and(|c| Arc::ptr_eq(&c, &connection)) {
-                    return;
-                }
-                // A question still open when the turn ends will never be answered.
-                session.cancel_questions(control);
-                control.in_turn = false;
-                match result {
-                    Ok(_) => {}
-                    Err(err) if session_gone(&err) => control.exited = true,
-                    Err(err) => session.record(|t| {
-                        t.push(TranscriptItem::Notice {
-                            text: format!("The turn failed: {err}"),
-                        })
-                    }),
-                }
-            });
-        });
+        self.inner.dispatch(session, connection, text, &attachments);
         Ok(())
     }
+
+    /// Queues a message written while the session is Working (or Needs you): it's sent as the next
+    /// prompt when the turn ends Idle. A message already queued gets this one added to it. If the
+    /// turn has just ended, it's sent now instead.
+    pub async fn queue_prompt(
+        &self,
+        id: SessionId,
+        text: &str,
+        attachments: Vec<Attachment>,
+    ) -> Result<(), CoreError> {
+        let session = self.session(id)?;
+        let queued = session.update(|control| {
+            if !control.in_turn || control.in_transition() {
+                return false;
+            }
+            let queued = control.queued.get_or_insert_with(|| QueuedPrompt {
+                text: String::new(),
+                attachments: vec![],
+            });
+            if !queued.text.is_empty() && !text.is_empty() {
+                queued.text.push_str("\n\n");
+            }
+            queued.text.push_str(text);
+            queued.attachments.extend(attachments.iter().cloned());
+            let _ = self.inner.events.send(CoreEvent::QueuedPromptChanged {
+                session_id: id,
+                queued: Some(queued.clone()),
+            });
+            true
+        });
+        if queued {
+            Ok(())
+        } else {
+            self.send_prompt_with(id, text, attachments).await
+        }
+    }
+
+    /// The session's queued message, if it has one.
+    pub fn queued_prompt(&self, id: SessionId) -> Result<Option<QueuedPrompt>, CoreError> {
+        Ok(self
+            .session(id)?
+            .control
+            .lock()
+            .expect("control lock")
+            .queued
+            .clone())
+    }
+
+    /// Takes the session's queued message back (to edit it in the composer, or to drop it): it
+    /// won't be sent.
+    pub fn take_queued_prompt(&self, id: SessionId) -> Result<Option<QueuedPrompt>, CoreError> {
+        let session = self.session(id)?;
+        let taken = session.update(|control| control.queued.take());
+        if taken.is_some() {
+            let _ = self.inner.events.send(CoreEvent::QueuedPromptChanged {
+                session_id: id,
+                queued: None,
+            });
+        }
+        Ok(taken)
+    }
+
+    /// Stops the turn in progress (`session/cancel`): open permission cards are cancelled, the
+    /// session goes Idle once the Agent has stopped, and a queued message isn't sent. Nothing to
+    /// do if no turn is running.
+    pub fn cancel_turn(&self, id: SessionId) -> Result<(), CoreError> {
+        let session = self.session(id)?;
+        let stop = session.update(|control| {
+            if !control.in_turn || control.exited {
+                return false;
+            }
+            control.stopping = true;
+            session.cancel_questions(control);
+            control.prompt_sent // (else `dispatch` sends it)
+        });
+        if stop {
+            session
+                .live()?
+                .notify("session/cancel", json!({ "sessionId": session.acp_id }))?;
+        }
+        Ok(())
+    }
+
+    /// A file to attach to the session's next prompt, or why it can't be (too big, a kind the
+    /// Agent doesn't take in a prompt, not an image or text).
+    pub async fn attach_file(&self, id: SessionId, path: &Path) -> Result<Attachment, CoreError> {
+        self.session(id)?;
+        let name = path
+            .file_name()
+            .map_or_else(|| path.to_string_lossy(), |n| n.to_string_lossy())
+            .into_owned();
+        let file = path.to_path_buf();
+        let bytes = tokio::task::spawn_blocking(move || std::fs::read(file))
+            .await
+            .expect("read task")
+            .map_err(|err| CoreError::Attachment(format!("{name}: couldn't read it ({err})")))?;
+        let capabilities = self.adapter().await?.prompt_capabilities();
+        Attachment::from_bytes(&name, Some(path), None, bytes, &capabilities)
+            .map_err(CoreError::Attachment)
+    }
+
+    /// `attach_file` for something pasted (an image from the clipboard, say): its name, its type
+    /// if known, and its contents base64-encoded.
+    pub async fn attach_data(
+        &self,
+        id: SessionId,
+        name: &str,
+        mime_type: Option<&str>,
+        data: &str,
+    ) -> Result<Attachment, CoreError> {
+        use base64::Engine;
+        self.session(id)?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|_| CoreError::Attachment(format!("{name}: couldn't read it")))?;
+        let capabilities = self.adapter().await?.prompt_capabilities();
+        Attachment::from_bytes(name, None, mime_type, bytes, &capabilities)
+            .map_err(CoreError::Attachment)
+    }
+
     /// The oldest permission card waiting for an answer in the session, if it's Needs you (for the
     /// Board's cards, which answer it from there).
     pub fn pending_permission(
@@ -3404,6 +3501,110 @@ impl Core {
 }
 
 impl Inner {
+    /// Sends the prompt of a turn just started (`Session::start_turn`), with the Edit notes waiting
+    /// for it, and finishes the turn when the Agent replies: then a queued message, if any, starts
+    /// the next turn.
+    fn dispatch(
+        self: &Arc<Self>,
+        session: Arc<Session>,
+        connection: Arc<Connection>,
+        text: &str,
+        attachments: &[Attachment],
+    ) {
+        let id = session.id();
+        // Hand edits since the Agent last looked go first (and are delivered, shown under the
+        // message they went with).
+        let delivery = session.edit_notes.lock().expect("edit notes lock").take();
+        let mut prompt = vec![];
+        if let Some(delivery) = &delivery {
+            prompt.push(json!({ "type": "text", "text": delivery.text }));
+            session.tag_last_message(delivery.tags.clone());
+            let _ = self.events.send(CoreEvent::EditNotesChanged {
+                session_id: id,
+                notes: vec![],
+            });
+        }
+        prompt.push(json!({ "type": "text", "text": text }));
+        prompt.extend(attachments.iter().map(Attachment::content_block));
+        let params = json!({ "sessionId": session.acp_id, "prompt": prompt });
+        if !session.started.swap(true, Ordering::SeqCst) {
+            self.persist(); // (it has a conversation to bring back now)
+        }
+        let reply = connection.request("session/prompt", params);
+        let stopped = session.update(|control| {
+            control.prompt_sent = true;
+            control.stopping
+        });
+        if stopped {
+            let _ = connection.notify("session/cancel", json!({ "sessionId": session.acp_id }));
+        }
+        let inner = self.clone();
+        tokio::spawn(async move {
+            let result = reply.await;
+            if let (Err(_), Some(delivery)) = (&result, delivery) {
+                // It never got them (the adapter crashed, say): they wait for the next prompt.
+                let mut notes = session.edit_notes.lock().expect("edit notes lock");
+                notes.put_back(delivery);
+                let _ = inner.events.send(CoreEvent::EditNotesChanged {
+                    session_id: id,
+                    notes: notes.notes(),
+                });
+            }
+            // The Agent may have committed or changed files: refresh ahead/changed counts.
+            let refresh = inner.clone();
+            tokio::spawn(async move { refresh.refresh_worktrees().await });
+            let next = session.update(|control| {
+                // The adapter crashed and the session has been resumed elsewhere since (or closed):
+                // this turn's ending is old news.
+                let current = session.connection();
+                if control.closed || !current.is_some_and(|c| Arc::ptr_eq(&c, &connection)) {
+                    return None;
+                }
+                // A question still open when the turn ends will never be answered.
+                session.cancel_questions(control);
+                control.in_turn = false;
+                let stopped = std::mem::take(&mut control.stopping);
+                let ok = match result {
+                    Ok(_) => true,
+                    Err(err) if session_gone(&err) => {
+                        control.exited = true;
+                        false
+                    }
+                    Err(err) => {
+                        session.record(|t| {
+                            t.push(TranscriptItem::Notice {
+                                text: format!("The turn failed: {err}"),
+                            })
+                        });
+                        false
+                    }
+                };
+                if stopped {
+                    session.record(|t| {
+                        t.push(TranscriptItem::Notice {
+                            text: "You stopped the turn.".to_owned(),
+                        })
+                    });
+                }
+                // Ended Idle: the queued message goes now, one turn straight after the other (it
+                // never shows Idle in between, so nothing else can claim the session first).
+                if !ok || stopped || control.state() != SessionState::Idle {
+                    return None;
+                }
+                let next = control.queued.take()?;
+                session.start_turn(control, &next.text, &next.attachments);
+                let _ = inner.events.send(CoreEvent::QueuedPromptChanged {
+                    session_id: id,
+                    queued: None,
+                });
+                Some(next)
+            });
+            if let Some(next) = next {
+                inner.dispatch(session, connection, &next.text, &next.attachments);
+            }
+        });
+    }
+
     /// Every running shell, oldest first.
     fn terminal_list(&self) -> Vec<TerminalInfo> {
         let mut list: Vec<TerminalInfo> = self
@@ -4718,7 +4919,10 @@ impl Session {
         else {
             return;
         };
-        let TranscriptItem::User { text, .. } = transcript.items()[index].clone() else {
+        let TranscriptItem::User {
+            text, attachments, ..
+        } = transcript.items()[index].clone()
+        else {
             return;
         };
         drop(transcript);
@@ -4728,6 +4932,7 @@ impl Session {
                 TranscriptItem::User {
                     text,
                     edit_notes: tags,
+                    attachments,
                 },
             )
         });
@@ -4735,6 +4940,21 @@ impl Session {
 
     fn id(&self) -> SessionId {
         self.info.lock().expect("info lock").id
+    }
+
+    /// Starts a turn: the user's message goes in the transcript and the session is Working.
+    fn start_turn(&self, control: &mut Control, text: &str, attachments: &[Attachment]) {
+        control.auto_suspend_failed = false;
+        control.stopping = false;
+        control.prompt_sent = false;
+        self.record(|t| {
+            t.push(TranscriptItem::User {
+                text: text.to_owned(),
+                edit_notes: vec![],
+                attachments: attachments.iter().map(|a| a.name().to_owned()).collect(),
+            })
+        });
+        control.in_turn = true;
     }
 
     /// Puts a permission card in the transcript and holds the question until it's answered. The

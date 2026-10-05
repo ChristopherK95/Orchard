@@ -24,6 +24,7 @@ fn conversation(texts: &[(&str, &str)]) -> Vec<TranscriptItem> {
                 TranscriptItem::User {
                     text: (*user).into(),
                     edit_notes: vec![],
+                    attachments: vec![],
                 },
                 TranscriptItem::Agent {
                     text: (*agent).into(),

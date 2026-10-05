@@ -7,7 +7,7 @@ import { createVirtualizer } from "@tanstack/solid-virtual";
 import { createEffect, createMemo, createSignal, For, type JSX, on, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import type { PermissionRequest, SessionId, TranscriptItem } from "./core";
-import { BookOpen, Brain, Check, ChevronRight, Globe, Loader, MoveRight, Pencil, Play, TextSearch, Trash2, Wrench } from "./icons";
+import { BookOpen, Brain, Check, ChevronRight, Globe, Loader, MoveRight, Paperclip, Pencil, Play, TextSearch, Trash2, Wrench } from "./icons";
 import { handleTranscriptClick, renderMarkdown } from "./markdown";
 import { PermissionCard } from "./PermissionCard";
 
@@ -204,6 +204,18 @@ function renderItem(
                   <span class="sent-note">
                     <Pencil />
                     {tag}
+                  </span>
+                )}
+              </For>
+            </div>
+          </Show>
+          <Show when={item.attachments?.length}>
+            <div class="sent-notes" title="Files and images that went with this message">
+              <For each={item.attachments}>
+                {(name) => (
+                  <span class="sent-note">
+                    <Paperclip />
+                    {name}
                   </span>
                 )}
               </For>

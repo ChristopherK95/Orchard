@@ -5,12 +5,13 @@
 use std::path::{Path, PathBuf};
 
 use editor_core::{
-    check_prerequisites, AdapterCommand, BranchList, Core, CoreConfig, CoreError, CreatedWorktree,
-    DirEntry, FileMatch, FontFamily, LoadedSettings, MissingPrerequisite, NewWorktree, OpenedFile,
-    OtherConversation, PermissionMode, PoppedOutFile, RecentSession, RecentWorkspace, RemovalCheck,
-    RemoveWorktree, RemovedWorktree, RepoSettings, SaveOver, SessionId, SessionInfo, SettingChange,
-    SetupInfo, SlashCommand, TerminalId, TerminalInfo, TerminalOutput, TerminalStream, Tools,
-    TranscriptDelta, TranscriptPage, WorkspaceInfo, WorktreeInfo, WorktreeMerge,
+    check_prerequisites, AdapterCommand, Attachment, BranchList, Core, CoreConfig, CoreError,
+    CreatedWorktree, DirEntry, FileMatch, FontFamily, LoadedSettings, MissingPrerequisite,
+    NewWorktree, OpenedFile, OtherConversation, PermissionMode, PoppedOutFile, QueuedPrompt,
+    RecentSession, RecentWorkspace, RemovalCheck, RemoveWorktree, RemovedWorktree, RepoSettings,
+    SaveOver, SessionId, SessionInfo, SettingChange, SetupInfo, SlashCommand, TerminalId,
+    TerminalInfo, TerminalOutput, TerminalStream, Tools, TranscriptDelta, TranscriptPage,
+    WorkspaceInfo, WorktreeInfo, WorktreeMerge,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -180,6 +181,23 @@ fn close_pop_outs(app: AppHandle) {
 #[tauri::command]
 fn recent_workspaces(core: State<'_, Core>, query: String) -> Vec<RecentWorkspace> {
     core.recent_workspaces(&query)
+}
+
+/// The native open-files dialog (the composer's paperclip); empty if it was cancelled.
+#[tauri::command]
+async fn pick_files(window: tauri::Window) -> Vec<String> {
+    use tauri_plugin_dialog::DialogExt;
+    window
+        .dialog()
+        .file()
+        .set_title("Attach files")
+        .set_parent(&window)
+        .blocking_pick_files()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|file| file.into_path().ok())
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect()
 }
 
 #[tauri::command]
@@ -368,8 +386,72 @@ async fn send_prompt(
     core: State<'_, Core>,
     session_id: SessionId,
     text: String,
+    attachments: Vec<Attachment>,
 ) -> CommandResult<()> {
-    core.send_prompt(session_id, &text)
+    core.send_prompt_with(session_id, &text, attachments)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// A message written while the Agent works: sent when the turn ends Idle (or now, if it has ended).
+#[tauri::command]
+async fn queue_prompt(
+    core: State<'_, Core>,
+    session_id: SessionId,
+    text: String,
+    attachments: Vec<Attachment>,
+) -> CommandResult<()> {
+    core.queue_prompt(session_id, &text, attachments)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn queued_prompt(
+    core: State<'_, Core>,
+    session_id: SessionId,
+) -> CommandResult<Option<QueuedPrompt>> {
+    core.queued_prompt(session_id).map_err(|e| e.to_string())
+}
+
+/// Takes the queued message back into the composer (or drops it): it won't be sent.
+#[tauri::command]
+fn take_queued_prompt(
+    core: State<'_, Core>,
+    session_id: SessionId,
+) -> CommandResult<Option<QueuedPrompt>> {
+    core.take_queued_prompt(session_id)
+        .map_err(|e| e.to_string())
+}
+
+/// Stop: cancels the turn in progress.
+#[tauri::command]
+fn cancel_turn(core: State<'_, Core>, session_id: SessionId) -> CommandResult<()> {
+    core.cancel_turn(session_id).map_err(|e| e.to_string())
+}
+
+/// A file (picked, or dropped on the composer) to attach to the next prompt, or why it can't be.
+#[tauri::command]
+async fn attach_file(
+    core: State<'_, Core>,
+    session_id: SessionId,
+    path: String,
+) -> CommandResult<Attachment> {
+    core.attach_file(session_id, path.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Something pasted into the composer (base64), to attach to the next prompt.
+#[tauri::command]
+async fn attach_data(
+    core: State<'_, Core>,
+    session_id: SessionId,
+    name: String,
+    mime_type: Option<String>,
+    data: String,
+) -> CommandResult<Attachment> {
+    core.attach_data(session_id, &name, mime_type.as_deref(), &data)
         .await
         .map_err(|e| e.to_string())
 }
@@ -1114,6 +1196,7 @@ fn main() {
             recent_workspaces,
             remove_recent_workspace,
             pick_folder,
+            pick_files,
             new_session,
             new_session_in,
             worktrees,
@@ -1145,6 +1228,12 @@ fn main() {
             retry_setup,
             start_anyway,
             send_prompt,
+            queue_prompt,
+            queued_prompt,
+            take_queued_prompt,
+            cancel_turn,
+            attach_file,
+            attach_data,
             sessions,
             show_worktree,
             find_files,

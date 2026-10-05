@@ -85,6 +85,9 @@ pub enum TranscriptItem {
         /// The Edit notes that went with it ("a.rs (+1 −1)"), shown under it.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         edit_notes: Vec<String>,
+        /// The names of the files and images attached to it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<String>,
     },
     Agent {
         text: String,
@@ -336,6 +339,7 @@ impl Transcript {
             if let TranscriptItem::User {
                 text: t,
                 edit_notes,
+                ..
             } = &mut self.items[index]
             {
                 t.push_str(text);
@@ -350,7 +354,11 @@ impl Transcript {
         }
         let (edit_notes, text) =
             crate::edit_notes::split_sent(text).unwrap_or_else(|| (vec![], text.to_owned()));
-        let delta = self.push(TranscriptItem::User { text, edit_notes });
+        let delta = self.push(TranscriptItem::User {
+            text,
+            edit_notes,
+            attachments: vec![],
+        });
         self.open_user_message = Some(OpenAgentMessage { message_id });
         delta
     }

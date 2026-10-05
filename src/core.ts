@@ -433,11 +433,22 @@ export interface OpenDocument {
   version: string;
 }
 
+/** A file or image going with the next prompt (made by `attachFile` / `attachData`). */
+export type Attachment =
+  | { kind: "image"; name: string; mimeType: string; /** base64 */ data: string }
+  | { kind: "text"; name: string; path: string | null; text: string };
+
+/** A message written while the Agent worked, sent when the turn ends Idle. */
+export interface QueuedPrompt {
+  text: string;
+  attachments: Attachment[];
+}
+
 export type PermissionOutcome = { kind: "selected"; optionId: string } | { kind: "cancelled" };
 
 export type TranscriptItem =
-  /** `editNotes`: the Edit notes sent with it ("a.rs (+1 −1)"). */
-  | { kind: "user"; text: string; editNotes?: string[] }
+  /** `editNotes`: the Edit notes sent with it ("a.rs (+1 −1)"); `attachments`: the names of the files sent with it. */
+  | { kind: "user"; text: string; editNotes?: string[]; attachments?: string[] }
   | { kind: "agent"; text: string }
   | { kind: "notice"; text: string }
   | { kind: "permission"; request: PermissionRequest; outcome: PermissionOutcome | null }
@@ -500,6 +511,8 @@ export type CoreEvent =
   | { kind: "documentBackOnDisk"; window: string; path: string }
   | { kind: "documentsChanged"; documents: OpenDocument[] }
   | { kind: "editNotesChanged"; sessionId: SessionId; notes: EditNote[] }
+  /** Queued, added to, taken back, or sent (null). */
+  | { kind: "queuedPromptChanged"; sessionId: SessionId; queued: QueuedPrompt | null }
   /** The Worktree's git status may have changed (coalesced). */
   | { kind: "gitStatusChanged"; worktree: string }
   | { kind: "filesChanged"; worktree: string }
@@ -604,7 +617,21 @@ export const core = {
   /** Skips the rest of a failed setup and starts the session. */
   startAnyway: (worktree: string) => invoke<void>("start_anyway", { worktree }),
   /** A Suspended session is resumed first. */
-  sendPrompt: (sessionId: SessionId, text: string) => invoke<void>("send_prompt", { sessionId, text }),
+  sendPrompt: (sessionId: SessionId, text: string, attachments: Attachment[] = []) => invoke<void>("send_prompt", { sessionId, text, attachments }),
+  /** While the session is Working: sent when the turn ends Idle (added to a message already queued). */
+  queuePrompt: (sessionId: SessionId, text: string, attachments: Attachment[]) => invoke<void>("queue_prompt", { sessionId, text, attachments }),
+  queuedPrompt: (sessionId: SessionId) => invoke<QueuedPrompt | null>("queued_prompt", { sessionId }),
+  /** Takes the queued message back (it won't be sent). */
+  takeQueuedPrompt: (sessionId: SessionId) => invoke<QueuedPrompt | null>("take_queued_prompt", { sessionId }),
+  /** Stop: cancels the turn in progress. */
+  cancelTurn: (sessionId: SessionId) => invoke<void>("cancel_turn", { sessionId }),
+  /** The native open-files dialog; empty if it was cancelled. */
+  pickFiles: () => invoke<string[]>("pick_files"),
+  /** A file to attach to the next prompt; rejects with why it can't be. */
+  attachFile: (sessionId: SessionId, path: string) => invoke<Attachment>("attach_file", { sessionId, path }),
+  /** Something pasted (base64), to attach to the next prompt. */
+  attachData: (sessionId: SessionId, name: string, mimeType: string | null, data: string) =>
+    invoke<Attachment>("attach_data", { sessionId, name, mimeType, data }),
   /** Stops an Idle session's Agent process to free memory; the conversation stays. */
   suspendSession: (sessionId: SessionId) => invoke<void>("suspend_session", { sessionId }),
   /** Brings a Suspended or Exited session back. */

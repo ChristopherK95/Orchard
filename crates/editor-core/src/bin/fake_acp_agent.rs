@@ -26,6 +26,9 @@
 //! process's own sessions that have a finished turn. The `cwd` param is ignored: Claude Code lists
 //! the repository's other worktrees' conversations too, so the client has to filter anyway.
 //!
+//! A top-level `"promptCapabilities": {…}` replaces the ones announced in `initialize` (images and
+//! embedded files by default).
+//!
 //! A top-level `"commands": [{ "name": "review", "description": "…", "input": { "hint": "[pr]" } }]`
 //! is sent as an `available_commands_update` after each `session/new`, like the real adapter's.
 //!
@@ -75,6 +78,13 @@ struct Script {
     /// Conversations `session/list` answers with, besides this process's own.
     #[serde(default)]
     listed: Vec<Value>,
+    /// The `promptCapabilities` it announces (images and embedded files, unless set).
+    #[serde(default = "default_prompt_capabilities")]
+    prompt_capabilities: Value,
+}
+
+fn default_prompt_capabilities() -> Value {
+    json!({ "image": true, "embeddedContext": true })
 }
 
 fn default_mode() -> String {
@@ -194,6 +204,7 @@ fn main() {
             fail_resume: false,
             commands: vec![],
             listed: vec![],
+            prompt_capabilities: default_prompt_capabilities(),
         });
     let log = std::env::var("FAKE_ACP_LOG").ok().map(|path| {
         OpenOptions::new()
@@ -228,6 +239,7 @@ impl Agent {
                         "protocolVersion": 1,
                         "agentCapabilities": {
                             "loadSession": true,
+                            "promptCapabilities": self.script.prompt_capabilities,
                             "sessionCapabilities": { "close": {}, "resume": {}, "list": {} }
                         },
                         "authMethods": []

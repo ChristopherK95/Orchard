@@ -41,6 +41,7 @@ async fn sessions_run_side_by_side_in_one_worktree_and_each_reports_its_state() 
             TranscriptItem::User {
                 text: "one".into(),
                 edit_notes: vec![],
+                attachments: vec![],
             },
             TranscriptItem::Agent {
                 text: "Echo: one".into(),
@@ -134,6 +135,7 @@ async fn a_background_session_counts_unread_output_until_it_is_shown() {
             TranscriptItem::User {
                 text: "in the background".into(),
                 edit_notes: vec![],
+                attachments: vec![],
             },
             TranscriptItem::Agent {
                 text: "Echo: in the background".into(),

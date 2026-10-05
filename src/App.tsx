@@ -607,6 +607,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         event.kind === "documentsChanged" ||
         event.kind === "editNotesChanged" ||
         event.kind === "availableCommandsChanged" ||
+        event.kind === "queuedPromptChanged" ||
         event.kind === "gitStatusChanged"
       ) {
         return; // (the Manual editors', permission cards', Edit note chips', Git drawer's and composer's business)

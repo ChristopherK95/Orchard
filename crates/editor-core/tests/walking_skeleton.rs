@@ -9,6 +9,7 @@ fn user(text: &str) -> TranscriptItem {
     TranscriptItem::User {
         text: text.into(),
         edit_notes: vec![],
+        attachments: vec![],
     }
 }
 fn agent(text: &str) -> TranscriptItem {

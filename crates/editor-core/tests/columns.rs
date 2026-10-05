@@ -13,6 +13,7 @@ fn exchange(text: &str) -> [TranscriptItem; 2] {
         TranscriptItem::User {
             text: text.into(),
             edit_notes: vec![],
+            attachments: vec![],
         },
         TranscriptItem::Agent {
             text: format!("Echo: {text}"),

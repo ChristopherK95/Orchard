@@ -4,7 +4,7 @@
 
 **Blocked by:** 03 (Permission cards), 10 (Suspend and resume).
 
-**Status:** ready-for-agent
+**Status:** superseded by ticket 39 (which decided Esc stops a turn, queuing again appends, and the queued message is shown above the input rather than kept in it). Still open from here: the Board card's "1 queued".
 
 - [ ] While Working, Enter (or Queue) queues the text. The composer shows the queued chip and keeps the text editable; changing it changes what will be sent, and clearing it cancels the queued message.
 - [ ] One message can be queued at a time. Queuing again replaces it (the composer shows the current queued text, so nothing is lost silently).

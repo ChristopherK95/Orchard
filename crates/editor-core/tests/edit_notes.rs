@@ -98,7 +98,9 @@ async fn a_session_that_read_the_file_gets_the_diff_with_its_next_prompt_and_oth
         .into_iter()
         .rev()
         .find_map(|item| match item {
-            TranscriptItem::User { text, edit_notes } => Some((text, edit_notes)),
+            TranscriptItem::User {
+                text, edit_notes, ..
+            } => Some((text, edit_notes)),
             _ => None,
         });
     assert_eq!(

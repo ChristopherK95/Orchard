@@ -161,18 +161,29 @@ impl Connection {
         })
     }
 
-    pub(crate) async fn request(&self, method: &str, params: Value) -> Result<Value, AcpError> {
+    /// The request is sent by the call itself, not when the reply is first awaited, so it goes
+    /// ahead of anything sent after the call (a `session/cancel` for a `session/prompt`, say).
+    pub(crate) fn request(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> impl std::future::Future<Output = Result<Value, AcpError>> + Send + 'static {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        match self.pending.lock().expect("pending lock").as_mut() {
-            Some(waiting) => waiting.insert(id, tx),
-            None => return Err(AcpError::Closed),
+        let sent = match self.pending.lock().expect("pending lock").as_mut() {
+            Some(waiting) => {
+                waiting.insert(id, tx);
+                let msg = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+                self.out.send(msg.to_string()).is_ok()
+            }
+            None => false,
         };
-        let msg = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-        if self.out.send(msg.to_string()).is_err() {
-            return Err(AcpError::Closed);
+        async move {
+            if !sent {
+                return Err(AcpError::Closed);
+            }
+            rx.await.unwrap_or(Err(AcpError::Closed))
         }
-        rx.await.unwrap_or(Err(AcpError::Closed))
     }
 
     /// Sends a notification (no reply comes).
@@ -189,6 +200,11 @@ impl Connection {
     pub(crate) fn supports_session(&self, method: &str) -> bool {
         self.capabilities.lock().expect("capabilities lock")["sessionCapabilities"][method]
             .is_object()
+    }
+
+    /// What the adapter takes in a prompt besides text (`image`, `embeddedContext`, …).
+    pub(crate) fn prompt_capabilities(&self) -> Value {
+        self.capabilities.lock().expect("capabilities lock")["promptCapabilities"].clone()
     }
 
     /// Whether the adapter can load an earlier conversation (`session/load`, which replays it).
