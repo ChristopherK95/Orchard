@@ -104,6 +104,17 @@ export interface RecentSession {
   worktree: string;
 }
 
+/** A conversation the Agent has for a Worktree that the editor doesn't (started in a terminal…). */
+export interface OtherConversation {
+  /** The ACP session id, which `openConversation` takes. */
+  acpId: string;
+  /** What the Agent calls it (its summary or first prompt). */
+  title: string | null;
+  worktree: string;
+  /** When it last changed (ISO 8601). */
+  updatedAt: string | null;
+}
+
 export interface WorktreeInfo {
   path: string;
   /** The checked-out branch, or null when HEAD is detached. */
@@ -160,14 +171,43 @@ export interface RemovalCheck {
   unpushed: CommitSummary[];
   unpushedCount: number;
   base: string;
-  /** Merged into the Base: "Delete branch too" starts ticked. */
+  /** Merged into the Base (or its changes are, after a squash or rebase merge), or nothing of its own:
+   *  "Delete branch too" starts ticked, and deleting the branch loses nothing. */
   merged: boolean;
+  /** Where: the Base, or another branch its PR went into (`origin/project`). Null if not merged. */
+  mergedInto: string | null;
   /** Removing it at all needs "Discard and remove". */
   discardToRemove: boolean;
   /** Deleting the branch too needs "Discard and remove". */
   discardToDeleteBranch: boolean;
   /** Identifies exactly the work listed; "Discard and remove" sends it back. */
   fingerprint: string;
+}
+
+/** How a Worktree's branch stands against its Base, or another branch its PR went into. */
+export type MergeState =
+  /** Its commits are in `into` (a merge commit, or a fast-forward into the Base). */
+  | { kind: "merged"; into: string }
+  /** Its changes are in `into` under other commits: a squash or rebase merge. */
+  | { kind: "changesInBase"; into: string }
+  /** No commits of its own yet. */
+  | { kind: "nothingNew" }
+  /** Not found in the Base, but its remote branch was deleted (the PR merged some other way, or closed). */
+  | { kind: "remoteDeleted"; commits: number }
+  | { kind: "notMerged"; commits: number };
+
+/** One row of the Worktrees overview. */
+export interface WorktreeMerge {
+  path: string;
+  branch: string | null;
+  isMain: boolean;
+  /** The Worktree's Base, which it's measured against. */
+  base: string;
+  /** Null for the main checkout, and when it couldn't be told (`error`). */
+  merge: MergeState | null;
+  error: string | null;
+  /** Uncommitted changes (removal loses them whatever `merge` says). */
+  changed: number;
 }
 
 export interface RemoveWorktree {
@@ -485,6 +525,11 @@ export const core = {
   recentSessions: (worktree: string) => invoke<RecentSession[]>("recent_sessions", { worktree }),
   /** Reopens a Recent session in a new Tab, with its conversation. */
   reopenSession: (acpId: string) => invoke<SessionId>("reopen_session", { acpId }),
+  /** The Agent's conversations in a Worktree that aren't Tabs or Recent sessions, newest first. */
+  otherConversations: (worktree: string) => invoke<OtherConversation[]>("other_conversations", { worktree }),
+  /** Opens one of `otherConversations` in a new Tab (or shows its Tab, if it's one already). */
+  openConversation: (c: OtherConversation) =>
+    invoke<SessionId>("open_conversation", { worktree: c.worktree, acpId: c.acpId, title: c.title }),
   /** `Ctrl+Shift+T`: the most recently closed session (null when there's none). */
   reopenLastClosed: () => invoke<SessionId | null>("reopen_last_closed"),
   /** The Tab shown last (before the restart, if restored). */
@@ -492,6 +537,8 @@ export const core = {
   worktrees: () => invoke<WorktreeInfo[]>("worktrees"),
   refreshWorktrees: () => invoke<void>("refresh_worktrees"),
   createWorktree: (spec: NewWorktree) => invoke<CreatedWorktree>("create_worktree", { spec }),
+  /** Every Worktree, main checkout first, with whether its branch is merged into its Base (as last fetched). */
+  mergeOverview: () => invoke<WorktreeMerge[]>("merge_overview"),
   removalCheck: (worktree: string) => invoke<RemovalCheck>("removal_check", { worktree }),
   /** Stops the Worktree's sessions and setup, then removes it; refuses if that loses work without `discard`. */
   removeWorktree: (worktree: string, options: RemoveWorktree) => invoke<RemovedWorktree>("remove_worktree", { worktree, options }),

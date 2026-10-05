@@ -108,7 +108,7 @@ export function RemoveWorktreeDialog(props: {
                 <Show when={c().unpushedCount}>
                   <div class="loss">
                     <div class="section-label">
-                      Not pushed or merged into {c().base} <span class="badge">{c().unpushedCount}</span>
+                      {c().merged ? "Commits only this branch has" : `Not pushed or merged into ${c().base}`} <span class="badge">{c().unpushedCount}</span>
                     </div>
                     <ul>
                       <For each={c().unpushed.slice(0, SHOWN)}>
@@ -123,7 +123,9 @@ export function RemoveWorktreeDialog(props: {
                       </Show>
                     </ul>
                     <p class="muted small">
-                      {c().branch
+                      {c().merged
+                        ? `Their changes are already in ${c().mergedInto ?? c().base} (squashed or rebased), so deleting the branch loses nothing.`
+                        : c().branch
                         ? deleteBranch()
                           ? "Deleting the branch loses them."
                           : `They stay on ${c().branch}.`
@@ -147,7 +149,7 @@ export function RemoveWorktreeDialog(props: {
                       <span>
                         Delete branch <span class="mono">{branch()}</span> too
                         <span class="sub">
-                          {c().merged ? `merged into ${c().base}` : `not merged into ${c().base}: leaving it unticked keeps the commits recoverable`}
+                          {c().merged ? (c().mergedInto ? `merged into ${c().mergedInto}` : "nothing of its own") : `not merged into ${c().base}: leaving it unticked keeps the commits recoverable`}
                         </span>
                       </span>
                     </label>

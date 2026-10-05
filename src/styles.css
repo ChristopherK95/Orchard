@@ -238,6 +238,8 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .search-button { min-height: 24px; width: 180px; justify-content: flex-start; gap: 7px; padding: 0 4px 0 9px; background: var(--bg-3); color: var(--fg-dim); font-size: 12px; font-weight: 400; }
 .search-button:hover:not(:disabled) { background: var(--bg-4); color: var(--fg-2); }
 .search-button .lucide { width: 12px; height: 12px; }
+.worktrees-button { min-height: 24px; gap: 6px; padding: 0 9px; font-size: 12px; font-weight: 400; color: var(--fg-2); }
+.worktrees-button .lucide { width: 13px; height: 13px; }
 .search-button kbd { margin-left: auto; margin-right: 0; }
 .titlebar .icon .lucide { width: 14px; height: 14px; }
 
@@ -383,6 +385,36 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .modal-foot { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--bg-2); }
 .modal-foot .hint { margin-right: auto; font-size: 11.5px; color: var(--fg-3); }
 .modal-error { margin: 0; padding: 0 16px 12px; }
+/* The Worktrees overview: one row per Worktree, the merged (removable) ones first. */
+.modal.worktrees-overview { width: min(680px, 100%); }
+.worktrees-overview .fetch-note { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-3); }
+.worktrees-overview .fetch-note .lucide { width: 12px; height: 12px; }
+.overview-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.overview-list li { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 12px; border: 1px solid var(--line); border-left: 3px solid var(--c); border-radius: 0 var(--r-md) var(--r-md) 0; background: var(--bg-1); }
+.overview-check { flex: none; width: 14px; height: 14px; margin: 0; }
+.overview-list li.ready { background: var(--ok-tint); }
+.overview-open { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 0; background: transparent; border: 0; text-align: left; font-weight: 400; }
+.overview-open:hover:not(:disabled) .overview-name { text-decoration: underline; }
+.overview-name { display: flex; align-items: center; gap: 7px; color: var(--fg-1); }
+.overview-name .lucide { width: 13px; height: 13px; color: var(--c); }
+.overview-status { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.overview-status .lucide { width: 12px; height: 12px; }
+.overview-status.ok { color: var(--ok); }
+.overview-status.warn { color: var(--warn); }
+.overview-status.muted { color: var(--fg-3); }
+.overview-status.error { color: var(--danger); }
+.overview-extra { display: flex; gap: 10px; font-size: 12px; color: var(--fg-3); }
+.overview-extra .warn { color: var(--warn); }
+.overview-path { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overview-list li > button { flex: none; gap: 6px; }
+.overview-list li > button .lucide { width: 12px; height: 12px; }
+.worktrees-overview .modal-foot button .lucide { width: 12px; height: 12px; }
+.plan-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.plan-list li { display: flex; align-items: flex-start; gap: 10px; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg-1); }
+.plan-list li > .lucide { flex: none; margin-top: 3px; width: 13px; height: 13px; color: var(--fg-3); }
+.plan-list li.skipped > .lucide, .plan-list li.failed > .lucide { color: var(--warn); }
+.plan-list li.skipped { opacity: 0.8; }
+.plan-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .branch-list { max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 1px; }
 .branch { min-height: 30px; justify-content: flex-start; gap: 8px; padding: 0 10px; background: transparent; border-color: transparent; border-radius: var(--r-sm); font-weight: 400; text-align: left; }
 .branch:hover:not(:disabled) { background: var(--bg-3); }
@@ -750,6 +782,15 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .menu-sep { height: 1px; margin: 3px 4px; background: var(--line); }
 .menu-item .wt-glyph, .recent-row .wt-glyph { color: var(--c); }
 .menu-item .badge { margin-left: auto; }
+.menu.scroll { max-height: min(60vh, 480px); overflow-y: auto; max-width: min(460px, calc(100vw - 32px)); }
+.menu-label { padding: 6px 9px 3px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3); }
+.menu-note { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 9px; font-size: 12.5px; color: var(--fg-dim); }
+.menu-note .lucide { width: 12px; height: 12px; }
+.menu-item .grow, .recent-row .grow { min-width: 0; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.menu-item .when, .recent-row .when { flex: none; margin-left: auto; padding-left: 12px; font-size: 11.5px; color: var(--fg-dim); }
+.recent-row .note { color: var(--fg-dim); }
+.empty-worktree > button.link { margin-top: 2px; }
 .context-bar .bar-actions button.icon { width: 24px; padding: 0; border-color: transparent; }
 .context-bar .bar-actions button.icon:hover:not(:disabled) { border-color: var(--line-strong); }
 

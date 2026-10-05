@@ -481,7 +481,7 @@ export function GitDrawer(props: {
                     Compare
                   </button>
                   <Show when={changes() && !changes()!.isDefault}>
-                    <button class="ghost" type="button" onClick={() => void changeBase("")} title="Back to origin/<default>">
+                    <button class="ghost" type="button" onClick={() => void changeBase("")} title="Back to the branch it was made from, or origin/<default>">
                       Use the default
                     </button>
                   </Show>

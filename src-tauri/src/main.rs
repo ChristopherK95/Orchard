@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 use editor_core::{
     check_prerequisites, AdapterCommand, BranchList, Core, CoreConfig, CoreError, CreatedWorktree,
     DirEntry, FileMatch, FontFamily, LoadedSettings, MissingPrerequisite, NewWorktree, OpenedFile,
-    PermissionMode, PoppedOutFile, RecentSession, RecentWorkspace, RemovalCheck, RemoveWorktree,
-    RemovedWorktree, RepoSettings, SaveOver, SessionId, SessionInfo, SettingChange, SetupInfo,
-    SlashCommand, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo, WorktreeInfo,
+    OtherConversation, PermissionMode, PoppedOutFile, RecentSession, RecentWorkspace, RemovalCheck,
+    RemoveWorktree, RemovedWorktree, RepoSettings, SaveOver, SessionId, SessionInfo, SettingChange,
+    SetupInfo, SlashCommand, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo, WorktreeInfo,
+    WorktreeMerge,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -62,9 +63,9 @@ fn adapter_missing(app: AppHandle) -> bool {
     if cfg!(debug_assertions) || std::env::var_os("ORCHARD_ACP_ADAPTER").is_some() {
         return false;
     }
-    app.path()
-        .app_data_dir()
-        .map_or(true, |dir| !adapter_script(&installed_adapter_dir(&dir)).is_file())
+    app.path().app_data_dir().map_or(true, |dir| {
+        !adapter_script(&installed_adapter_dir(&dir)).is_file()
+    })
 }
 
 /// Fetches the pinned adapter with npm into the app's data folder (an installed app's first run),
@@ -98,8 +99,11 @@ async fn install_adapter(app: AppHandle) -> CommandResult<()> {
         .map_err(|e| format!("Couldn't run npm (it comes with Node.js): {e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("npm install failed:
-{}", stderr.trim()));
+        return Err(format!(
+            "npm install failed:
+{}",
+            stderr.trim()
+        ));
     }
 
     // Older versions are no longer used.
@@ -221,6 +225,12 @@ async fn create_worktree(
     spec: NewWorktree,
 ) -> CommandResult<CreatedWorktree> {
     core.create_worktree(spec).await.map_err(|e| e.to_string())
+}
+
+/// Every Worktree with whether its branch is merged into its Base (see `Core::merge_overview`).
+#[tauri::command]
+async fn merge_overview(core: State<'_, Core>) -> CommandResult<Vec<WorktreeMerge>> {
+    core.merge_overview().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -577,6 +587,29 @@ fn recent_sessions(core: State<'_, Core>, worktree: String) -> Vec<RecentSession
 #[tauri::command]
 async fn reopen_session(core: State<'_, Core>, acp_id: String) -> CommandResult<SessionId> {
     core.reopen_session(&acp_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The Agent's conversations in a Worktree that the editor doesn't have (started in a terminal…).
+#[tauri::command]
+async fn other_conversations(
+    core: State<'_, Core>,
+    worktree: String,
+) -> CommandResult<Vec<OtherConversation>> {
+    core.other_conversations(worktree.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn open_conversation(
+    core: State<'_, Core>,
+    worktree: String,
+    acp_id: String,
+    title: Option<String>,
+) -> CommandResult<SessionId> {
+    core.open_conversation(worktree.as_ref(), &acp_id, title.as_deref())
         .await
         .map_err(|e| e.to_string())
 }
@@ -984,6 +1017,7 @@ fn main() {
             worktrees,
             refresh_worktrees,
             create_worktree,
+            merge_overview,
             removal_check,
             remove_worktree,
             branches,
@@ -1016,6 +1050,8 @@ fn main() {
             close_tab,
             recent_sessions,
             reopen_session,
+            other_conversations,
+            open_conversation,
             reopen_last_closed,
             last_active_session,
             suspend_session,

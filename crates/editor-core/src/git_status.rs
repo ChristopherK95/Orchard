@@ -105,6 +105,7 @@ pub enum CommitOutcome {
 pub struct BaseChanges {
     /// The Worktree's Base: the default (`origin/<default>`), its start point, or one set for it.
     pub base: String,
+    /// None was set for it: it's the branch its branch was made from, or `origin/<default>`.
     pub is_default: bool,
     /// Where the branch split from it (their merge-base): what each file's diff runs from.
     pub split: String,

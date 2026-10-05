@@ -3,7 +3,8 @@
 //! removable.
 //!
 //! The rule: uncommitted changes are always lost with the folder; commits only when no branch keeps
-//! them (HEAD is detached, or the branch is deleted too). Commits are listed either way.
+//! them (HEAD is detached, or the branch is deleted too), unless the Base has their changes anyway
+//! (a squash or rebase merge). Commits are listed either way.
 
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -11,6 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::git;
+use crate::merged::MergeState;
 use crate::session::SessionId;
 
 /// How many changed files, ignored entries or commits the check lists (it counts them all).
@@ -64,12 +66,15 @@ pub struct RemovalCheck {
     /// or tag (the first `LIST_LIMIT`, newest first).
     pub unpushed: Vec<CommitSummary>,
     pub unpushed_count: usize,
-    /// What `merged` and `unpushed` are measured against: the repo's default Base
-    /// (`origin/<default>`). A Worktree branched off another branch is still measured against it;
-    /// a per-Worktree Base comes with "Changes vs base".
+    /// What `merged` and `unpushed` are measured against: the Worktree's Base.
     pub base: String,
-    /// The branch is merged into the Base, so "Delete branch too" starts ticked.
+    /// The branch is merged into the Base (its commits, or for a squash or rebase merge its
+    /// changes), or has nothing of its own: "Delete branch too" starts ticked, and deleting it
+    /// loses nothing.
     pub merged: bool,
+    /// Where it was merged: the Base, or another branch its PR went into (`origin/project`).
+    /// `None` when it isn't, or has nothing of its own.
+    pub merged_into: Option<String>,
     /// Removing the Worktree loses work (uncommitted changes, or commits on a detached HEAD).
     pub discard_to_remove: bool,
     /// Deleting the branch as well loses its unpushed commits.
@@ -87,6 +92,7 @@ pub(crate) struct Facts<'a> {
     pub(crate) unpushed: (Vec<CommitSummary>, usize),
     pub(crate) base: &'a str,
     pub(crate) merged: bool,
+    pub(crate) merged_into: Option<String>,
     pub(crate) fingerprint: String,
 }
 
@@ -105,11 +111,12 @@ impl RemovalCheck {
             ignored: facts.ignored.into_iter().take(LIST_LIMIT).collect(),
             ignored_count,
             discard_to_remove: changed_count > 0 || (facts.branch.is_none() && unpushed_count > 0),
-            discard_to_delete_branch: unpushed_count > 0,
+            discard_to_delete_branch: unpushed_count > 0 && !facts.merged,
             unpushed,
             unpushed_count,
             base: facts.base.to_owned(),
             merged: facts.merged,
+            merged_into: facts.merged_into,
             fingerprint: facts.fingerprint,
         }
     }
@@ -125,7 +132,7 @@ impl RemovalCheck {
                 lost.push(plural(self.changed_count, "uncommitted change"));
             }
             let no_branch_keeps_them = self.branch.is_none() || options.delete_branch;
-            if no_branch_keeps_them && self.unpushed_count > 0 {
+            if no_branch_keeps_them && self.unpushed_count > 0 && !self.merged {
                 lost.push(format!(
                     "{} that no remote, branch or tag has",
                     plural(self.unpushed_count, "commit")
@@ -161,7 +168,15 @@ pub(crate) async fn inspect(
     let ignored = git::ignored(worktree).await?;
     let diff = git::diff_vs_head(worktree).await?;
     let unpushed = git::commits_only_here(worktree, branch, base_id, LIST_LIMIT).await?;
-    let merged = branch.is_some() && git::is_merged(worktree, "HEAD", base_id).await;
+    let state = match branch {
+        Some(_) => Some(crate::merged::detect(worktree, branch, base, base_id).await),
+        None => None,
+    };
+    let merged = state.as_ref().is_some_and(MergeState::in_base);
+    let merged_into = match state {
+        Some(MergeState::Merged { into } | MergeState::ChangesInBase { into }) => Some(into),
+        _ => None,
+    };
     let fingerprint = fingerprint(worktree, &changes, &diff, &unpushed);
     Ok(RemovalCheck::from_facts(Facts {
         worktree,
@@ -171,6 +186,7 @@ pub(crate) async fn inspect(
         unpushed,
         base,
         merged,
+        merged_into,
         fingerprint,
     }))
 }
@@ -205,8 +221,8 @@ fn fingerprint(
 mod tests {
     use super::*;
 
-    fn check(changed: usize, unpushed: usize, branch: Option<&str>) -> RemovalCheck {
-        RemovalCheck::from_facts(Facts {
+    fn facts(changed: usize, unpushed: usize, branch: Option<&str>) -> Facts<'_> {
+        Facts {
             worktree: Path::new("w"),
             branch,
             changes: vec![" M a".into(); changed],
@@ -214,8 +230,13 @@ mod tests {
             unpushed: (vec![], unpushed),
             base: "origin/main",
             merged: false,
+            merged_into: None,
             fingerprint: "seen".into(),
-        })
+        }
+    }
+
+    fn check(changed: usize, unpushed: usize, branch: Option<&str>) -> RemovalCheck {
+        RemovalCheck::from_facts(facts(changed, unpushed, branch))
     }
 
     fn options(discard: Option<&str>, delete_branch: bool) -> RemoveWorktree {
@@ -258,6 +279,20 @@ mod tests {
                 .would_lose(&options(None, false))
                 .as_deref(),
             Some("2 uncommitted changes and 3 commits that no remote, branch or tag has")
+        );
+    }
+
+    #[test]
+    fn commits_whose_changes_the_base_has_are_not_lost_with_the_branch() {
+        let squashed = RemovalCheck::from_facts(Facts {
+            merged: true,
+            ..facts(1, 2, Some("b"))
+        });
+        assert!(!squashed.discard_to_delete_branch);
+        assert_eq!(
+            squashed.would_lose(&options(None, true)).as_deref(),
+            Some("1 uncommitted change"),
+            "only the changes"
         );
     }
 

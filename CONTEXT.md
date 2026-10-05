@@ -29,8 +29,12 @@ _Avoid_: Instance, chat, agent (the Agent is the program; the session is one con
 The UI surface of one Agent session. Hopping between Worktrees means switching or filtering Tabs, not opening another window.
 
 **Base**:
-The branch or commit a Worktree's branch is compared against in "Changes vs base": what it committed since it split from the Base (not uncommitted work). Defaults to `origin/<default branch>`, or the start point the Worktree was branched off; it can be changed, and each Worktree keeps its own.
+The branch or commit a Worktree's branch is compared against in "Changes vs base": what it committed since it split from the Base (not uncommitted work). Defaults to the start point the Worktree was branched off (in the editor, or as git's reflog records it: the branch it was created from, or last reset onto), else `origin/<default branch>`; it can be changed, and each Worktree keeps its own.
 _Avoid_: Upstream (that's the branch it pushes to), target
+
+**Worktrees overview**:
+Every Worktree of the Workspace in one list, with whether its branch is merged into its Base (or into another branch its PR targeted, such as a project branch), so finished ones can be removed. Merged counts however the PR landed: a merge commit or fast-forward (the branch's commits are in the Base), or a squash or rebase (its changes are). A remote branch that was deleted is shown, but doesn't count as merged by itself.
+_Avoid_: Clean-up, prune
 
 **Tool call**:
 One action the Agent takes with a tool (reading or editing a file, running a command, …), shown as a compact row in the transcript with its status.
@@ -42,6 +46,10 @@ _Avoid_: Bootstrap, init script
 
 **Recent sessions**:
 The closed Agent sessions of a Worktree whose conversations can still be reopened. Closing a Tab moves its session here; it doesn't delete it.
+
+**Conversations started elsewhere**:
+The Agent's own conversations in a Worktree that are neither Tabs nor Recent sessions: ones started in a terminal, or closed so long ago they left the Recent sessions. Any of them can be opened in a Tab with its conversation. Listed only when asked for (the Recent menu, or the link in an empty Worktree), as listing starts the Agent.
+_Avoid_: External sessions, imported sessions
 
 **Edit note**:
 The record of the user's saved manual changes to a file, attached to the next prompt of each Agent session on that Worktree that has read or edited the file. Shown as a removable chip above the composer; a removed one is never sent.

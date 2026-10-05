@@ -21,6 +21,11 @@
 //!
 //! A top-level `"failResume": true` makes `session/resume` fail (`Session not found`).
 //!
+//! A top-level `"listed": [{ "sessionId": "…", "cwd": "…", "title": "…", "updatedAt": "…" }]` is
+//! what `session/list` answers with (conversations from elsewhere, like a terminal's), after this
+//! process's own sessions that have a finished turn. The `cwd` param is ignored: Claude Code lists
+//! the repository's other worktrees' conversations too, so the client has to filter anyway.
+//!
 //! A top-level `"commands": [{ "name": "review", "description": "…", "input": { "hint": "[pr]" } }]`
 //! is sent as an `available_commands_update` after each `session/new`, like the real adapter's.
 //!
@@ -67,6 +72,9 @@ struct Script {
     /// Sent as `available_commands_update` after each `session/new` (ACP's command objects).
     #[serde(default)]
     commands: Vec<Value>,
+    /// Conversations `session/list` answers with, besides this process's own.
+    #[serde(default)]
+    listed: Vec<Value>,
 }
 
 fn default_mode() -> String {
@@ -185,6 +193,7 @@ fn main() {
             initial_mode: default_mode(),
             fail_resume: false,
             commands: vec![],
+            listed: vec![],
         });
     let log = std::env::var("FAKE_ACP_LOG").ok().map(|path| {
         OpenOptions::new()
@@ -219,7 +228,7 @@ impl Agent {
                         "protocolVersion": 1,
                         "agentCapabilities": {
                             "loadSession": true,
-                            "sessionCapabilities": { "close": {}, "resume": {} }
+                            "sessionCapabilities": { "close": {}, "resume": {}, "list": {} }
                         },
                         "authMethods": []
                     })
@@ -277,6 +286,7 @@ impl Agent {
                     }
                     self.modes()
                 }
+                "session/list" => self.list(),
                 "session/set_mode" => json!({}),
                 "session/close" => self.close(&params),
                 "session/prompt" => self.prompt(&params),
@@ -298,6 +308,17 @@ impl Agent {
                 notify_update(&result["sessionId"], update);
             }
         }
+    }
+
+    fn list(&self) -> Value {
+        let history = read_history();
+        let own = self
+            .cwds
+            .iter()
+            .filter(|(id, _)| history.get(id.as_str()).is_some())
+            .map(|(id, cwd)| json!({ "sessionId": id, "cwd": cwd }));
+        let sessions: Vec<Value> = own.chain(self.script.listed.iter().cloned()).collect();
+        json!({ "sessions": sessions })
     }
 
     fn close(&mut self, params: &Value) -> Value {

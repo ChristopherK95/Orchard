@@ -28,6 +28,7 @@ use crate::git_status::{
     BaseChange, BaseChanges, ChangeKind, CommitOutcome, CommitRequest, GitStatus, PullOutcome,
     PushOutcome,
 };
+use crate::merged::{self, WorktreeMerge};
 use crate::permissions;
 use crate::remove_worktree::{self, RemovalCheck, RemoveWorktree, RemovedWorktree};
 use crate::session::{
@@ -103,6 +104,16 @@ async fn apply_mode(
         )
         .await
         .map(|_| ())
+}
+
+/// A Tab name from a conversation's title: its first line, cut to `TITLE_NAME_LEN` characters.
+fn name_from_title(title: &str) -> Option<String> {
+    let line = title.lines().map(str::trim).find(|l| !l.is_empty())?;
+    if line.chars().count() <= TITLE_NAME_LEN {
+        return Some(line.to_owned());
+    }
+    let cut: String = line.chars().take(TITLE_NAME_LEN - 1).collect();
+    Some(format!("{}…", cut.trim_end()))
 }
 
 /// A prompt error meaning the Agent no longer has the session (e.g. it was closed under it):
@@ -203,6 +214,26 @@ pub struct RecentSession {
     pub name: String,
     pub worktree: PathBuf,
 }
+
+/// A conversation the Agent has for a Worktree that isn't one of the editor's Tabs or Recent
+/// sessions (one started in a terminal, say), which `open_conversation` opens in a Tab.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OtherConversation {
+    /// The ACP session id (Claude Code's own), which `open_conversation` takes.
+    pub acp_id: String,
+    /// What the Agent calls it (its summary or first prompt), if anything.
+    pub title: Option<String>,
+    pub worktree: PathBuf,
+    /// When it last changed, as the Agent says (ISO 8601).
+    pub updated_at: Option<String>,
+}
+
+/// How long a Tab named after a conversation's title may be (in characters).
+const TITLE_NAME_LEN: usize = 40;
+
+/// How many pages of `session/list` are read at most.
+const LIST_PAGES: usize = 10;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum CoreError {
@@ -1540,12 +1571,7 @@ impl Core {
         root: &Path,
         info: &WorktreeInfo,
     ) -> Result<RemovalCheck, CoreError> {
-        let base = git::default_start_point(root).await;
-        // By commit id, resolved in the main checkout: in the Worktree, a Base of `HEAD` (or a name
-        // its own branch shadows) would mean its own HEAD, and everything would look merged.
-        let base_id = git::resolve_commit(root, &base)
-            .await
-            .ok_or_else(|| CoreError::Git(format!("couldn't find the Base `{base}`")))?;
+        let (base, base_id) = self.resolved_base(root, &info.path).await?;
         let mut check =
             remove_worktree::inspect(&info.path, info.branch.as_deref(), &base, &base_id)
                 .await
@@ -1557,6 +1583,52 @@ impl Core {
             .collect();
         check.sessions.sort();
         Ok(check)
+    }
+
+    /// The Worktree's Base, and the commit it names. By commit id, resolved in the main checkout:
+    /// in the Worktree, a Base of `HEAD` (or a name its own branch shadows) would mean its own
+    /// HEAD, and everything would look merged.
+    async fn resolved_base(
+        &self,
+        root: &Path,
+        worktree: &Path,
+    ) -> Result<(String, String), CoreError> {
+        let (base, _) = self.base_of(worktree).await;
+        let base_id = git::resolve_commit(root, &base)
+            .await
+            .ok_or_else(|| CoreError::Git(format!("couldn't find the Base `{base}`")))?;
+        Ok((base, base_id))
+    }
+
+    /// Every Worktree, main checkout first, with whether its branch is merged into its Base: for
+    /// the Worktrees overview, where merged ones can be removed. Uses the remote branches as they
+    /// are (fetch first for news of merged PRs).
+    pub async fn merge_overview(&self) -> Result<Vec<WorktreeMerge>, CoreError> {
+        let root = self.workspace()?.root;
+        let mut rows = vec![];
+        for info in self.worktrees() {
+            let (base, _) = self.base_of(&info.path).await;
+            let mut row = WorktreeMerge {
+                path: info.path.clone(),
+                branch: info.branch.clone(),
+                is_main: info.is_main,
+                base,
+                merge: None,
+                error: None,
+                changed: info.changed,
+            };
+            if !info.is_main {
+                match self.resolved_base(&root, &info.path).await {
+                    Ok((base, base_id)) => {
+                        let branch = info.branch.as_deref();
+                        row.merge = Some(merged::detect(&info.path, branch, &base, &base_id).await)
+                    }
+                    Err(err) => row.error = Some(err.to_string()),
+                }
+            }
+            rows.push(row);
+        }
+        Ok(rows)
     }
 
     fn sessions_in(&self, worktree: &Path) -> Vec<Arc<Session>> {
@@ -2022,8 +2094,9 @@ impl Core {
         ))
     }
 
-    /// The Worktree's Base: the one set for it (or that it was created from), else the default.
-    /// Whether it's the default.
+    /// The Worktree's Base: the one set for it (or that it was created from in the editor), else
+    /// the branch its branch was made from (as its reflog says), else the default. Whether none was
+    /// set for it.
     async fn base_of(&self, worktree: &Path) -> (String, bool) {
         let set = self
             .inner
@@ -2033,12 +2106,24 @@ impl Core {
             .bases
             .get(worktree)
             .cloned();
-        match set {
-            Some(base) => (base, false),
-            None => match self.workspace() {
-                Ok(workspace) => (git::default_start_point(&workspace.root).await, true),
-                Err(_) => ("HEAD".into(), true),
-            },
+        if let Some(base) = set {
+            return (base, false);
+        }
+        // Not set here: the branch it was made from (outside the editor too, as git recorded it),
+        // which is where its PR most likely goes, else the default.
+        let branch = self
+            .worktrees()
+            .into_iter()
+            .find(|w| w.path == worktree)
+            .and_then(|w| w.branch);
+        if let Some(branch) = branch {
+            if let Some(from) = git::created_from(worktree, &branch).await {
+                return (from, true);
+            }
+        }
+        match self.workspace() {
+            Ok(workspace) => (git::default_start_point(&workspace.root).await, true),
+            Err(_) => ("HEAD".into(), true),
         }
     }
 
@@ -2522,6 +2607,96 @@ impl Core {
             }
         };
         self.reopen(saved).await.map(Some)
+    }
+
+    /// The Agent's conversations in `worktree` that the editor doesn't have (as a Tab or a Recent
+    /// session): ones started in a terminal, or closed so long ago they left the Recent sessions.
+    /// Newest first. None when the Agent can't list or load conversations.
+    pub async fn other_conversations(
+        &self,
+        worktree: &Path,
+    ) -> Result<Vec<OtherConversation>, CoreError> {
+        let wanted = worktrees::normalize(worktree.to_owned());
+        if !self.worktrees().iter().any(|w| w.path == wanted) {
+            return Err(CoreError::UnknownWorktree(worktree.to_owned()));
+        }
+        let connection = self.adapter().await?;
+        if !connection.supports_session("list") || !connection.supports_load() {
+            return Ok(vec![]);
+        }
+        let mut listed = vec![];
+        let mut cursor: Option<String> = None;
+        for _ in 0..LIST_PAGES {
+            let mut params = json!({ "cwd": wanted });
+            if let Some(cursor) = &cursor {
+                params["cursor"] = json!(cursor);
+            }
+            let page = connection.request("session/list", params).await?;
+            listed.extend(page["sessions"].as_array().into_iter().flatten().cloned());
+            cursor = page["nextCursor"].as_str().map(str::to_owned);
+            if cursor.is_none() {
+                break;
+            }
+        }
+        let state = self.inner.state.lock().expect("state lock");
+        let known = |acp_id: &str| {
+            state.by_acp_id.contains_key(acp_id) || state.recent.iter().any(|s| s.acp_id == acp_id)
+        };
+        Ok(listed
+            .iter()
+            .filter_map(|s| {
+                let acp_id = s["sessionId"].as_str().filter(|id| !id.is_empty())?;
+                // Claude Code lists the repository's other Worktrees' conversations too.
+                let cwd = worktrees::normalize(PathBuf::from(s["cwd"].as_str()?));
+                (cwd == wanted && !known(acp_id)).then(|| OtherConversation {
+                    acp_id: acp_id.to_owned(),
+                    title: s["title"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|t| !t.is_empty())
+                        .map(str::to_owned),
+                    worktree: wanted.clone(),
+                    updated_at: s["updatedAt"].as_str().map(str::to_owned),
+                })
+            })
+            .collect())
+    }
+
+    /// Opens one of `other_conversations` in a new Tab, with its conversation, named after its
+    /// title. One that's a Tab already is just that Tab; a Recent session is reopened as such.
+    pub async fn open_conversation(
+        &self,
+        worktree: &Path,
+        acp_id: &str,
+        title: Option<&str>,
+    ) -> Result<SessionId, CoreError> {
+        let wanted = worktrees::normalize(worktree.to_owned());
+        let saved = {
+            let mut state = self.inner.state.lock().expect("state lock");
+            if let Some(&id) = state.by_acp_id.get(acp_id) {
+                return Ok(id);
+            }
+            if !state.worktrees.iter().any(|w| w.path == wanted) {
+                return Err(CoreError::UnknownWorktree(worktree.to_owned()));
+            }
+            if state.removing.contains(&wanted) {
+                return Err(CoreError::BeingRemoved);
+            }
+            match state.recent.iter().position(|s| s.acp_id == acp_id) {
+                Some(at) => state.recent.remove(at),
+                None => SavedSession {
+                    acp_id: acp_id.to_owned(),
+                    name: title
+                        .and_then(name_from_title)
+                        .unwrap_or_else(|| state.new_name()),
+                    worktree: wanted,
+                    permission_mode: PermissionMode::AskForEdits,
+                    files: vec![],
+                    started: true,
+                },
+            }
+        };
+        self.reopen(saved).await
     }
 
     /// A closed session back in a Tab: registered already resuming (so nothing else can claim it

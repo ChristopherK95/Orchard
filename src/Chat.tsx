@@ -1,10 +1,10 @@
 // Pieces of the chat surface shared by the Tabs view and each column of the Columns view: the
 // composer, banners, the Recent sessions list and the state labels.
-import { createEffect, createSignal, For, type JSX, Match, onCleanup, onMount, Show, Switch } from "solid-js";
-import { core, type PermissionMode, type RecentSession, type SessionId, type SessionInfo, type SessionState } from "./core";
+import { createEffect, createResource, createSignal, For, type JSX, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
+import { core, type OtherConversation, type PermissionMode, type RecentSession, type SessionId, type SessionInfo, type SessionState } from "./core";
 import { EditNotes } from "./EditNotes";
 import { createSlashMenu, SlashMenu, useSlashCommands } from "./SlashCommands";
-import { BookOpen, ChevronDown, CirclePlay, Info, ShieldQuestion, Sparkles, TriangleAlert, X, Zap } from "./icons";
+import { BookOpen, ChevronDown, CirclePlay, Info, Loader, ShieldQuestion, Sparkles, SquareTerminal, TriangleAlert, X, Zap } from "./icons";
 import { worktreeColour } from "./Worktrees";
 
 export const STATE_LABEL: Record<SessionState, string> = {
@@ -34,6 +34,102 @@ export function RecentList(props: { sessions: RecentSession[]; onReopen: (sessio
         )}
       </For>
     </div>
+  );
+}
+
+/** Roughly how long ago `iso` was ("just now", "5 min ago", "3 days ago"). */
+function ago(iso: string | null): string {
+  const then = iso ? Date.parse(iso) : NaN;
+  if (Number.isNaN(then)) return "";
+  const min = Math.round((Date.now() - then) / 60_000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} min ago`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `${h} h ago`;
+  const d = Math.round(h / 24);
+  return d < 60 ? `${d} day${d === 1 ? "" : "s"} ago` : new Date(then).toLocaleDateString();
+}
+
+const OPEN_HINT = "Open in a Tab, with its conversation. If it's still running in a terminal, exit it there first: both would write to the same conversation.";
+
+/** The Agent's conversations in `worktree` that aren't Tabs or Recent sessions (started in a
+ *  terminal, say), looked up when shown: as items of the Recent menu, or as a list box. */
+export function OtherConversations(props: { worktree: string; inMenu?: boolean; onOpen: (c: OtherConversation) => void }) {
+  const [list] = createResource(() => props.worktree, (w) => core.otherConversations(w));
+  const title = (c: OtherConversation) => c.title ?? "Untitled conversation";
+  const status = (text: string) =>
+    props.inMenu ? <div class="menu-note">{text}</div> : <div class="recent-row"><span class="grow note">{text}</span></div>;
+  const body = (
+    <Switch>
+      <Match when={list.loading}>
+        {props.inMenu ? (
+          <div class="menu-note">
+            <Loader class="spin" /> Looking…
+          </div>
+        ) : (
+          <div class="recent-row">
+            <Loader class="spin" />
+            <span class="grow note">Looking…</span>
+          </div>
+        )}
+      </Match>
+      <Match when={list.error}>{status(`Couldn't list them: ${String(list.error)}`)}</Match>
+      <Match when={list()?.length === 0}>{status("None in this Worktree")}</Match>
+      <Match when={list()}>
+        <For each={list()}>
+          {(c) =>
+            props.inMenu ? (
+              <button class="menu-item" onClick={() => props.onOpen(c)} title={OPEN_HINT}>
+                <SquareTerminal />
+                <span class="grow ellipsis">{title(c)}</span>
+                <span class="when">{ago(c.updatedAt)}</span>
+              </button>
+            ) : (
+              <div class="recent-row">
+                <SquareTerminal />
+                <span class="grow ellipsis">{title(c)}</span>
+                <span class="when">{ago(c.updatedAt)}</span>
+                <button class="link" onClick={() => props.onOpen(c)} title={OPEN_HINT}>
+                  Open
+                </button>
+              </div>
+            )
+          }
+        </For>
+      </Match>
+    </Switch>
+  );
+  return props.inMenu ? (
+    <>
+      <div class="menu-label">Started elsewhere</div>
+      {body}
+    </>
+  ) : (
+    <div class="list-box">
+      <div class="section-label">
+        Started elsewhere
+        <span class="note">Claude Code conversations in this Worktree, e.g. from a terminal</span>
+      </div>
+      {body}
+    </div>
+  );
+}
+
+/** "Started elsewhere" in an empty Worktree: looked up only once asked for (it starts the Agent). */
+export function FindOtherConversations(props: { worktree: string; onOpen: (c: OtherConversation) => void }) {
+  const [shown, setShown] = createSignal(false);
+  createEffect(on(() => props.worktree, () => setShown(false), { defer: true }));
+  return (
+    <Show
+      when={shown()}
+      fallback={
+        <button class="link" onClick={() => setShown(true)} title="Claude Code conversations in this Worktree that weren't started here, e.g. in a terminal">
+          Conversations started elsewhere…
+        </button>
+      }
+    >
+      <OtherConversations worktree={props.worktree} onOpen={props.onOpen} />
+    </Show>
   );
 }
 

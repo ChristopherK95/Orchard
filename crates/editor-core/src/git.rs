@@ -438,6 +438,227 @@ pub(crate) async fn is_merged(worktree: &Path, commit: &str, base: &str) -> bool
         .is_ok()
 }
 
+/// Whether `commit` (an ancestor of `base`) is on `base`'s first-parent line: where a branch that
+/// started from it, or was fast-forwarded into it, sits. A branch merged with a merge commit is
+/// off that line (a second parent's side).
+pub(crate) async fn on_first_parent_line(worktree: &Path, commit: &str, base: &str) -> bool {
+    if resolve_commit(worktree, base).await.as_deref() == Some(commit) {
+        return true;
+    }
+    let exclude = format!("^{commit}");
+    // Walks `base`'s first parents down to `commit`'s history; on the line, the last one's parent
+    // is `commit` itself.
+    let Some(out) = output(
+        worktree,
+        &["rev-list", "--first-parent", "--parents", base, &exclude],
+    )
+    .await
+    else {
+        return false;
+    };
+    out.lines()
+        .last()
+        .and_then(|line| line.split(' ').nth(1))
+        .is_some_and(|parent| parent == commit)
+}
+
+/// Whether commits were ever made on `branch` (going by its reflog): a branch fast-forwarded into
+/// its Base had some; a new one, or one only pulled or reset since, hadn't.
+pub(crate) async fn commits_were_made_on(worktree: &Path, branch: &str) -> bool {
+    let reference = format!("refs/heads/{branch}");
+    output(worktree, &["log", "-g", "--format=%gs", &reference, "--"])
+        .await
+        .is_some_and(|log| {
+            log.lines()
+                .any(|entry| entry.starts_with("commit") || entry.starts_with("cherry-pick"))
+        })
+}
+
+/// Whether the trees of `a` and `b` differ (the branch changed anything at all since `a`).
+pub(crate) async fn trees_differ(worktree: &Path, a: &str, b: &str) -> bool {
+    run(worktree, &["diff", "--quiet", a, b, "--"])
+        .await
+        .is_err()
+}
+
+/// Whether merging `commit` into `base` would leave `base` as it is: everything `commit` changed is
+/// already there, as after a squash or rebase merge. (`merge-tree` touches no index or folder.)
+pub(crate) async fn merge_adds_nothing(worktree: &Path, base: &str, commit: &str) -> bool {
+    let base_tree = format!("{base}^{{tree}}");
+    let Some(base_tree) = output(worktree, &["rev-parse", "--verify", &base_tree]).await else {
+        return false;
+    };
+    // Exit 1 is a conflict: then something differs.
+    output(
+        worktree,
+        &["merge-tree", "--write-tree", "--no-messages", base, commit],
+    )
+    .await
+    .is_some_and(|out| out.lines().next() == Some(base_tree.trim()))
+}
+
+/// Whether every commit `commit` has that `base` hasn't has an equivalent patch in `base` (a
+/// rebase merge, even where `base` changed the same lines later).
+pub(crate) async fn all_picked_into(worktree: &Path, base: &str, commit: &str) -> bool {
+    output(worktree, &["cherry", base, commit])
+        .await
+        .is_some_and(|out| {
+            let mut lines = out.lines().peekable();
+            lines.peek().is_some() && lines.all(|line| line.starts_with('-'))
+        })
+}
+
+/// When `commit` was committed (Unix seconds).
+pub(crate) async fn commit_time(worktree: &Path, commit: &str) -> Option<i64> {
+    output(worktree, &["log", "-1", "--format=%ct", commit, "--"])
+        .await?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// The commits on `target`'s first-parent line that `since` doesn't have, oldest first, with their
+/// commit times (Unix seconds).
+pub(crate) async fn first_parent_line(
+    worktree: &Path,
+    target: &str,
+    since: &str,
+) -> Vec<(String, i64)> {
+    let exclude = format!("^{since}");
+    let out = output(
+        worktree,
+        &[
+            "log",
+            "--first-parent",
+            "--reverse",
+            "--format=%H %ct",
+            target,
+            &exclude,
+            "--",
+        ],
+    )
+    .await
+    .unwrap_or_default();
+    out.lines()
+        .filter_map(|line| {
+            let (id, time) = line.split_once(' ')?;
+            Some((id.to_owned(), time.parse().ok()?))
+        })
+        .collect()
+}
+
+/// A remote-tracking branch: its short name (`origin/project`) and the commit it's at.
+pub(crate) struct RemoteBranch {
+    pub(crate) short: String,
+    pub(crate) id: String,
+}
+
+/// Up to `limit` remote-tracking branches last committed to at or after `since` (Unix seconds),
+/// newest first; symbolic ones (`origin/HEAD`) left out.
+pub(crate) async fn remote_branches_since(
+    worktree: &Path,
+    since: i64,
+    limit: usize,
+) -> Vec<RemoteBranch> {
+    let out = output(
+        worktree,
+        &[
+            "for-each-ref",
+            "--sort=-committerdate",
+            "--format=%(refname:short)%00%(objectname)%00%(committerdate:unix)%00%(symref)",
+            "refs/remotes",
+        ],
+    )
+    .await
+    .unwrap_or_default();
+    out.lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\0');
+            let short = fields.next()?;
+            let id = fields.next()?;
+            let time: i64 = fields.next()?.parse().ok()?;
+            let symref = fields.next().unwrap_or_default();
+            Some((short, id, time, symref))
+        })
+        .filter(|(_, _, _, symref)| symref.is_empty())
+        .take_while(|(_, _, time, _)| *time >= since)
+        .take(limit)
+        .map(|(short, id, _, _)| RemoteBranch {
+            short: short.to_owned(),
+            id: id.to_owned(),
+        })
+        .collect()
+}
+
+/// How many commits `commit` has that `base` hasn't.
+pub(crate) async fn count_not_in(worktree: &Path, base: &str, commit: &str) -> u32 {
+    let range = format!("{base}..{commit}");
+    output(worktree, &["rev-list", "--count", &range])
+        .await
+        .and_then(|n| n.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// The branch `branch` was made from, going by its reflog: the last time it was reset onto another
+/// branch ("reset: moving to origin/project"), else where it was created ("branch: Created from
+/// origin/project"); only a branch other than itself that still exists counts (not `HEAD~1` or
+/// a commit id). `None` once the reflog has expired.
+pub(crate) async fn created_from(worktree: &Path, branch: &str) -> Option<String> {
+    let reference = format!("refs/heads/{branch}");
+    let log = output(worktree, &["log", "-g", "--format=%gs", &reference, "--"]).await?;
+    // Newest first.
+    for entry in log.lines() {
+        let Some(from) = entry
+            .strip_prefix("reset: moving to ")
+            .or_else(|| entry.strip_prefix("branch: Created from "))
+        else {
+            continue;
+        };
+        let from = from.trim();
+        let name = from
+            .trim_start_matches("refs/remotes/")
+            .trim_start_matches("refs/heads/");
+        // (Nor its own remote branch, `origin/<branch>`.)
+        if name == branch || name.split_once('/').is_some_and(|(_, rest)| rest == branch) {
+            continue;
+        }
+        for full in [format!("refs/remotes/{name}"), format!("refs/heads/{name}")] {
+            if run(worktree, &["show-ref", "--verify", "--quiet", &full])
+                .await
+                .is_ok()
+            {
+                return Some(from.to_owned());
+            }
+        }
+    }
+    None
+}
+
+/// How many merge commits are on `target`'s first-parent line since `commit`: how many PRs went
+/// into it since then.
+pub(crate) async fn merges_since(worktree: &Path, commit: &str, target: &str) -> u32 {
+    let range = format!("{commit}..{target}");
+    output(
+        worktree,
+        &["rev-list", "--count", "--first-parent", "--merges", &range],
+    )
+    .await
+    .and_then(|n| n.trim().parse().ok())
+    .unwrap_or(0)
+}
+
+/// Whether `branch` tracks a remote branch that's gone (deleted on the remote, seen at a fetch with
+/// `--prune`): what a host does to a PR's branch once it's merged, if set to.
+pub(crate) async fn upstream_gone(worktree: &Path, branch: &str) -> bool {
+    let reference = format!("refs/heads/{branch}");
+    output(
+        worktree,
+        &["for-each-ref", "--format=%(upstream:track)", &reference],
+    )
+    .await
+    .is_some_and(|track| track.trim() == "[gone]")
+}
+
 /// Removes the Worktree at `path`. `force` (only when the user chose "Discard and remove") lets git
 /// delete uncommitted changes with it.
 pub(crate) async fn worktree_remove(repo: &Path, path: &Path, force: bool) -> Result<(), String> {

@@ -20,6 +20,7 @@ import { type BenchDriver, runBenchmark } from "./benchmark";
 import { answerByKey } from "./PermissionCard";
 import { NewWorktreeDialog } from "./NewWorktreeDialog";
 import { RemoveWorktreeDialog } from "./RemoveWorktreeDialog";
+import { WorktreesOverview } from "./WorktreesOverview";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
 import { FilesDrawer } from "./FilesDrawer";
 import { GitDrawer } from "./GitDrawer";
@@ -32,14 +33,14 @@ import { ContextBar, removedWorktree, worktreeColour, worktreeLabel, WorktreeRow
 import { notify, onNotificationClicked } from "./notify";
 import { keepOutput, Setup, type SetupView } from "./Setup";
 import { StateDot } from "./StateDot";
-import { Banner, Composer, RecentList, STATE_LABEL } from "./Chat";
+import { Banner, Composer, FindOtherConversations, OtherConversations, RecentList, STATE_LABEL } from "./Chat";
 import { Columns, COLUMNS_MIN_WIDTH } from "./Columns";
 import { createTabView, type TabView } from "./TabView";
 import { BareTitlebar, WindowControls } from "./WindowControls";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { SettingsPage, type SettingsSection } from "./SettingsPage";
 import { applyAppearance } from "./appearance";
-import { ChevronDown, GitBranch, Loader, PanelRight, Plus, Search, Settings, Sparkles, X } from "./icons";
+import { ChevronDown, FolderGit2, GitBranch, Loader, PanelRight, Plus, Search, Settings, Sparkles, X } from "./icons";
 
 export function App() {
   const [problems, setProblems] = createSignal<MissingPrerequisite[] | null>(null);
@@ -359,6 +360,18 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   };
   /** The Worktree whose removal dialog is open. */
   const [removing, setRemoving] = createSignal<WorktreeTab | null>(null);
+  /** The Worktrees overview (which are merged and can go) is open. */
+  const [overviewOpen, setOverviewOpen] = createSignal(false);
+  /** A Worktree was removed (from its dialog, or with others from the overview). */
+  const afterRemoved = (path: string, warning: string | null) => {
+    if (warning) setNotice(warning);
+    setSetups(produce((all) => void delete all[path]));
+    if (activeWorktree() !== path) return;
+    // In the Columns view, focus moves to another column rather than leaving the view.
+    const other = mainView() === "columns" ? pinnedRow().find((p) => p.path !== path) : undefined;
+    if (other) setActiveWorktree(other.path);
+    else selectWorktree(props.workspace.root);
+  };
   /** Worktree setups this editor started, by Worktree path; shown until the first session opens. */
   const [setups, setSetups] = createStore<Record<string, SetupView>>({});
   const updateSetup = (worktree: string, change: (setup: SetupView) => void) =>
@@ -581,20 +594,20 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       // (Ctrl+P is never the browser's print, even with a dialog open.)
       if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
-        if (!removing() && !creatingWorktree() && !switching() && !settingsAt()) setPaletteOpen(true);
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !switching() && !settingsAt()) setPaletteOpen(true);
         return;
       }
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "o") {
         e.preventDefault();
-        if (!removing() && !creatingWorktree() && !paletteOpen() && !settingsAt()) setSwitching(true);
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !settingsAt()) setSwitching(true);
         return;
       }
       if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ",") {
         e.preventDefault();
-        if (!removing() && !creatingWorktree() && !paletteOpen() && !switching()) openSettingsPage();
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !switching()) openSettingsPage();
         return;
       }
-      if (removing() || creatingWorktree() || paletteOpen() || switching() || settingsAt()) return; // a dialog is open over the Tab
+      if (removing() || overviewOpen() || creatingWorktree() || paletteOpen() || switching() || settingsAt()) return; // a dialog is open over the Tab
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
         return void toggleDrawer("files");
@@ -787,6 +800,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             {needYou()} need{needYou() === 1 ? "s" : ""} you
           </button>
         </Show>
+        <button class="ghost worktrees-button" onClick={() => setOverviewOpen(true)} title="Every Worktree, and which are merged and can be removed">
+          <FolderGit2 />
+          Worktrees
+        </button>
         <button class="search-button" onClick={() => !removing() && !creatingWorktree() && setPaletteOpen(true)} title="Go to a file in this Worktree, or start a session">
           <Search />
           Search files
@@ -908,7 +925,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           <Plus />
           session
         </button>
-        <Show when={recent[activeWorktree()]?.length}>
+        <Show when={!worktree()?.removed}>
           <span class="recent-menu">
             <button
               class="ghost"
@@ -917,21 +934,26 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
                 setRecentAt({ left: r.left, top: r.bottom + 4 });
                 setRecentOpen((open) => !open);
               }}
-              title="Closed sessions in this Worktree"
+              title="Closed sessions in this Worktree, and its conversations started elsewhere"
             >
               Recent
               <ChevronDown />
             </button>
             <Show when={recentOpen()}>
-              <div class="menu" style={{ left: `${recentAt().left}px`, top: `${recentAt().top}px` }}>
-                <For each={recent[activeWorktree()] ?? []}>
-                  {(r) => (
-                    <button class="menu-item" onClick={() => void reopen(core.reopenSession(r.acpId))} title="Reopen with its conversation">
-                      <Sparkles />
-                      {r.name}
-                    </button>
-                  )}
-                </For>
+              <div class="menu scroll" style={{ left: `${recentAt().left}px`, top: `${recentAt().top}px` }}>
+                <Show when={recent[activeWorktree()]?.length}>
+                  <div class="menu-label">Recent sessions</div>
+                  <For each={recent[activeWorktree()] ?? []}>
+                    {(r) => (
+                      <button class="menu-item" onClick={() => void reopen(core.reopenSession(r.acpId))} title="Reopen with its conversation">
+                        <Sparkles />
+                        {r.name}
+                      </button>
+                    )}
+                  </For>
+                  <div class="menu-sep" />
+                </Show>
+                <OtherConversations worktree={activeWorktree()} inMenu onOpen={(c) => void reopen(core.openConversation(c))} />
               </div>
             </Show>
           </span>
@@ -1027,6 +1049,26 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onClose={() => setPaletteOpen(false)}
         />
       </Show>
+      <Show when={overviewOpen()}>
+        <WorktreesOverview
+          root={props.workspace.root}
+          worktrees={rowWorktrees()}
+          label={(path) => {
+            const w = rowWorktrees().find((w) => w.path === path);
+            return w ? worktreeLabel(w) : path;
+          }}
+          sessionCount={(path) => sessionsIn(path).length}
+          covered={!!removing()}
+          onRemove={(path) => setRemoving(rowWorktrees().find((w) => w.path === path) ?? null)}
+          onRemoved={afterRemoved}
+          onOpen={(path) => {
+            setOverviewOpen(false);
+            setBoardOpen(false);
+            selectWorktree(path);
+          }}
+          onClose={() => setOverviewOpen(false)}
+        />
+      </Show>
       <Show when={removing()}>
         {(w) => (
           <RemoveWorktreeDialog
@@ -1034,14 +1076,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             label={worktreeLabel(w())}
             sessionName={(id) => sessions[id]?.name ?? `Session ${id}`}
             onRemoved={(warning) => {
-              const path = w().path;
               setRemoving(null);
-              setNotice(warning ?? "");
-              setSetups(produce((all) => void delete all[path]));
-              // In the Columns view, focus moves to another column rather than leaving the view.
-              const other = mainView() === "columns" ? pinnedRow().find((p) => p.path !== path) : undefined;
-              if (other) setActiveWorktree(other.path);
-              else selectWorktree(props.workspace.root);
+              afterRemoved(w().path, warning);
             }}
             onClose={() => setRemoving(null)}
           />
@@ -1095,6 +1131,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onNewSession={(path) => void newSession(path)}
           onCloseTab={(id) => void closeTab(id)}
           onReopen={(r) => void reopen(core.reopenSession(r.acpId))}
+          onOpenOther={(c) => void reopen(core.openConversation(c))}
           onSuspend={(s) => core.suspendSession(s.id).catch((err) => setError(String(err)))}
           onResume={(s) => core.resumeSession(s.id).catch((err) => setError(String(err)))}
           onRemove={setRemoving}
@@ -1123,6 +1160,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
                 </Show>
                 <Show when={recent[activeWorktree()]?.length}>
                   <RecentList sessions={recent[activeWorktree()] ?? []} onReopen={(r) => void reopen(core.reopenSession(r.acpId))} />
+                </Show>
+                <Show when={!worktree()?.removed}>
+                  <FindOtherConversations worktree={activeWorktree()} onOpen={(c) => void reopen(core.openConversation(c))} />
                 </Show>
               </div>
             }

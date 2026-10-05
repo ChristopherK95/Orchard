@@ -3,8 +3,8 @@
 // next prompt, Y / N, the drawer and the palette all follow it. Only the focused column has the
 // full composer; the others show a one-line stub that focuses them.
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
-import { Banner, Composer, RecentList, reportHeight, STATE_LABEL } from "./Chat";
-import type { RecentSession, SessionId, SessionInfo } from "./core";
+import { Banner, Composer, FindOtherConversations, RecentList, reportHeight, STATE_LABEL } from "./Chat";
+import type { OtherConversation, RecentSession, SessionId, SessionInfo } from "./core";
 import { CirclePause, GitBranch, Pin, Plus, Sparkles, X } from "./icons";
 import { Setup, type SetupView } from "./Setup";
 import { StateDot } from "./StateDot";
@@ -36,6 +36,8 @@ export interface ColumnsProps {
   onNewSession: (path: string) => void;
   onCloseTab: (id: SessionId) => void;
   onReopen: (session: RecentSession) => void;
+  /** Opens a conversation started outside the editor (in a terminal, say). */
+  onOpenOther: (conversation: OtherConversation) => void;
   onSuspend: (session: SessionInfo) => void;
   onResume: (session: SessionInfo) => void;
   onRemove: (worktree: WorktreeTab) => void;
@@ -158,6 +160,9 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
                   </Show>
                   <Show when={props.recentIn(path).length}>
                     <RecentList sessions={props.recentIn(path)} onReopen={props.onReopen} />
+                  </Show>
+                  <Show when={!props.worktree.removed}>
+                    <FindOtherConversations worktree={path} onOpen={props.onOpenOther} />
                   </Show>
                 </div>
               }
