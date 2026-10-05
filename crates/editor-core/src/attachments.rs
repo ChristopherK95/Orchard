@@ -11,6 +11,13 @@ use serde_json::{json, Value};
 const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 /// The largest text file: more than that is better read by the Agent itself.
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
+/// Larger files aren't read at all.
+pub(crate) const MAX_BYTES: usize = MAX_IMAGE_BYTES;
+
+/// Why a file over `MAX_BYTES` can't be attached.
+pub(crate) fn too_big(name: &str) -> String {
+    format!("{name}: files can be up to 5 MB (mention its path instead, and the Agent reads it)")
+}
 
 /// A file or image that goes with the next prompt, as the composer holds it until it's sent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,7 +115,7 @@ impl Attachment {
                 };
                 json!({
                     "type": "resource",
-                    "resource": { "uri": uri, "mimeType": "text/plain", "text": text }
+                    "resource": { "uri": uri, "text": text }
                 })
             }
         }
@@ -177,7 +184,7 @@ mod tests {
             Attachment::from_bytes("notes.md", Some(path), None, b"hi".to_vec(), &all()).unwrap();
         assert_eq!(
             text.content_block(),
-            json!({ "type": "resource", "resource": { "uri": "file:///C:/repo/notes.md", "mimeType": "text/plain", "text": "hi" } })
+            json!({ "type": "resource", "resource": { "uri": "file:///C:/repo/notes.md", "text": "hi" } })
         );
     }
 

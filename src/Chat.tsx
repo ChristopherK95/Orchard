@@ -183,7 +183,7 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
   // The draft outlives the composer: it moves between columns with focus, and Tabs get switched.
   const saved = drafts.get(props.session.id);
   const [text, setDraft] = createSignal(saved?.text ?? "");
-  const [attachments, setFiles] = createSignal<Attachment[]>(saved?.attachments ?? []);
+  const [attachments, setRawAttachments] = createSignal<Attachment[]>(saved?.attachments ?? []);
   const keepDraft = () => {
     if (text() || attachments().length) drafts.set(props.session.id, { text: text(), attachments: attachments() });
     else drafts.delete(props.session.id);
@@ -193,7 +193,7 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
     keepDraft();
   };
   const setAttachments = (list: Attachment[]) => {
-    setFiles(list);
+    setRawAttachments(list);
     keepDraft();
   };
   const [error, setError] = createSignal("");
@@ -218,7 +218,8 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
 
   // The queued message lives in the core (it outlives this composer); this shows it.
   const [queued, setQueued] = createSignal<QueuedPrompt | null>(null);
-  let heard = false; // (an event since the queued message was asked for is newer than the reply)
+  /** An event came since the queued message was asked for: it's newer than the reply. */
+  let heardQueued = false;
   let alive = true;
   let unlisten: (() => void)[] = [];
   onCleanup(() => {
@@ -229,13 +230,13 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
   listening(
     core.onEvent((event) => {
       if (event.kind !== "queuedPromptChanged" || event.sessionId !== props.session.id) return;
-      heard = true;
+      heardQueued = true;
       setQueued(event.queued);
     }),
   );
   void core
     .queuedPrompt(props.session.id)
-    .then((q) => !heard && setQueued(q))
+    .then((q) => !heardQueued && setQueued(q))
     .catch(() => {});
   /** Takes the queued message back into the input (ahead of anything typed since), to edit it. */
   const takeBack = async () => {
@@ -285,7 +286,8 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
   };
   // Files dropped on the composer (the webview reports drops itself, with their paths).
   const [dropping, setDropping] = createSignal(false);
-  const over = (position: { x: number; y: number }) => {
+  /** Whether a drag at `position` (physical pixels in the webview) is over the composer. */
+  const overComposer = (position: { x: number; y: number }) => {
     const r = root.getBoundingClientRect();
     const [x, y] = [position.x / window.devicePixelRatio, position.y / window.devicePixelRatio];
     return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
@@ -293,7 +295,7 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
   listening(
     getCurrentWebview().onDragDropEvent(({ payload }) => {
       if (payload.type === "leave") return setDropping(false);
-      const here = over(payload.position) && props.session.state !== "exited";
+      const here = overComposer(payload.position) && props.session.state !== "exited";
       if (payload.type !== "drop") return setDropping(here);
       setDropping(false);
       if (here) void attachPaths(payload.paths).then(() => input.focus());
@@ -468,7 +470,7 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
             <Show when={busy() && queued()}>
               <span class="queued-chip">
                 <Clock />
-                Queued — will be sent after the current step
+                Queued — will be sent when this turn ends
               </span>
             </Show>
             <span class="grow" />

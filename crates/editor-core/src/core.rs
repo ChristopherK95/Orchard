@@ -6,13 +6,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
+use base64::Engine;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::acp::{AcpError, AdapterCommand, Connection, Incoming, Responder, PROTOCOL_VERSION};
 use crate::app_state::{self, AppState, SavedSession, WorkspaceState};
-use crate::attachments::Attachment;
+use crate::attachments::{self, Attachment};
 use crate::auto_suspend::{
     self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, SystemClock, SystemProbe,
 };
@@ -1951,7 +1952,7 @@ impl Core {
             return true;
         };
         // Stop a turn in progress first (closing does too, but this works on any ACP agent).
-        let _ = connection.notify("session/cancel", json!({ "sessionId": session.acp_id }));
+        let _ = session.send_cancel(&connection);
         // An error reply (e.g. the adapter already dropped it, or exited) means it's gone too.
         connection.supports_session("close")
             && close_acp(&connection, &session.acp_id).await.is_some()
@@ -3089,7 +3090,7 @@ impl Core {
     ) -> Result<(), CoreError> {
         let session = self.session(id)?;
         let queued = session.update(|control| {
-            if !control.in_turn || control.in_transition() {
+            if !control.in_turn {
                 return false;
             }
             let queued = control.queued.get_or_insert_with(|| QueuedPrompt {
@@ -3101,10 +3102,7 @@ impl Core {
             }
             queued.text.push_str(text);
             queued.attachments.extend(attachments.iter().cloned());
-            let _ = self.inner.events.send(CoreEvent::QueuedPromptChanged {
-                session_id: id,
-                queued: Some(queued.clone()),
-            });
+            session.queued_changed(Some(queued.clone()));
             true
         });
         if queued {
@@ -3131,10 +3129,7 @@ impl Core {
         let session = self.session(id)?;
         let taken = session.update(|control| control.queued.take());
         if taken.is_some() {
-            let _ = self.inner.events.send(CoreEvent::QueuedPromptChanged {
-                session_id: id,
-                queued: None,
-            });
+            session.queued_changed(None);
         }
         Ok(taken)
     }
@@ -3152,10 +3147,8 @@ impl Core {
             session.cancel_questions(control);
             control.prompt_sent // (else `dispatch` sends it)
         });
-        if stop {
-            session
-                .live()?
-                .notify("session/cancel", json!({ "sessionId": session.acp_id }))?;
+        if let Some(connection) = session.connection().filter(|_| stop) {
+            session.send_cancel(&connection)?;
         }
         Ok(())
     }
@@ -3169,13 +3162,19 @@ impl Core {
             .map_or_else(|| path.to_string_lossy(), |n| n.to_string_lossy())
             .into_owned();
         let file = path.to_path_buf();
-        let bytes = tokio::task::spawn_blocking(move || std::fs::read(file))
+        let read = tokio::task::spawn_blocking(move || {
+            // (Not a huge file read whole only to be refused.)
+            if std::fs::metadata(&file)?.len() > attachments::MAX_BYTES as u64 {
+                return Ok(None);
+            }
+            std::fs::read(&file).map(Some)
+        });
+        let bytes = read
             .await
             .expect("read task")
-            .map_err(|err| CoreError::Attachment(format!("{name}: couldn't read it ({err})")))?;
-        let capabilities = self.adapter().await?.prompt_capabilities();
-        Attachment::from_bytes(&name, Some(path), None, bytes, &capabilities)
-            .map_err(CoreError::Attachment)
+            .map_err(|err| CoreError::Attachment(format!("{name}: couldn't read it ({err})")))?
+            .ok_or_else(|| CoreError::Attachment(attachments::too_big(&name)))?;
+        self.attachment(id, &name, Some(path), None, bytes).await
     }
 
     /// `attach_file` for something pasted (an image from the clipboard, say): its name, its type
@@ -3187,14 +3186,34 @@ impl Core {
         mime_type: Option<&str>,
         data: &str,
     ) -> Result<Attachment, CoreError> {
-        use base64::Engine;
-        self.session(id)?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(data)
             .map_err(|_| CoreError::Attachment(format!("{name}: couldn't read it")))?;
-        let capabilities = self.adapter().await?.prompt_capabilities();
-        Attachment::from_bytes(name, None, mime_type, bytes, &capabilities)
-            .map_err(CoreError::Attachment)
+        self.attachment(id, name, None, mime_type, bytes).await
+    }
+
+    /// Makes an attachment, checked against what the session's Agent takes in a prompt (asking
+    /// the adapter, started if need be: attaching means a prompt is about to go).
+    async fn attachment(
+        &self,
+        id: SessionId,
+        name: &str,
+        path: Option<&Path>,
+        mime_type: Option<&str>,
+        bytes: Vec<u8>,
+    ) -> Result<Attachment, CoreError> {
+        let connection = match self.session(id)?.connection() {
+            Some(connection) => connection,
+            None => self.adapter().await?,
+        };
+        Attachment::from_bytes(
+            name,
+            path,
+            mime_type,
+            bytes,
+            &connection.prompt_capabilities(),
+        )
+        .map_err(CoreError::Attachment)
     }
 
     /// The oldest permission card waiting for an answer in the session, if it's Needs you (for the
@@ -3536,7 +3555,7 @@ impl Inner {
             control.stopping
         });
         if stopped {
-            let _ = connection.notify("session/cancel", json!({ "sessionId": session.acp_id }));
+            let _ = session.send_cancel(&connection);
         }
         let inner = self.clone();
         tokio::spawn(async move {
@@ -3593,10 +3612,7 @@ impl Inner {
                 }
                 let next = control.queued.take()?;
                 session.start_turn(control, &next.text, &next.attachments);
-                let _ = inner.events.send(CoreEvent::QueuedPromptChanged {
-                    session_id: id,
-                    queued: None,
-                });
+                session.queued_changed(None);
                 Some(next)
             });
             if let Some(next) = next {
@@ -4940,6 +4956,19 @@ impl Session {
 
     fn id(&self) -> SessionId {
         self.info.lock().expect("info lock").id
+    }
+
+    /// Tells the Agent to stop the turn in progress.
+    fn send_cancel(&self, connection: &Connection) -> Result<(), AcpError> {
+        connection.notify("session/cancel", json!({ "sessionId": self.acp_id }))
+    }
+
+    /// Tells the composer its queued message changed.
+    fn queued_changed(&self, queued: Option<QueuedPrompt>) {
+        let _ = self.events.send(CoreEvent::QueuedPromptChanged {
+            session_id: self.id(),
+            queued,
+        });
     }
 
     /// Starts a turn: the user's message goes in the transcript and the session is Working.
