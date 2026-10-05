@@ -568,6 +568,21 @@ fn pinned_worktrees(core: State<'_, Core>) -> Vec<PathBuf> {
     core.pinned_worktrees()
 }
 
+/// The columns' widths, as shares of the row.
+#[tauri::command]
+fn column_shares(core: State<'_, Core>) -> std::collections::BTreeMap<PathBuf, u32> {
+    core.column_shares()
+}
+
+/// Sets the columns' widths (shares of the row), remembered across restarts.
+#[tauri::command]
+fn set_column_shares(
+    core: State<'_, Core>,
+    shares: std::collections::BTreeMap<PathBuf, u32>,
+) -> CommandResult<()> {
+    core.set_column_shares(shares).map_err(|e| e.to_string())
+}
+
 /// Pins or unpins a Worktree as a column; returns the pinned Worktrees now.
 #[tauri::command]
 fn set_pinned(
@@ -1172,6 +1187,8 @@ fn main() {
             hide_tabs,
             pinned_worktrees,
             set_pinned,
+            column_shares,
+            set_column_shares,
             available_commands,
             terminals,
             open_terminal,

@@ -212,11 +212,20 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   const view = () => (boardOpen() ? "board" : mainView());
   /** The Worktrees pinned as columns, and those in sidebar order. */
   const [pinned, setPinnedList] = createSignal<string[]>([]);
+  /** The columns' widths, as shares of the row (none: even). */
+  const [columnShares, setColumnShares] = createSignal<Record<string, number>>({});
+  const changeShares = (shares: Record<string, number>, save: boolean) => {
+    setColumnShares(shares);
+    if (save) core.setColumnShares(shares).catch((err) => setError(String(err)));
+  };
   const pinnedRow = () => rowWorktrees().filter((w) => pinned().includes(w.path));
   const setPinned = (path: string, on: boolean) =>
     core
       .setPinned(path, on)
-      .then(setPinnedList)
+      .then((list) => {
+        if (list.length !== pinned().length) setColumnShares({}); // (the core evened them out)
+        setPinnedList(list);
+      })
       .catch((err) => setError(String(err)));
   /** Gives a Worktree a column and focuses it. */
   const pin = async (path: string) => {
@@ -702,6 +711,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     const snapshot = await core.worktrees();
     if (!sawWorktreesEvent) setWorktrees(snapshot);
     setPinnedList(await core.pinnedWorktrees());
+    setColumnShares(await core.columnShares());
     // The Tabs open when the editor last closed come back (Suspended until used).
     const restored = (await core.sessions()).filter((s) => !sessions[s.id]);
     batch(() => {
@@ -1119,6 +1129,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })}
           terminalOpen={terminalOpen}
           onToggleTerminal={toggleTerminalOf}
+          shares={columnShares()}
+          onShares={changeShares}
           onError={setError}
         />
       </Show>

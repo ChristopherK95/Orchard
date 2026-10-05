@@ -142,3 +142,50 @@ async fn pinned_worktrees_survive_a_restart_and_unknown_ones_are_refused() {
     assert_eq!(core.open_workspace(&setup.repo()).await.unwrap().root, root);
     assert_eq!(core.pinned_worktrees(), [worktree]);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn column_widths_survive_a_restart_and_pinning_evens_them_out() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(ECHO);
+    let (root, worktree) = {
+        let core = core_with_state(&fake);
+        let root = core.open_workspace(&setup.repo()).await.unwrap().root;
+        let worktree = core
+            .create_worktree(NewWorktree::NewBranch {
+                name: "agent/wide".into(),
+                start_point: None,
+            })
+            .await
+            .unwrap()
+            .worktree
+            .path;
+        core.set_pinned(&root, true).unwrap();
+        core.set_pinned(&worktree, true).unwrap();
+        core.set_column_shares([(root.clone(), 1400), (worktree.clone(), 600)].into())
+            .unwrap();
+        assert_eq!(
+            core.column_shares(),
+            [(root.clone(), 1400), (worktree.clone(), 600)].into()
+        );
+        // Only pinned Worktrees keep one; an unknown one is refused.
+        assert!(core
+            .set_column_shares([(root.join("nowhere"), 1000)].into())
+            .is_err());
+        (root, worktree)
+    }; // the editor quits
+
+    let core = core_with_state(&fake);
+    core.open_workspace(&setup.repo()).await.unwrap();
+    assert_eq!(
+        core.column_shares(),
+        [(root.clone(), 1400), (worktree.clone(), 600)].into()
+    );
+    // Closing a column evens out the rest.
+    core.set_pinned(&worktree, false).unwrap();
+    assert!(core.column_shares().is_empty());
+    // Pinning one that's pinned already changes nothing.
+    core.set_column_shares([(root.clone(), 1200)].into())
+        .unwrap();
+    core.set_pinned(&root, true).unwrap();
+    assert_eq!(core.column_shares(), [(root, 1200)].into());
+}

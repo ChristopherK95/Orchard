@@ -660,6 +660,10 @@ export const core = {
   availableCommands: (sessionId: SessionId) => invoke<SlashCommand[]>("available_commands", { sessionId }),
   /** Pins or unpins a Worktree as a column; resolves to the pinned Worktrees now. */
   setPinned: (worktree: string, pinned: boolean) => invoke<string[]>("set_pinned", { worktree, pinned }),
+  /** The columns' widths, as shares of the row (1000 each when even); a column without one has
+   *  1000. Pinning or unpinning evens them out (clears them). */
+  columnShares: () => invoke<Record<string, number>>("column_shares"),
+  setColumnShares: (shares: Record<string, number>) => invoke<void>("set_column_shares", { shares }),
   /** Up to a page of items just before index `before` (for scrolling back). */
   transcriptPageBefore: (sessionId: SessionId, before: number) =>
     invoke<TranscriptPage>("transcript_page_before", { sessionId, before }),

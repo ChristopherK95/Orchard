@@ -2,7 +2,8 @@
 // transcript, streamed in its own view slot. One column has focus: it's the active Worktree, so the
 // next prompt, Y / N, the drawer and the palette all follow it. Only the focused column has the
 // full composer; the others show a one-line stub that focuses them. Each column's tab list ends
-// with Terminal: its Worktree's shell, in place of the transcript.
+// with Terminal: its Worktree's shell, in place of the transcript. Dragging the gap between two
+// columns moves width from one to the other (ticket 36).
 import { createEffect, createSignal, For, lazy, Match, onCleanup, Show, Switch } from "solid-js";
 import { Banner, Composer, FindOtherConversations, RecentList, reportHeight } from "./Chat";
 import type { OtherConversation, RecentSession, SessionId, SessionInfo } from "./core";
@@ -19,6 +20,10 @@ const TerminalPanel = lazy(() => import("./TerminalPanel").then((m) => ({ defaul
 
 /** The narrowest window the Columns view is offered at. */
 export const COLUMNS_MIN_WIDTH = 1600;
+
+/** The narrowest a column gets (as `.column`'s min-width), and a column's share when even. */
+const COLUMN_MIN = 640;
+const EVEN = 1000;
 
 export interface ColumnsProps {
   /** The pinned Worktrees, in sidebar order. */
@@ -51,6 +56,10 @@ export interface ColumnsProps {
   /** Whether a column shows its Terminal tab (its Worktree's shell) rather than a session. */
   terminalOpen: (path: string) => boolean;
   onToggleTerminal: (path: string) => void;
+  /** The columns' widths, as shares of the row, by Worktree (one without has `EVEN`). */
+  shares: Record<string, number>;
+  /** New shares: while dragging, then saved (`save`) when it's let go. */
+  onShares: (shares: Record<string, number>, save: boolean) => void;
   onError: (message: string) => void;
 }
 
@@ -87,10 +96,65 @@ export function Columns(props: ColumnsProps) {
     >
       <div class="columns">
         <For each={props.worktrees.map((w) => w.path)}>
-          {(path) => <Show when={byPath(path)}>{(w) => <Column {...props} worktree={w()} isFocused={path === props.focused} />}</Show>}
+          {(path, i) => (
+            <>
+              <Show when={i() > 0}>
+                <ResizeHandle {...props} left={props.worktrees[i() - 1]?.path} right={path} />
+              </Show>
+              <Show when={byPath(path)}>{(w) => <Column {...props} worktree={w()} isFocused={path === props.focused} />}</Show>
+            </>
+          )}
         </For>
       </div>
     </Show>
+  );
+}
+
+/** Between two columns: dragging moves width from one to the other (neither below `COLUMN_MIN`);
+ *  a double-click evens the two out. */
+function ResizeHandle(props: ColumnsProps & { left: string | undefined; right: string }) {
+  const [dragging, setDragging] = createSignal(false);
+  const share = (path: string) => props.shares[path] ?? EVEN;
+  const drag = (e: PointerEvent) => {
+    const handle = e.currentTarget as HTMLElement;
+    const left = props.left;
+    const [a, b] = [handle.previousElementSibling, handle.nextElementSibling];
+    if (!left || e.button !== 0 || !a || !b) return;
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    const width = a.getBoundingClientRect().width + b.getBoundingClientRect().width;
+    const startA = a.getBoundingClientRect().width;
+    const total = share(left) + share(props.right);
+    const start = e.clientX;
+    if (width < 2 * COLUMN_MIN) return;
+    setDragging(true);
+    let latest = props.shares;
+    const move = (m: PointerEvent) => {
+      const wa = Math.min(width - COLUMN_MIN, Math.max(COLUMN_MIN, startA + m.clientX - start));
+      const sa = Math.round((total * wa) / width);
+      latest = { ...props.shares, [left]: sa, [props.right]: total - sa };
+      props.onShares(latest, false);
+    };
+    const up = () => {
+      setDragging(false);
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      props.onShares(latest, true);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+  };
+  const even = () => {
+    const left = props.left;
+    if (!left) return;
+    const total = share(left) + share(props.right);
+    const half = Math.round(total / 2);
+    props.onShares({ ...props.shares, [left]: half, [props.right]: total - half }, true);
+  };
+  return (
+    <div class="column-resize" classList={{ dragging: dragging() }} onPointerDown={drag} onDblClick={even} title="Drag to resize; double-click to even out">
+      <span class="grip" />
+    </div>
   );
 }
 
@@ -129,7 +193,7 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
       ref={(el) => createEffect(() => props.isFocused && el.scrollIntoView({ block: "nearest", inline: "nearest" }))}
       class="column"
       classList={{ focused: props.isFocused }}
-      style={{ "--c": worktreeColour(path) }}
+      style={{ "--c": worktreeColour(path), "flex-grow": props.shares[path] ?? EVEN }}
       onMouseDown={() => !props.isFocused && props.onFocus(path)}
     >
       <ColumnHeader {...props} session={session()} />

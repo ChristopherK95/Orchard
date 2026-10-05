@@ -569,6 +569,8 @@ struct State {
     bases: BTreeMap<PathBuf, String>,
     /// The Worktrees pinned as columns of the Columns view (shown in Worktree row order).
     pinned: Vec<PathBuf>,
+    /// The pinned Worktrees' column widths, as shares; none while they're even.
+    column_shares: BTreeMap<PathBuf, u32>,
     /// When the Workspace was opened (ms since the Unix epoch), for the Recent Workspaces.
     opened: Option<u64>,
     sessions: HashMap<SessionId, Arc<Session>>,
@@ -2081,18 +2083,50 @@ impl Core {
             .collect()
     }
 
-    /// Pins or unpins a Worktree as a column of the Columns view; remembered across restarts.
+    /// Pins or unpins a Worktree as a column of the Columns view; remembered across restarts. A
+    /// column added or closed evens the columns' widths out again.
     pub fn set_pinned(&self, worktree: &Path, pinned: bool) -> Result<Vec<PathBuf>, CoreError> {
         let worktree = self.known_worktree(worktree)?;
         {
             let mut state = self.inner.state.lock().expect("state lock");
+            let was = state.pinned.contains(&worktree);
             state.pinned.retain(|p| *p != worktree);
             if pinned {
                 state.pinned.push(worktree);
             }
+            if was != pinned {
+                state.column_shares.clear();
+            }
         }
         self.inner.persist();
         Ok(self.pinned_worktrees())
+    }
+
+    /// The pinned Worktrees' column widths, as shares of the row: a column is as wide as its share
+    /// of their sum (1000 each when they're even, and for one that has none).
+    pub fn column_shares(&self) -> BTreeMap<PathBuf, u32> {
+        self.inner
+            .state
+            .lock()
+            .expect("state lock")
+            .column_shares
+            .clone()
+    }
+
+    /// Sets the columns' widths (shares, as `column_shares` has them); remembered across
+    /// restarts. Only pinned Worktrees can have one; a share of 0 counts as 1.
+    pub fn set_column_shares(&self, shares: BTreeMap<PathBuf, u32>) -> Result<(), CoreError> {
+        let mut known = BTreeMap::new();
+        for (worktree, share) in shares {
+            known.insert(self.known_worktree(&worktree)?, share.max(1));
+        }
+        {
+            let mut state = self.inner.state.lock().expect("state lock");
+            known.retain(|worktree, _| state.pinned.contains(worktree));
+            state.column_shares = known;
+        }
+        self.inner.persist();
+        Ok(())
     }
 
     /// The Worktree being looked at: its files are indexed and watched (as are those of
@@ -3812,6 +3846,7 @@ impl Inner {
                 active: state.active.clone(),
                 bases: state.bases.clone(),
                 pinned: state.pinned.clone(),
+                column_shares: state.column_shares.clone(),
                 opened: state.opened,
                 // (Opening a Workspace lists it again.)
                 hidden: false,
@@ -3878,6 +3913,11 @@ impl Inner {
                 .filter(|worktree| {
                     listing_failed || state.worktrees.iter().any(|w| &w.path == worktree)
                 })
+                .collect();
+            state.column_shares = saved
+                .column_shares
+                .into_iter()
+                .filter(|(worktree, _)| state.pinned.contains(worktree))
                 .collect();
             state.bases = saved
                 .bases
