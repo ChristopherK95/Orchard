@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Agent Editor",
+  "productName": "Orchard",
   "version": "0.1.0",
   "identifier": "dev.agent-editor.app",
   "build": {
@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "label": "main", "title": "Agent Editor", "width": 1280, "height": 820, "decorations": false }],
+    "windows": [{ "label": "main", "title": "Orchard", "width": 1280, "height": 820, "decorations": false }],
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src ipc: http://ipc.localhost"
     }

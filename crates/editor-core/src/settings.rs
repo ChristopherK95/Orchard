@@ -434,7 +434,7 @@ pub(crate) fn watch(
 
 /// A new file starts with this, so the settings there are to be found.
 const FILE_HEADER: &str = "\
-# Agent editor settings. Saved changes apply straight away.
+# Orchard settings. Saved changes apply straight away.
 
 [appearance]
 # ui_font = \"Segoe UI\"     # the interface font (default: Inter)

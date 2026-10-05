@@ -3489,7 +3489,7 @@ impl Inner {
                 json!({
                     "protocolVersion": PROTOCOL_VERSION,
                     "clientCapabilities": { "fs": { "readTextFile": false, "writeTextFile": false }, "terminal": false },
-                    "clientInfo": { "name": "agent-editor", "version": env!("CARGO_PKG_VERSION") },
+                    "clientInfo": { "name": "orchard", "version": env!("CARGO_PKG_VERSION") },
                 }),
             )
             .await?;

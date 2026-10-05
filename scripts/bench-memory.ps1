@@ -5,7 +5,7 @@
 .DESCRIPTION
   Builds the release app, runs it against the fake ACP agent in benchmark mode (the app drives its
   own scenario from src/benchmark.ts: no keystrokes or clicks), and measures the editor's own
-  processes: agent-editor.exe and its WebView2 processes. The fake agent, Node and claude (and
+  processes: orchard.exe and its WebView2 processes. The fake agent, Node and claude (and
   anything under them) are excluded.
 
   Phases (marker names shared with src/benchmark.ts):
@@ -42,7 +42,7 @@ if (-not $SkipBuild) {
         if ($LASTEXITCODE -ne 0) { throw "building the fake agent failed" }
     } finally { Pop-Location }
 }
-$exe = Join-Path $root 'target\release\agent-editor.exe'
+$exe = Join-Path $root 'target\release\orchard.exe'
 $fake = Join-Path $root 'target\release\fake-acp-agent.exe'
 foreach ($f in $exe, $fake) { if (-not (Test-Path $f)) { throw "missing $f (run without -SkipBuild)" } }
 
@@ -86,7 +86,7 @@ function Measure-IdleCpu([int]$rootId, [int]$seconds) {
 }
 
 # A scratch repository, a fake-agent script (5 short turns, then a long transcript), a marker file.
-$work = Join-Path ([System.IO.Path]::GetTempPath()) ("agent-editor-bench-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$work = Join-Path ([System.IO.Path]::GetTempPath()) ("orchard-bench-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $repo = Join-Path $work 'repo'
 $markers = Join-Path $work 'markers.txt'
 $app = $null
@@ -104,9 +104,9 @@ try {
     $agentScript = Join-Path $work 'script.json'
     [System.IO.File]::WriteAllText($agentScript, (@{ turns = $turns } | ConvertTo-Json -Depth 4 -Compress), (New-Object System.Text.UTF8Encoding $false))
 
-    $env:AGENT_EDITOR_BENCH = $markers
-    $env:AGENT_EDITOR_WORKSPACE = $repo
-    $env:AGENT_EDITOR_ACP_ADAPTER = $fake
+    $env:ORCHARD_BENCH = $markers
+    $env:ORCHARD_WORKSPACE = $repo
+    $env:ORCHARD_ACP_ADAPTER = $fake
     $env:FAKE_ACP_SCRIPT = $agentScript
     $app = Start-Process -FilePath $exe -PassThru
 
@@ -134,7 +134,7 @@ try {
     # The fake agent can outlive a crashed editor; stop any instance of this build.
     Get-CimInstance Win32_Process -Filter "Name = 'fake-acp-agent.exe'" | Where-Object { $_.ExecutablePath -eq $fake } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    Remove-Item Env:AGENT_EDITOR_BENCH, Env:AGENT_EDITOR_WORKSPACE, Env:AGENT_EDITOR_ACP_ADAPTER, Env:FAKE_ACP_SCRIPT -ErrorAction SilentlyContinue
+    Remove-Item Env:ORCHARD_BENCH, Env:ORCHARD_WORKSPACE, Env:ORCHARD_ACP_ADAPTER, Env:FAKE_ACP_SCRIPT -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }
 
@@ -146,7 +146,7 @@ $results = @(
     [pscustomobject]@{ Check = 'Total, Columns view with 4 columns (private MB)'; Value = $columns.PrivateMB; Budget = "<= $($budget.TotalMB)"; Pass = $columns.PrivateMB -le $budget.TotalMB }
 )
 ""
-"Agent Editor memory benchmark (Windows, $Messages-message transcript, $([Environment]::ProcessorCount) logical cores; 1 Manual editor in the last phase)"
+"Orchard memory benchmark (Windows, $Messages-message transcript, $([Environment]::ProcessorCount) logical cores; 1 Manual editor in the last phase)"
 "  1 Tab           : $($one.PrivateMB) MB private ($($one.WorkingSetMB) MB working set)  [$($one.Processes)]"
 "  5 Tabs          : $($five.PrivateMB) MB private ($($five.WorkingSetMB) MB working set)  [$($five.Processes)]"
 "  + long transcript: $($full.PrivateMB) MB private ($($full.WorkingSetMB) MB working set)  [$($full.Processes)]"

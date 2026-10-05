@@ -1,4 +1,4 @@
-# Agent Editor
+# Orchard
 
 An agent-first source-code editor: Claude Code sessions are the primary surface, across git
 Worktrees. Planning lives in `.scratch/` (the v1 spec is `.scratch/agent-editor-v1/spec.md`),
@@ -22,9 +22,9 @@ pnpm install
 pnpm dev                 # opens the editor
 ```
 
-Set `AGENT_EDITOR_WORKSPACE` to a repository path to pre-fill the "Open a repository" field.
+Set `ORCHARD_WORKSPACE` to a repository path to pre-fill the "Open a repository" field.
 
-Set `AGENT_EDITOR_ACP_ADAPTER` to another ACP agent executable to use it instead of the pinned
+Set `ORCHARD_ACP_ADAPTER` to another ACP agent executable to use it instead of the pinned
 `claude-agent-acp`. For example, point it at `target/debug/fake-acp-agent` to click around without
 spending subscription usage.
 

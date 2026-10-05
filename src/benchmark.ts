@@ -1,5 +1,5 @@
 // The memory-budget benchmark's scenario (ticket 05), run by the app itself when launched with
-// AGENT_EDITOR_BENCH set, so no keystrokes or clicks are needed. `scripts/bench-memory.ps1` starts
+// ORCHARD_BENCH set, so no keystrokes or clicks are needed. `scripts/bench-memory.ps1` starts
 // the app against the fake ACP agent and measures at each phase marker. Keep the marker names in
 // sync with the script.
 import { core, type SessionId } from "./core";

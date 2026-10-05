@@ -87,7 +87,7 @@ function AppMark() {
       <span class="mark">
         <Sparkles />
       </span>
-      Agent Editor
+      Orchard
     </div>
   );
 }

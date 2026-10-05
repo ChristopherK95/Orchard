@@ -1,5 +1,5 @@
 [package]
-name = "agent-editor"
+name = "orchard"
 description = "Tauri shell for the agent-first editor: forwards IPC to editor-core and nothing else."
 edition.workspace = true
 version.workspace = true

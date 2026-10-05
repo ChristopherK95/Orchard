@@ -17,10 +17,10 @@ use tauri::{AppHandle, Emitter, Manager, State};
 mod notifications;
 
 /// The pinned ACP adapter installed by `pnpm install` (see the root `package.json`).
-/// `AGENT_EDITOR_ACP_ADAPTER` swaps in another executable, e.g. the fake agent for demos.
+/// `ORCHARD_ACP_ADAPTER` swaps in another executable, e.g. the fake agent for demos.
 /// The path is fixed at build time, which only suits dev builds; distribution is out of scope for v1.
 fn adapter_command() -> AdapterCommand {
-    if let Some(program) = std::env::var_os("AGENT_EDITOR_ACP_ADAPTER") {
+    if let Some(program) = std::env::var_os("ORCHARD_ACP_ADAPTER") {
         return AdapterCommand {
             program: program.into(),
             args: vec![],
@@ -43,12 +43,12 @@ async fn prerequisites() -> Vec<MissingPrerequisite> {
     check_prerequisites(&Tools::default()).await
 }
 
-/// The repo to offer on startup: the first CLI argument, else `AGENT_EDITOR_WORKSPACE`.
+/// The repo to offer on startup: the first CLI argument, else `ORCHARD_WORKSPACE`.
 #[tauri::command]
 fn default_workspace_path() -> Option<String> {
     std::env::args()
         .nth(1)
-        .or_else(|| std::env::var("AGENT_EDITOR_WORKSPACE").ok())
+        .or_else(|| std::env::var("ORCHARD_WORKSPACE").ok())
 }
 
 /// A typed path, with a leading `~` as the home folder.
@@ -382,7 +382,7 @@ async fn pop_out(
         &label,
         tauri::WebviewUrl::App("index.html#popout".into()),
     )
-    .title(format!("{name} - {worktree} - Agent Editor"))
+    .title(format!("{name} - {worktree} - Orchard"))
     .inner_size(900.0, 720.0)
     .decorations(false) // (it draws its own title bar, like the main window)
     .build();
@@ -753,17 +753,17 @@ async fn set_permission_mode(
         .map_err(|e| e.to_string())
 }
 
-/// Benchmark mode (ticket 05): `AGENT_EDITOR_BENCH` names a file the frontend's scripted scenario
+/// Benchmark mode (ticket 05): `ORCHARD_BENCH` names a file the frontend's scripted scenario
 /// appends phase markers to, so `scripts/bench-memory.ps1` knows when to measure.
 #[tauri::command]
 fn bench_mode() -> bool {
-    std::env::var_os("AGENT_EDITOR_BENCH").is_some()
+    std::env::var_os("ORCHARD_BENCH").is_some()
 }
 
 #[tauri::command]
 fn bench_mark(phase: String) -> CommandResult<()> {
     use std::io::Write;
-    let Some(path) = std::env::var_os("AGENT_EDITOR_BENCH") else {
+    let Some(path) = std::env::var_os("ORCHARD_BENCH") else {
         return Ok(());
     };
     let mut file = std::fs::OpenOptions::new()

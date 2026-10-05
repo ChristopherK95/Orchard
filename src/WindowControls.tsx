@@ -47,7 +47,7 @@ export function BareTitlebar(props: { children?: JSX.Element }) {
   return (
     <header class="titlebar bare" data-tauri-drag-region>
       <span class="name" data-tauri-drag-region>
-        {props.children ?? "Agent Editor"}
+        {props.children ?? "Orchard"}
       </span>
       <span class="grow" data-tauri-drag-region />
       <WindowControls />
