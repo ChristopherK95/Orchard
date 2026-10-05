@@ -194,11 +194,17 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
 
   return (
     <section
-      ref={(el) => createEffect(() => props.isFocused && el.scrollIntoView({ block: "nearest", inline: "nearest" }))}
+      ref={(el) => {
+        createEffect(() => props.isFocused && el.scrollIntoView({ block: "nearest", inline: "nearest" }));
+        // A press on a control focuses on its click instead: focusing grows the composer and moves
+        // the transcript, so the control (say a permission's Yes) would slide out from under the
+        // pointer before mouseup. Capture, so it still runs if the control removes itself.
+        el.addEventListener("click", (e) => !props.isFocused && isControl(e.target) && props.onFocus(path), true);
+      }}
       class="column"
       classList={{ focused: props.isFocused }}
       style={{ "--c": worktreeColour(path), "flex-grow": props.shares[path] ?? EVEN }}
-      onMouseDown={() => !props.isFocused && props.onFocus(path)}
+      onMouseDown={(e) => !props.isFocused && !isControl(e.target) && props.onFocus(path)}
     >
       <ColumnHeader {...props} session={session()} />
       <nav class="column-tabs">
@@ -418,6 +424,11 @@ function ColumnHeader(props: ColumnsProps & { worktree: WorktreeTab; isFocused: 
       </Show>
     </div>
   );
+}
+
+/** Whether a press lands on something clickable, which focuses its column on click, not mousedown. */
+function isControl(target: EventTarget | null) {
+  return target instanceof Element && !!target.closest("button, a, input, textarea, select, [role='button']");
 }
 
 /** An unfocused column's composer: one line that focuses the column. */
