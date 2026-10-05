@@ -7,7 +7,7 @@ import { core, type FontFamily, type LoadedSettings, type RepoSettings, type Set
 import { CODE_FONT_SIZES } from "./appearance";
 import { ArrowDown, ArrowUp, ChevronDown, Plus, TriangleAlert, X } from "./icons";
 
-export type SettingsSection = "general" | "appearance" | "agents" | "repo";
+export type SettingsSection = "general" | "appearance" | "agents" | "keys" | "repo";
 
 export function SettingsPage(props: {
   settings: LoadedSettings | null;
@@ -84,6 +84,7 @@ export function SettingsPage(props: {
             {nav("general", "General")}
             {nav("appearance", "Appearance")}
             {nav("agents", "Agents")}
+            {nav("keys", "Keyboard shortcuts")}
             <div class="palette-group">Repository</div>
             {nav("repo", <span class="mono">{props.repoName}</span>)}
           </nav>
@@ -102,6 +103,35 @@ export function SettingsPage(props: {
             </Show>
             <Show when={error()}>
               <p class="error small">{error()}</p>
+            </Show>
+            <Show when={section() === "keys"}>
+              <h2>Keyboard shortcuts</h2>
+              <For each={SHORTCUTS}>
+                {(group) => (
+                  <section class="shortcut-group">
+                    <h3>{group.title}</h3>
+                    <For each={group.keys}>
+                      {([keys, what]) => (
+                        <div class="shortcut-row">
+                          <span class="grow">{what}</span>
+                          <span class="shortcut-keys">
+                            <For each={keys.split(" / ")}>
+                              {(combo, i) => (
+                                <>
+                                  <Show when={i() > 0}>
+                                    <span class="muted small">or</span>
+                                  </Show>
+                                  <For each={combo.split(" ")}>{(key) => <kbd>{key}</kbd>}</For>
+                                </>
+                              )}
+                            </For>
+                          </span>
+                        </div>
+                      )}
+                    </For>
+                  </section>
+                )}
+              </For>
             </Show>
             <fieldset class="settings-fields" disabled={broken() || !app()}>
               <Show when={section() === "general"}>
@@ -229,6 +259,65 @@ export function SettingsPage(props: {
     </div>
   );
 }
+
+/** Every shortcut, by where it works: [keys, what they do]. Keys are separated by spaces, and
+ *  alternatives by " / ". Keep in step with the handlers (App's onKey, Chat, ManualEditor, …). */
+const SHORTCUTS: { title: string; keys: [string, string][] }[] = [
+  {
+    title: "Anywhere",
+    keys: [
+      ["Ctrl P", "Go to a file in this Worktree, or start a session"],
+      ["Ctrl Shift O", "Open another repository"],
+      ["Ctrl ,", "Settings"],
+      ["Ctrl B", "Open or close the Board"],
+      ["Ctrl `", "The Terminal (in the Columns view: the focused column's)"],
+      ["Ctrl Shift E", "The Files drawer"],
+      ["Ctrl Shift G", "The Changes drawer"],
+      ["Ctrl Shift T", "Reopen the last closed session"],
+      ["Alt ↑ / Alt ↓", "The previous / next session in the Worktree"],
+      ["Alt ← / Alt →", "The column on the left / right (Columns view)"],
+      ["Esc", "Close the dialog, menu or Board"],
+    ],
+  },
+  {
+    title: "Sessions",
+    keys: [
+      ["Enter", "Send the message"],
+      ["Shift Enter", "A new line in the message"],
+      ["Esc", "Stop the Agent's turn"],
+      ["Tab / Enter", "Complete the highlighted slash command"],
+      ["Y / N", "Allow / reject the oldest open permission request (outside text fields)"],
+    ],
+  },
+  {
+    title: "Manual editor",
+    keys: [
+      ["Ctrl S", "Save the file"],
+      ["Ctrl G", "Go to a line"],
+      [":w / :q", "Save / close the file tab (with Vim keybindings on)"],
+    ],
+  },
+  {
+    title: "Changes",
+    keys: [["Ctrl Enter", "Commit (in the commit message)"]],
+  },
+  {
+    title: "Terminal",
+    keys: [
+      ["Ctrl C", "Copy the selection (with none: interrupt)"],
+      ["Ctrl Shift C", "Copy the selection"],
+      ["Ctrl V / Ctrl Shift V", "Paste"],
+    ],
+  },
+  {
+    title: "Opening a repository",
+    keys: [
+      ["↑ / ↓", "Move through the list"],
+      ["Ctrl O", "Browse for a folder"],
+      ["Delete", "Remove the highlighted repository from the list (caret at the end)"],
+    ],
+  },
+];
 
 function Row(props: { label: string; hint?: string; block?: boolean; indent?: boolean; children: JSX.Element }) {
   return (

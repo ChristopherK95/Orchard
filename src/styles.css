@@ -223,7 +223,9 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .picker-modal { width: min(660px, 100%); padding: 18px 18px 14px; }
 .leave-workspace .modal-body p { margin: 0; font-size: 13px; line-height: 1.5; }
 /* The settings page (ticket 31). */
-.settings-page { width: min(860px, 100%); height: min(640px, 100%); }
+/* (.modal comes later and would set the width back to 520 px.) Grows with the window, within
+   bounds, and never past the backdrop's padding. */
+.modal.settings-page { width: min(clamp(760px, 64vw, 1240px), 100%); height: min(clamp(560px, 78vh, 960px), 100%); max-height: 100%; }
 .settings-main { flex: 1; min-height: 0; display: flex; border-top: 1px solid var(--line); }
 .settings-nav { flex: none; width: 190px; display: flex; flex-direction: column; padding: 4px 8px 12px; border-right: 1px solid var(--line); overflow: auto; }
 .settings-nav .palette-group { padding-left: 8px; }
@@ -260,6 +262,11 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .font-picker-menu input { margin: 8px; height: 28px; font-family: var(--ui); }
 .font-picker-list { max-height: 280px; overflow: auto; padding-bottom: 4px; }
 .font-picker-list .palette-item.current .file { color: var(--idle-text); }
+.shortcut-group { display: flex; flex-direction: column; margin-bottom: 8px; }
+.shortcut-group h3 { margin: 4px 0 2px; font-size: 12px; font-weight: 500; color: var(--fg-3); }
+.shortcut-row { display: flex; align-items: center; gap: 16px; min-height: 36px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.shortcut-keys { flex: none; display: inline-flex; align-items: center; gap: 4px; }
+.shortcut-keys kbd { height: 20px; padding: 0 6px; font-size: 11px; }
 .settings-broken { display: flex; gap: 10px; padding: 12px 14px; border: 1px solid var(--danger-border); border-radius: var(--r-lg); background: var(--danger-tint); }
 .settings-broken > .lucide { flex: none; color: var(--danger); }
 .settings-broken p { margin: 0 0 6px; font-size: 13px; }
@@ -341,8 +348,11 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .rail-item .needs-dot { position: absolute; top: 5px; right: 5px; width: 8px; height: 8px; box-shadow: 0 0 0 2px var(--bg-2); }
 
 /* Header · 52 px: the sidebar trigger, where you are, the views, and the window's buttons. It's
-   the window's title bar (a drag region). */
-.app-header { flex: none; height: 52px; display: flex; align-items: center; gap: 12px; padding-left: 16px; border-bottom: 1px solid var(--line); user-select: none; }
+   the window's title bar (a drag region). It shares the sidebar's surface and reaches 1 px left
+   over the sidebar's edge, so the two read as one L around the content. */
+.app-header { position: relative; flex: none; height: 52px; display: flex; align-items: center; gap: 12px; margin-left: -1px; padding-left: 17px; background: var(--bg-2); border-bottom: 1px solid var(--line); user-select: none; }
+/* The L's inner corner, rounded: an arc over the meeting lines, the square outside it filled in. */
+.app-header::after { content: ""; position: absolute; top: 100%; left: 0; width: 10px; height: 10px; border-top: 1px solid var(--line); border-left: 1px solid var(--line); border-top-left-radius: 10px; box-shadow: 0 0 0 10px var(--bg-2); clip-path: inset(0); pointer-events: none; }
 .app-header > button.icon { min-height: 28px; width: 30px; color: var(--fg-1); }
 .vsep { flex: none; width: 1px; height: 16px; background: var(--line); }
 .breadcrumb { min-width: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg-2); white-space: nowrap; overflow: hidden; }
@@ -779,7 +789,8 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 
 /* The Board: over the Tabs, which stay mounted underneath (dialogs and the palette, at
    z-index 50, still come on top). */
-.board { position: absolute; left: 0; right: 0; bottom: 0; z-index: 10; display: flex; flex-direction: column; background: var(--bg-1); }
+/* Rounded to fit inside the header's corner arc, which sits just above and left of it. */
+.board { position: absolute; left: 0; right: 0; bottom: 0; z-index: 10; display: flex; flex-direction: column; background: var(--bg-1); border-top-left-radius: 9px; overflow: hidden; }
 .board-head { flex: none; height: 44px; display: flex; align-items: center; gap: 6px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--bg-1); overflow-x: auto; scrollbar-width: none; }
 .board-head .label { font-size: 12px; color: var(--fg-3); margin-right: 4px; }
 .board-head .hint { margin-left: auto; padding-left: 12px; font-size: 11.5px; color: var(--fg-3); white-space: nowrap; }
