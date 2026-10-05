@@ -47,6 +47,9 @@ export interface ColumnsProps {
 }
 
 export function Columns(props: ColumnsProps) {
+  // Columns are keyed by path: each `worktreesChanged` (an Agent editing a file changes its count)
+  // brings new Worktree objects, and keying on those rebuilt every column and its transcript.
+  const byPath = (path: string) => props.worktrees.find((w) => w.path === path);
   return (
     <Show
       when={props.worktrees.length > 0}
@@ -75,7 +78,9 @@ export function Columns(props: ColumnsProps) {
       }
     >
       <div class="columns">
-        <For each={props.worktrees}>{(w) => <Column {...props} worktree={w} isFocused={w.path === props.focused} />}</For>
+        <For each={props.worktrees.map((w) => w.path)}>
+          {(path) => <Show when={byPath(path)}>{(w) => <Column {...props} worktree={w()} isFocused={path === props.focused} />}</Show>}
+        </For>
       </div>
     </Show>
   );
