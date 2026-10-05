@@ -6,6 +6,7 @@ import { createMemo, createResource, createSignal, For, type JSX, Show } from "s
 import { core, type SessionInfo, type SessionState } from "./core";
 import { CirclePause, CirclePlay, GitBranch, Sparkles } from "./icons";
 import { noOption, yesOption } from "./PermissionCard";
+import { settleProposal } from "./proposals";
 import { StateDot } from "./StateDot";
 import { worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 
@@ -111,6 +112,7 @@ function Card(props: { session: SessionInfo; worktree: string; onOpen: () => voi
     setError("");
     try {
       await core.answerPermission(props.session.id, toolCallId, optionId);
+      settleProposal(props.session.id, toolCallId);
       void refetch(); // (another question may be waiting behind it)
     } catch (err) {
       setError(String(err));

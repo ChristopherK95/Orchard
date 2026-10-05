@@ -589,6 +589,8 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .permission-head .target { font: 500 13px var(--mono); color: var(--fg-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .permission-head .outcome { font-size: 13px; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .permission.answered .permission-head { padding: 10px 16px; }
+.permission-head > button { flex: none; }
+.contents { display: contents; }
 .permission.answered .icon-box { width: 24px; height: 24px; border-radius: var(--r-md); background: var(--bg-4); color: var(--idle-text); }
 .permission.answered .icon-box .lucide { width: 13px; height: 13px; }
 .permission.answered .permission-head .title { font-weight: 500; color: var(--fg-2); font-size: 13px; }

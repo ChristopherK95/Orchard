@@ -6,7 +6,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { createVirtualizer } from "@tanstack/solid-virtual";
 import { createEffect, createMemo, createSignal, For, type JSX, on, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
-import type { SessionId, TranscriptItem } from "./core";
+import type { PermissionRequest, SessionId, TranscriptItem } from "./core";
 import { BookOpen, Brain, Check, ChevronRight, Globe, Loader, MoveRight, Pencil, Play, TextSearch, Trash2, Wrench } from "./icons";
 import { handleTranscriptClick, renderMarkdown } from "./markdown";
 import { PermissionCard } from "./PermissionCard";
@@ -31,6 +31,8 @@ export function Transcript(props: {
   onError: (message: string) => void;
   /** "Open in editor" on a code block. */
   onOpenSnippet: (code: string, label: string) => void;
+  /** "Open in editor" on a permission card for a file edit. */
+  onOpenProposal: (sessionId: SessionId, request: PermissionRequest) => void;
   /** Whether Y / N answer this transcript's open card (in the Columns view: only the focused column's). */
   answerKeys?: () => boolean;
   /** How much of the bottom the floating composer covers: the list ends that far up. */
@@ -150,7 +152,7 @@ export function Transcript(props: {
               >
                 <Show
                   when={groupEnd()}
-                  fallback={renderItem(props.sessionId, props.items[key - props.start], props.answerKeys ?? always)}
+                  fallback={renderItem(props.sessionId, props.items[key - props.start], props.answerKeys ?? always, props.onOpenProposal)}
                 >
                   {(end) => (
                     <ToolCallGroup
@@ -170,13 +172,26 @@ export function Transcript(props: {
 
 const always = () => true;
 
-function renderItem(sessionId: SessionId, item: TranscriptItem | undefined, answerKeys: () => boolean): JSX.Element {
+function renderItem(
+  sessionId: SessionId,
+  item: TranscriptItem | undefined,
+  answerKeys: () => boolean,
+  onOpenProposal: (sessionId: SessionId, request: PermissionRequest) => void,
+): JSX.Element {
   if (!item) return null;
   switch (item.kind) {
     case "agent":
       return <div class="msg agent markdown" innerHTML={renderMarkdown(item.text)} />;
     case "permission":
-      return <PermissionCard sessionId={sessionId} request={item.request} outcome={item.outcome} keys={answerKeys} />;
+      return (
+        <PermissionCard
+          sessionId={sessionId}
+          request={item.request}
+          outcome={item.outcome}
+          keys={answerKeys}
+          onOpen={() => onOpenProposal(sessionId, item.request)}
+        />
+      );
     case "toolCall":
       return <ToolCallRow item={item} />;
     case "user":

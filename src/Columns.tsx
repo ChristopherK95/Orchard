@@ -6,7 +6,7 @@
 // columns moves width from one to the other (ticket 36).
 import { createEffect, createSignal, For, lazy, Match, onCleanup, Show, Switch } from "solid-js";
 import { Banner, Composer, FindOtherConversations, RecentList, reportHeight } from "./Chat";
-import type { OtherConversation, RecentSession, SessionId, SessionInfo } from "./core";
+import type { OtherConversation, PermissionRequest, RecentSession, SessionId, SessionInfo } from "./core";
 import { ArrowUp, CirclePause, CirclePlay, Ellipsis, GitBranch, Pin, Plus, Sparkles, SquareTerminal, Trash2, X } from "./icons";
 import { Setup, type SetupView } from "./Setup";
 import { shellRunning } from "./shells";
@@ -53,6 +53,8 @@ export interface ColumnsProps {
   onRemove: (worktree: WorktreeTab) => void;
   onOpenSettings: () => void;
   onOpenSnippet: (code: string, label: string) => void;
+  /** "Open in editor" on a permission card: the column takes focus too. */
+  onOpenProposal: (sessionId: SessionId, request: PermissionRequest) => void;
   /** Whether a column shows its Terminal tab (its Worktree's shell) rather than a session. */
   terminalOpen: (path: string) => boolean;
   onToggleTerminal: (path: string) => void;
@@ -301,6 +303,10 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
                   onLoadEarlier={view.loadEarlier}
                   onError={props.onError}
                   onOpenSnippet={props.onOpenSnippet}
+                  onOpenProposal={(id, request) => {
+                    props.onFocus(path);
+                    props.onOpenProposal(id, request);
+                  }}
                   answerKeys={() => props.isFocused}
                   bottomInset={composerHeight}
                 />

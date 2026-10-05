@@ -1127,6 +1127,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onRemove={setRemoving}
           onOpenSettings={() => openSettingsPage("repo")}
           onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })}
+          onOpenProposal={(sessionId, request) => openInEditor({ kind: "proposal", sessionId, request })}
           terminalOpen={terminalOpen}
           onToggleTerminal={toggleTerminalOf}
           shares={columnShares()}
@@ -1174,6 +1175,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
               onLoadEarlier={tabs.loadEarlier}
               onError={setError}
               onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })}
+              onOpenProposal={(sessionId, request) => openInEditor({ kind: "proposal", sessionId, request })}
               bottomInset={composerHeight}
             />
             <Composer session={s} onHeight={setComposerHeight} />

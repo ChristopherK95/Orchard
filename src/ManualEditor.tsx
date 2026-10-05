@@ -28,10 +28,11 @@ import { classHighlighter } from "@lezer/highlight";
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { core, type DiffLine, type OpenedFile, type PoppedOutFile } from "./core";
+import { core, type DiffLine, type OpenedFile, type PermissionRequest, type PoppedOutFile, type SessionId } from "./core";
 import { DiffPanel } from "./DiffView";
 import { languageOf, languageOfPath, parserFor } from "./highlight";
 import { ExternalLink, TextWrap, X } from "./icons";
+import { applyDiff, invertDiff, isSettled, proposalKey, watchProposal } from "./proposals";
 
 /** What to open: a file (absolute path), a chat code block as an unsaved snippet, or a file popped
  *  out of the pane (in its new window). */
@@ -50,7 +51,9 @@ export type OpenRequest =
       base: string;
       renamedFrom: string | null;
       lines: DiffLine[];
-    };
+    }
+  /** A change an Agent asks to make (ticket 38), from its permission card: one tab per card. */
+  | { kind: "proposal"; sessionId: SessionId; request: PermissionRequest };
 
 interface Tab {
   id: number;
@@ -76,6 +79,9 @@ interface Tab {
   overwrite: boolean;
   /** A read-only diff tab (Changes vs base). */
   review?: Omit<Extract<OpenRequest, { kind: "diff" }>, "kind" | "title">;
+  /** A change an Agent asks to make: the file as it is against the result. Once its card is
+   *  answered it's `stale`, or closed if it wasn't `touched` (scrolled, clicked, come back to). */
+  proposal?: { key: string; file: string; name: string; lines: DiffLine[]; note: string | null; stale: boolean; touched: boolean };
 }
 
 type TabFields = Omit<Tab, "id" | "saved" | "dirty" | "onDisk" | "overwrite">;
@@ -338,6 +344,46 @@ export function ManualEditor(props: {
     addTab({ title, path: null, version: null, lineEnding: "\n", placeholder: null, note: null, readOnly: true, wrap: false, review }, null);
   };
 
+  /** The change a permission card asks for, in a tab of its own (the same one again if it's open). */
+  const openProposal = async (sessionId: SessionId, request: PermissionRequest) => {
+    const key = proposalKey(sessionId, request.toolCallId);
+    const existing = tabs.find((t) => t.proposal?.key === key);
+    if (existing) return show(existing.id);
+    const { file, diff: card } = request;
+    if (!file || !card || opening.has(key)) return;
+    opening.add(key);
+    watchProposal(sessionId, request.toolCallId);
+    let lines = card;
+    let note: string | null = null;
+    try {
+      // No file yet: the card's diff is the whole of it.
+      const opened = await core.readFile(file).catch(() => null);
+      if (opened) {
+        const after = opened.content.kind === "text" ? applyDiff(opened.content.text, card) : null;
+        if (after === null) note = "This is the change as the Agent sent it: it couldn't be placed in the file as it is now.";
+        else lines = invertDiff(await core.diffWithDisk(opened.path, after));
+      }
+    } catch (err) {
+      props.onError(String(err));
+    } finally {
+      opening.delete(key);
+    }
+    if (!alive || isSettled(key)) return; // (answered meanwhile)
+    const name = request.target ?? file;
+    const proposal = { key, file, name, lines, note, stale: false, touched: false };
+    const title = `${file.split(/[\\/]/).pop()} (proposed)`;
+    addTab({ title, path: null, version: null, lineEnding: "\n", placeholder: null, note: null, readOnly: true, wrap: false, proposal }, null);
+  };
+  const touch = (tabId: number) => setTabs((x) => x.id === tabId && !!x.proposal, "proposal", "touched", true);
+  // An answered card's tab: out of date, or gone if it wasn't looked at.
+  createEffect(() => {
+    for (const t of tabs) {
+      if (!t.proposal || t.proposal.stale || !isSettled(t.proposal.key)) continue;
+      if (t.proposal.touched) setTabs((x) => x.id === t.id, "proposal", "stale", true);
+      else close(t.id);
+    }
+  });
+
   const openSnippet = (code: string, label: string) =>
     addTab(
       { title: `snippet${label ? `.${label}` : ""}`, path: null, version: null, lineEnding: "\n", placeholder: null, note: null, readOnly: false, wrap: false },
@@ -355,7 +401,7 @@ export function ManualEditor(props: {
       view.setState(state);
       void syncVim();
       view.focus();
-    }
+    } else if (host.contains(document.activeElement)) (document.activeElement as HTMLElement).blur(); // (so Y / N answer cards)
   };
 
   /** Saves the tab (one save at a time per tab); whether it was saved. */
@@ -581,6 +627,7 @@ export function ManualEditor(props: {
           if (open.kind === "file") void openFile(open.path);
           else if (open.kind === "poppedOut") openPoppedOut(open.file);
           else if (open.kind === "diff") openDiff(open);
+          else if (open.kind === "proposal") void openProposal(open.sessionId, open.request);
           else openSnippet(open.code, open.label);
         }
       },
@@ -612,7 +659,15 @@ export function ManualEditor(props: {
         <For each={tabs}>
           {(t) => (
             <span class="editor-tab" classList={{ on: t.id === activeId() }}>
-              <button class="editor-tab-name" onClick={() => show(t.id)} onAuxClick={(e) => e.button === 1 && close(t.id)} title={t.review?.name ?? t.path ?? "Not saved anywhere"}>
+              <button
+                class="editor-tab-name"
+                onClick={() => {
+                  if (t.id !== activeId()) touch(t.id);
+                  show(t.id);
+                }}
+                onAuxClick={(e) => e.button === 1 && close(t.id)}
+                title={t.review?.name ?? t.proposal?.name ?? t.path ?? "Not saved anywhere"}
+              >
                 {t.title}
                 <Show when={t.dirty}>
                   <span class="dirty" title="Unsaved changes" />
@@ -630,7 +685,7 @@ export function ManualEditor(props: {
           )}
         </For>
         <span class="grow" />
-        <Show when={active() && !active()!.placeholder && !active()!.review}>
+        <Show when={active() && !active()!.placeholder && !active()!.review && !active()!.proposal}>
           <button class="ghost" classList={{ on: !!active()?.wrap }} onClick={toggleWrap} title="Soft-wrap long lines">
             <TextWrap />
             Wrap
@@ -759,10 +814,34 @@ export function ManualEditor(props: {
           />
         )}
       </Show>
+      <Show when={active()?.proposal}>
+        {(proposal) => (
+          <div class="contents" onPointerDown={() => touch(activeId()!)} onWheel={() => touch(activeId()!)}>
+            <DiffPanel
+              legend={
+                <>
+                  <span class="removed-key">− as it is</span> · <span class="added-key">+ if you allow it</span>
+                </>
+              }
+              lines={proposal().lines}
+              language={languageOfPath(proposal().file)}
+              sideBySide={sideBySide()}
+              onSideBySide={setSideBySide}
+              note={
+                proposal().stale
+                  ? "Out of date: the card was answered, or the turn ended. This is the change as it was asked for."
+                  : proposal().note
+              }
+              editTitle="Open the file itself (as it is now)"
+              onEdit={() => void openFile(proposal().file)}
+            />
+          </div>
+        )}
+      </Show>
       <div
         class="editor-host"
         ref={host}
-        classList={{ hidden: !!active()?.placeholder || !active() || !!active()?.review || diff()?.tabId === activeId() }}
+        classList={{ hidden: !!active()?.placeholder || !active() || !!active()?.review || !!active()?.proposal || diff()?.tabId === activeId() }}
       />
     </section>
   );

@@ -1,6 +1,6 @@
 // An inline permission card (ticket 03): what the Agent wants to do, the diff for edits, and the
 // Agent's own options by name. Y/N are handled for the whole Tab by `answerByKey`.
-import { createSignal, For, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, onMount, Show } from "solid-js";
 import {
   core,
   type PermissionOption,
@@ -11,7 +11,8 @@ import {
 } from "./core";
 import { hasUnsavedChanges } from "./documents";
 import { highlightCode, languageOfPath } from "./highlight";
-import { Ban, Check, ShieldAlert, TriangleAlert } from "./icons";
+import { Ban, Check, FileDiff, ShieldAlert, TriangleAlert } from "./icons";
+import { settleProposal } from "./proposals";
 import type { DiffLine } from "./core";
 
 const DIFF_SIGN = { hunk: "", context: "", added: "+", removed: "−" } as const;
@@ -57,7 +58,8 @@ export function answerByKey(event: KeyboardEvent, sessionId: SessionId, items: T
   if (open?.kind !== "permission") return false;
   const option = key === "y" ? yesOption(open.request) : noOption(open.request);
   if (!option) return false;
-  void core.answerPermission(sessionId, open.request.toolCallId, option.id);
+  const toolCallId = open.request.toolCallId;
+  void core.answerPermission(sessionId, toolCallId, option.id).then(() => settleProposal(sessionId, toolCallId));
   return true;
 }
 
@@ -67,6 +69,8 @@ export function PermissionCard(props: {
   outcome: PermissionOutcome | null;
   /** Whether Y / N answer this card's transcript (in the Columns view: only the focused column's). */
   keys?: () => boolean;
+  /** "Open in editor": the whole change in the Manual editor (ticket 38). */
+  onOpen?: () => void;
 }) {
   const keys = () => props.keys?.() ?? true;
   const [error, setError] = createSignal("");
@@ -81,12 +85,16 @@ export function PermissionCard(props: {
     setError("");
     try {
       await core.answerPermission(props.sessionId, props.request.toolCallId, option.id);
+      settleProposal(props.sessionId, props.request.toolCallId);
     } catch (err) {
       setError(String(err));
     } finally {
       setSending(false);
     }
   };
+
+  // (Answered elsewhere, or the turn ended: its tab in the Manual editor is out of date.)
+  createEffect(() => props.outcome && settleProposal(props.sessionId, props.request.toolCallId));
 
   // Bring the question into view (and move focus off the disabled composer).
   onMount(() => pending() && keys() && card.focus());
@@ -119,6 +127,12 @@ export function PermissionCard(props: {
           </div>
           <span class="outcome">{pending() ? `Permission requested${stat()}` : chosen()}</span>
         </div>
+        <Show when={pending() && props.request.file && props.request.diff && props.onOpen}>
+          <button class="outline small" onClick={() => props.onOpen?.()} title="Read the whole change in the Manual editor. Answer it here.">
+            <FileDiff />
+            Open in editor
+          </button>
+        </Show>
       </div>
       <Show when={pending() && props.request.file && hasUnsavedChanges(props.request.file)}>
         <p class="permission-warning">
