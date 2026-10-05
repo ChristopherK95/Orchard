@@ -52,5 +52,5 @@ pub use crate::settings::{
     SettingChange, Settings, WindowsShell,
 };
 pub use crate::setup::{SetupInfo, SetupStatus};
-pub use crate::terminal::{TerminalOutput, TerminalStream};
+pub use crate::terminal::{TerminalId, TerminalInfo, TerminalOutput, TerminalStream};
 pub use crate::worktrees::WorktreeInfo;

@@ -1,18 +1,19 @@
-// Which Worktrees have a shell running (the green dot on the Terminal button and tab). Started by a
-// Terminal panel, ended when the shell exits or is stopped. Not in TerminalPanel.tsx, which loads
-// late with xterm.js.
+// The running shells, as the core last reported them: the Terminal panel's tabs, and the green dot
+// on the Terminal button and tab. Not in TerminalPanel.tsx, which loads late with xterm.js.
 import { createSignal } from "solid-js";
+import { core, type TerminalInfo } from "./core";
 
-const [live, setLive] = createSignal<ReadonlySet<string>>(new Set());
+const [all, setAll] = createSignal<TerminalInfo[]>([]);
 
-export const shellRunning = (worktree: string) => live().has(worktree);
+/** From the core's `terminalsChanged` event (and its list, once at the start). */
+export const setShells = setAll;
 
-export function setShellRunning(worktree: string, running: boolean) {
-  if (live().has(worktree) === running) return;
-  setLive((now) => {
-    const next = new Set(now);
-    if (running) next.add(worktree);
-    else next.delete(worktree);
-    return next;
-  });
+/** The Worktree's running shells, oldest first. */
+export const shellsIn = (worktree: string) => all().filter((t) => t.worktree === worktree);
+
+export const shellRunning = (worktree: string) => all().some((t) => t.worktree === worktree);
+
+/** Looks again for the shells' names (what runs in the foreground changes with no event). */
+export function refreshShells() {
+  void core.terminals().then(setAll, () => {});
 }

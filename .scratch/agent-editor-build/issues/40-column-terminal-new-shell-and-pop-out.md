@@ -2,11 +2,11 @@
 
 **What to build:** Two buttons the design puts in the cwd strip of a column's Terminal tab, which the redesign left out: + (a new shell) and pop-out (the terminal in its own window).
 
-**Blocked by:** 35 (Several shells per Worktree), for +.
+**Blocked by:** none (35 is done).
 
 **Status:** not started
 
-- [ ] + starts another shell in the Worktree and shows it in the column, using 35's way of switching between shells.
+- [x] + starts another shell in the Worktree and shows it in the column, using 35's way of switching between shells. (Done with 35.)
 - [ ] Pop-out moves the Worktree's terminal into its own window, like a popped-out Manual editor. The column's Terminal tab then says it's popped out and offers a button to bring it back. Closing the window brings it back too.
 - [ ] The popped-out window passes the app's shortcuts (Ctrl+P, Ctrl+`, …) on to the main window, as the panel does.
 - [ ] The Tabs view's Terminal panel gets the same pop-out.

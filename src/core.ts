@@ -25,6 +25,16 @@ export interface RecentWorkspace {
   indices: number[];
 }
 
+/** A running shell (a Worktree can have several), numbered from 0 per Workspace. */
+export interface TerminalInfo {
+  id: number;
+  worktree: string;
+  /** What it's running: the foreground command where that can be told (Linux), else the shell. */
+  name: string;
+  /** Something other than the shell is in the foreground (Linux only). */
+  busy: boolean;
+}
+
 /** What a Worktree's terminal sends the Terminal panel. */
 export type TerminalOutput =
   | { kind: "output"; text: string }
@@ -477,6 +487,8 @@ export type CoreEvent =
   /** The slash commands (and skills) the session's Agent offers: the whole list. */
   | { kind: "availableCommandsChanged"; sessionId: SessionId; commands: SlashCommand[] }
   | { kind: "worktreesChanged"; worktrees: WorktreeInfo[] }
+  /** A shell started or went: every running shell, oldest first. */
+  | { kind: "terminalsChanged"; terminals: TerminalInfo[] }
   | { kind: "sessionClosed"; sessionId: SessionId }
   /** A popped-out window closed before it showed its file: `window` reopens it. */
   | { kind: "popOutReturned"; window: string; file: PoppedOutFile }
@@ -651,21 +663,29 @@ export const core = {
   /** Up to a page of items just before index `before` (for scrolling back). */
   transcriptPageBefore: (sessionId: SessionId, before: number) =>
     invoke<TranscriptPage>("transcript_page_before", { sessionId, before }),
-  /** Shows the Worktree's terminal in view slot `slot`'s Terminal panel, starting its shell
-   *  (`cols` x `rows`) if it has none; its output streams to `onOutput`. The terminal the slot
-   *  showed before stops sending there. */
-  openTerminal: (slot: string, worktree: string, cols: number, rows: number, onOutput: (batch: TerminalOutput[]) => void) => {
+  /** Every running shell, oldest first. */
+  terminals: () => invoke<TerminalInfo[]>("terminals"),
+  /** Shows a shell of the Worktree in view slot `slot`'s Terminal panel: `id` if it still runs
+   *  there, else the Worktree's oldest, else a new one (`cols` x `rows`). Its output streams to
+   *  `onOutput`; whatever the slot showed before stops sending there. */
+  openTerminal: (slot: string, worktree: string, id: number | null, cols: number, rows: number, onOutput: (batch: TerminalOutput[]) => void) => {
     const channel = new Channel<TerminalOutput[]>();
     channel.onmessage = onOutput;
-    return invoke<void>("open_terminal", { slot, worktree, cols, rows, onOutput: channel });
+    return invoke<TerminalInfo>("open_terminal", { slot, worktree, id, cols, rows, onOutput: channel });
   },
-  /** Types keystrokes (or a paste) into the Worktree's terminal. */
-  terminalInput: (worktree: string, data: string) => invoke<void>("terminal_input", { worktree, data }),
-  resizeTerminal: (worktree: string, cols: number, rows: number) => invoke<void>("resize_terminal", { worktree, cols, rows }),
+  /** Starts another shell in the Worktree and shows it in view slot `slot`'s Terminal panel. */
+  newTerminal: (slot: string, worktree: string, cols: number, rows: number, onOutput: (batch: TerminalOutput[]) => void) => {
+    const channel = new Channel<TerminalOutput[]>();
+    channel.onmessage = onOutput;
+    return invoke<TerminalInfo>("new_terminal", { slot, worktree, cols, rows, onOutput: channel });
+  },
+  /** Types keystrokes (or a paste) into a shell. */
+  terminalInput: (id: number, data: string) => invoke<void>("terminal_input", { id, data }),
+  resizeTerminal: (id: number, cols: number, rows: number) => invoke<void>("resize_terminal", { id, cols, rows }),
   /** View slot `slot`'s Terminal panel is hidden; the shells keep running. */
   hideTerminal: (slot: string) => invoke<void>("hide_terminal", { slot }),
-  /** Stops the Worktree's shell and everything it started. */
-  closeTerminal: (worktree: string) => invoke<void>("close_terminal", { worktree }),
+  /** Stops a shell and everything it started. */
+  closeTerminal: (id: number) => invoke<void>("close_terminal", { id }),
   /** True when launched by the memory benchmark (ticket 05). */
   benchMode: () => invoke<boolean>("bench_mode"),
   /** Records that the benchmark scenario reached `phase`. */

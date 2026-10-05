@@ -9,8 +9,8 @@ use editor_core::{
     DirEntry, FileMatch, FontFamily, LoadedSettings, MissingPrerequisite, NewWorktree, OpenedFile,
     OtherConversation, PermissionMode, PoppedOutFile, RecentSession, RecentWorkspace, RemovalCheck,
     RemoveWorktree, RemovedWorktree, RepoSettings, SaveOver, SessionId, SessionInfo, SettingChange,
-    SetupInfo, SlashCommand, TerminalOutput, Tools, TranscriptDelta, TranscriptPage, WorkspaceInfo,
-    WorktreeInfo, WorktreeMerge,
+    SetupInfo, SlashCommand, TerminalId, TerminalInfo, TerminalOutput, TerminalStream, Tools,
+    TranscriptDelta, TranscriptPage, WorkspaceInfo, WorktreeInfo, WorktreeMerge,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -934,23 +934,53 @@ async fn show_session(
     Ok(())
 }
 
-/// Shows the Worktree's terminal in view slot `slot`'s Terminal panel (starting its shell,
-/// `cols` x `rows`, if it has none) and streams its output over a dedicated channel: what it kept
-/// first, then what it prints, whatever has arrived sent in one go. The terminal the slot showed
-/// before stops sending there.
+/// Every running shell, oldest first.
+#[tauri::command]
+fn terminals(core: State<'_, Core>) -> Vec<TerminalInfo> {
+    core.terminals()
+}
+
+/// Shows a shell of the Worktree in view slot `slot`'s Terminal panel: `id` if it still runs
+/// there, else the Worktree's oldest, else a new one (`cols` x `rows`). Its output streams over a
+/// dedicated channel: what it kept first, then what it prints, whatever has arrived sent in one
+/// go. Whatever the slot showed before stops sending there.
 #[tauri::command]
 async fn open_terminal(
+    core: State<'_, Core>,
+    slot: String,
+    worktree: PathBuf,
+    id: Option<TerminalId>,
+    cols: u16,
+    rows: u16,
+    on_output: Channel<Vec<TerminalOutput>>,
+) -> CommandResult<TerminalInfo> {
+    let (info, stream) = core
+        .open_terminal(&slot, &worktree, id, cols, rows)
+        .await
+        .map_err(|e| e.to_string())?;
+    forward_terminal(stream, on_output);
+    Ok(info)
+}
+
+/// Starts another shell in the Worktree and shows it in view slot `slot`'s Terminal panel.
+#[tauri::command]
+async fn new_terminal(
     core: State<'_, Core>,
     slot: String,
     worktree: PathBuf,
     cols: u16,
     rows: u16,
     on_output: Channel<Vec<TerminalOutput>>,
-) -> CommandResult<()> {
-    let mut stream = core
-        .open_terminal(&slot, &worktree, cols, rows)
+) -> CommandResult<TerminalInfo> {
+    let (info, stream) = core
+        .new_terminal(&slot, &worktree, cols, rows)
         .await
         .map_err(|e| e.to_string())?;
+    forward_terminal(stream, on_output);
+    Ok(info)
+}
+
+fn forward_terminal(mut stream: TerminalStream, on_output: Channel<Vec<TerminalOutput>>) {
     tauri::async_runtime::spawn(async move {
         while let Some(first) = stream.next().await {
             let mut batch = vec![first];
@@ -960,23 +990,21 @@ async fn open_terminal(
             }
         }
     });
-    Ok(())
 }
 
 #[tauri::command]
-fn terminal_input(core: State<'_, Core>, worktree: PathBuf, data: String) -> CommandResult<()> {
-    core.terminal_input(&worktree, &data)
-        .map_err(|e| e.to_string())
+fn terminal_input(core: State<'_, Core>, id: TerminalId, data: String) -> CommandResult<()> {
+    core.terminal_input(id, &data).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn resize_terminal(
     core: State<'_, Core>,
-    worktree: PathBuf,
+    id: TerminalId,
     cols: u16,
     rows: u16,
 ) -> CommandResult<()> {
-    core.resize_terminal(&worktree, cols, rows)
+    core.resize_terminal(id, cols, rows)
         .map_err(|e| e.to_string())
 }
 
@@ -986,10 +1014,10 @@ fn hide_terminal(core: State<'_, Core>, slot: String) {
     core.hide_terminal(&slot);
 }
 
-/// Stops the Worktree's shell and everything it started.
+/// Stops a shell and everything it started.
 #[tauri::command]
-async fn close_terminal(core: State<'_, Core>, worktree: PathBuf) -> CommandResult<()> {
-    core.close_terminal(&worktree).await;
+async fn close_terminal(core: State<'_, Core>, id: TerminalId) -> CommandResult<()> {
+    core.close_terminal(id).await;
     Ok(())
 }
 
@@ -1145,7 +1173,9 @@ fn main() {
             pinned_worktrees,
             set_pinned,
             available_commands,
+            terminals,
             open_terminal,
+            new_terminal,
             terminal_input,
             resize_terminal,
             hide_terminal,

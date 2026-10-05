@@ -821,7 +821,9 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .trigger, .tabs-list .trigger { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; height: 26px; padding: 0 10px; background: transparent; border: 0; border-radius: 5px; color: var(--fg-2); font-size: 12px; font-weight: 500; }
 .trigger:hover:not(:disabled) { background: transparent; color: var(--fg-1); }
 .trigger-wrap.on .trigger, .tabs-list .trigger.on { color: var(--fg-1); }
-.tabs-list > .trigger.on { background: var(--bg-4); font-family: var(--mono); }
+.trigger.shell-trigger { font-family: var(--mono); }
+.terminal-cwd .tabs-list { flex: none; max-width: 60%; margin-left: -8px; }
+.terminal-cwd .tabs-list + button.icon { margin-right: 4px; }
 .trigger .lucide { width: 13px; height: 13px; }
 .trigger-wrap .close-tab { min-height: 18px; width: 18px; margin: 0 4px 0 -6px; }
 .trigger .unread { display: inline-flex; align-items: center; height: 14px; padding: 0 5px; border-radius: 999px; background: var(--working); color: #fff; font-size: 10px; font-weight: 600; }

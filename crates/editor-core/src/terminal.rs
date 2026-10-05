@@ -1,12 +1,13 @@
-//! Worktree terminals: one interactive shell per Worktree, in a pseudo-terminal (ConPTY on Windows),
-//! started when the Terminal panel first asks for it. It keeps running out of sight until it exits,
-//! is closed, or its Worktree or Workspace goes. A Terminal panel draws it (xterm.js): the Tabs
-//! view's, or a column's in the Columns view, each a view slot of its own. The core keeps its latest
+//! Worktree terminals: interactive shells in a Worktree's folder, each in a pseudo-terminal (ConPTY
+//! on Windows). The first starts when a Terminal panel first asks for the Worktree's; more when the
+//! panel asks for another. Each keeps running out of sight until it exits, is stopped, or its
+//! Worktree or Workspace goes. A Terminal panel draws one at a time (xterm.js): the Tabs view's, or
+//! a column's in the Columns view, each a view slot of its own. The core keeps each one's latest
 //! output, so a panel can come back to a shell it left.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,6 +17,23 @@ use tokio::sync::{mpsc, watch};
 
 use crate::settings::WindowsShell;
 use crate::setup::{git_bash, on_path, take_text};
+
+/// Numbers each shell, from 0 for the Workspace's first.
+pub type TerminalId = u64;
+
+/// A running shell, for the Terminal panel's tabs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalInfo {
+    pub id: TerminalId,
+    pub worktree: PathBuf,
+    /// What it's running: the command in the foreground where that can be told (Linux), else the
+    /// shell's name (`pwsh`, `bash`…).
+    pub name: String,
+    /// Something other than the shell is in the foreground (Linux only; never on Windows), so
+    /// stopping it would stop that too.
+    pub busy: bool,
+}
 
 /// What the Terminal panel is sent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -45,6 +63,11 @@ impl TerminalStream {
     }
 }
 
+/// A terminal asking where the cursor is (DSR 6), and the answer given when no panel can: the top
+/// left corner.
+const CURSOR_QUERY: &str = "\x1b[6n";
+const CURSOR_ANSWER: &str = "\x1b[1;1R";
+
 /// How much output is kept for the panel coming back.
 const SCROLLBACK: usize = 512 * 1024;
 
@@ -55,8 +78,11 @@ const LINGER: Duration = Duration::from_millis(200);
 const STOP_WAIT: Duration = Duration::from_secs(3);
 
 pub(crate) struct Terminal {
-    /// Tells this shell from a later one in the same Worktree.
-    pub(crate) id: u64,
+    pub(crate) id: TerminalId,
+    /// The Worktree it runs in.
+    pub(crate) worktree: PathBuf,
+    /// The shell's program name, without a path or extension.
+    shell: String,
     /// Taken when the terminal goes, to be closed on a thread of its own: closing a ConPTY can
     /// block for a while.
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
@@ -79,6 +105,10 @@ struct Shared {
     viewers: HashMap<String, mpsc::UnboundedSender<TerminalOutput>>,
     /// How the shell exited, once it has (told again to a panel that comes back after).
     exited: Option<Option<u32>>,
+    /// The core answered a query in the kept output itself, so a panel mustn't again.
+    answered: bool,
+    /// A cursor position query went to a panel that hasn't typed anything since (its answer, say).
+    query_pending: bool,
 }
 
 impl Shared {
@@ -92,7 +122,7 @@ impl Terminal {
     /// Starts `shell` in `cwd` at `cols` × `rows`; `on_exit` runs (on another thread) once it has
     /// exited.
     pub(crate) fn start(
-        id: u64,
+        id: TerminalId,
         mut shell: CommandBuilder,
         cwd: &Path,
         cols: u16,
@@ -102,6 +132,14 @@ impl Terminal {
         let pair = portable_pty::native_pty_system()
             .openpty(size(cols, rows))
             .map_err(|e| format!("couldn't open a pseudo-terminal: {e}"))?;
+        let shell_name = shell
+            .get_argv()
+            .first()
+            .and_then(|program| Path::new(program).file_stem())
+            .map_or_else(
+                || "shell".to_owned(),
+                |stem| stem.to_string_lossy().into_owned(),
+            );
         shell.cwd(cwd);
         if !cfg!(windows) {
             shell.env("TERM", "xterm-256color");
@@ -128,7 +166,21 @@ impl Terminal {
             .map_err(|e| format!("couldn't write to the terminal: {e}"))?;
         let shared = Arc::new(Mutex::new(Shared::default()));
 
+        let (input, keystrokes) = std::sync::mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            for bytes in keystrokes {
+                if writer
+                    .write_all(&bytes)
+                    .and_then(|_| writer.flush())
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
         let output = shared.clone();
+        let answer = input.clone();
         std::thread::spawn(move || {
             let mut buffer = [0u8; 8192];
             let mut pending = vec![];
@@ -142,21 +194,19 @@ impl Terminal {
                     continue;
                 }
                 let mut shared = output.lock().expect("terminal lock");
+                // A cursor position query with no panel to answer it (a shell started, or still
+                // starting, out of sight): ConPTY waits for the answer, so the core gives one. A
+                // panel coming back replays the query and doesn't answer again.
+                if shared.viewers.is_empty() {
+                    for _ in text.matches(CURSOR_QUERY) {
+                        let _ = answer.send(CURSOR_ANSWER.as_bytes().to_vec());
+                        shared.answered = true;
+                    }
+                } else if text.contains(CURSOR_QUERY) {
+                    shared.query_pending = true;
+                }
                 keep_scrollback(&mut shared.output, &text);
                 shared.send(TerminalOutput::Output { text });
-            }
-        });
-
-        let (input, keystrokes) = std::sync::mpsc::channel::<Vec<u8>>();
-        std::thread::spawn(move || {
-            for bytes in keystrokes {
-                if writer
-                    .write_all(&bytes)
-                    .and_then(|_| writer.flush())
-                    .is_err()
-                {
-                    break;
-                }
             }
         });
 
@@ -175,6 +225,8 @@ impl Terminal {
 
         Ok(Arc::new(Self {
             id,
+            worktree: cwd.to_owned(),
+            shell: shell_name,
             master: Mutex::new(Some(pair.master)),
             input,
             killer: Mutex::new(killer),
@@ -185,6 +237,36 @@ impl Terminal {
         }))
     }
 
+    pub(crate) fn info(&self) -> TerminalInfo {
+        let foreground = self.foreground();
+        TerminalInfo {
+            id: self.id,
+            worktree: self.worktree.clone(),
+            busy: foreground.is_some(),
+            name: foreground.unwrap_or_else(|| self.shell.clone()),
+        }
+    }
+
+    /// The command in the shell's foreground, if it isn't the shell itself (Linux: the pty's
+    /// process group leader, by its `/proc` name).
+    #[cfg(unix)]
+    fn foreground(&self) -> Option<String> {
+        let leader = self
+            .master
+            .lock()
+            .expect("terminal lock")
+            .as_ref()?
+            .process_group_leader()?;
+        let name = std::fs::read_to_string(format!("/proc/{leader}/comm")).ok()?;
+        let name = name.trim();
+        (!name.is_empty() && name != self.shell).then(|| name.to_owned())
+    }
+
+    #[cfg(not(unix))]
+    fn foreground(&self) -> Option<String> {
+        None
+    }
+
     /// Shows this terminal in view slot `slot`: its kept output comes first, as a `Replay` if
     /// `returning` (a new shell's first output still wants its queries answered). What the slot
     /// was sent before ends.
@@ -193,7 +275,7 @@ impl Terminal {
         let mut shared = self.shared.lock().expect("terminal lock");
         if !shared.output.is_empty() {
             let text = shared.output.clone();
-            let _ = tx.send(match returning {
+            let _ = tx.send(match returning || shared.answered {
                 true => TerminalOutput::Replay { text },
                 false => TerminalOutput::Output { text },
             });
@@ -206,15 +288,22 @@ impl Terminal {
     }
 
     /// View slot `slot` no longer shows this terminal.
+    /// View slot `slot` no longer shows this terminal. A query it was sent and didn't answer is
+    /// answered by the core when no panel is left to (the panel moved on before it could).
     pub(crate) fn detach(&self, slot: &str) {
-        self.shared
-            .lock()
-            .expect("terminal lock")
-            .viewers
-            .remove(slot);
+        let mut shared = self.shared.lock().expect("terminal lock");
+        if shared.viewers.remove(slot).is_some()
+            && shared.viewers.is_empty()
+            && shared.query_pending
+        {
+            shared.query_pending = false;
+            shared.answered = true;
+            let _ = self.input.send(CURSOR_ANSWER.as_bytes().to_vec());
+        }
     }
 
     pub(crate) fn write(&self, data: &str) {
+        self.shared.lock().expect("terminal lock").query_pending = false;
         let _ = self.input.send(data.as_bytes().to_vec());
     }
 

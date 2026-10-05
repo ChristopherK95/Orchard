@@ -37,7 +37,7 @@ use crate::session::{
 };
 use crate::settings::{self, LoadedSettings, RepoSettings, SettingChange, WindowsShell};
 use crate::setup::{self, SetupInfo, SetupStatus};
-use crate::terminal::{self, Terminal, TerminalStream};
+use crate::terminal::{self, Terminal, TerminalId, TerminalInfo, TerminalStream};
 use crate::worktrees::{self, Discovery, WorktreeInfo};
 
 /// A slash command the Agent offers (one of Claude Code's, a custom command or a skill), from ACP's
@@ -314,7 +314,7 @@ pub enum CoreError {
     SessionWontStop,
     #[error("removing it would lose {0}; choose Discard and remove to go ahead")]
     WouldDiscard(String),
-    #[error("this Worktree has no terminal running")]
+    #[error("that terminal isn't running")]
     NoTerminal,
     #[error("{0}")]
     Terminal(String),
@@ -378,6 +378,11 @@ pub enum CoreEvent {
     AvailableCommandsChanged {
         session_id: SessionId,
         commands: Vec<SlashCommand>,
+    },
+    /// A shell started or went (exited, was stopped, or its Worktree or Workspace went): every
+    /// Worktree's running shells, oldest first.
+    TerminalsChanged {
+        terminals: Vec<TerminalInfo>,
     },
     /// The Worktree list or a Worktree's branch/status changed.
     WorktreesChanged {
@@ -540,8 +545,8 @@ struct Inner {
     documents: Mutex<DocumentTracker>,
     /// The installed fonts, once they've been looked for.
     fonts: tokio::sync::OnceCell<Vec<crate::fonts::FontFamily>>,
-    /// Each Worktree's terminal, by Worktree path, while its shell runs.
-    terminals: Mutex<HashMap<PathBuf, Arc<Terminal>>>,
+    /// The running shells, by id (a Worktree can have several).
+    terminals: Mutex<HashMap<TerminalId, Arc<Terminal>>>,
     /// Numbers each terminal (`Terminal::id`).
     next_terminal: AtomicU64,
 }
@@ -1126,6 +1131,7 @@ impl Core {
             .clear();
         self.inner.actors.lock().expect("actors lock").clear(); // dropping one stops it
         self.inner.terminals.lock().expect("terminals lock").clear(); // (as does dropping a terminal)
+        self.inner.terminals_changed();
         self.inner.status_due.lock().expect("status lock").clear();
         *self
             .inner
@@ -1365,31 +1371,81 @@ impl Core {
         self.inner.refresh_worktrees().await;
     }
 
-    /// The Worktree's terminal for the Terminal panel in view slot `slot` (the Tabs view's, or a
-    /// column's), started at `cols` x `rows` in the repo's shell if it has none: its kept output
-    /// comes first, then what it prints from now on. The terminal the slot showed before stops
-    /// sending there (it keeps running).
+    /// Every running shell, oldest first.
+    pub fn terminals(&self) -> Vec<TerminalInfo> {
+        self.inner.terminal_list()
+    }
+
+    /// A shell of the Worktree for the Terminal panel in view slot `slot` (the Tabs view's, or a
+    /// column's): `id` if it's still running there, else the Worktree's oldest, else a new one
+    /// started at `cols` x `rows` in the repo's shell. Its kept output comes first, then what it
+    /// prints from now on. Whatever the slot showed before stops sending there (it keeps running).
     pub async fn open_terminal(
         &self,
         slot: &str,
         worktree: &Path,
+        id: Option<TerminalId>,
         cols: u16,
         rows: u16,
-    ) -> Result<TerminalStream, CoreError> {
+    ) -> Result<(TerminalInfo, TerminalStream), CoreError> {
         let worktree = worktrees::normalize(worktree.to_owned());
-        let (terminal, returning) = match self.terminal(&worktree) {
+        let existing = {
+            let terminals = self.inner.terminals.lock().expect("terminals lock");
+            id.and_then(|id| {
+                terminals
+                    .get(&id)
+                    .filter(|t| t.worktree == worktree)
+                    .cloned()
+            })
+            .or_else(|| {
+                terminals
+                    .values()
+                    .filter(|t| t.worktree == worktree)
+                    .min_by_key(|t| t.id)
+                    .cloned()
+            })
+        };
+        let (terminal, returning) = match existing {
             Some(terminal) => {
                 terminal.resize(cols, rows).map_err(CoreError::Terminal)?;
                 (terminal, true)
             }
             None => (self.start_terminal(&worktree, cols, rows).await?, false),
         };
-        for (path, other) in self.inner.terminals.lock().expect("terminals lock").iter() {
-            if *path != worktree {
+        Ok(self.show_terminal(slot, &terminal, returning))
+    }
+
+    /// Starts another shell in the Worktree and shows it in view slot `slot`'s Terminal panel.
+    pub async fn new_terminal(
+        &self,
+        slot: &str,
+        worktree: &Path,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(TerminalInfo, TerminalStream), CoreError> {
+        let worktree = worktrees::normalize(worktree.to_owned());
+        let terminal = self.start_terminal(&worktree, cols, rows).await?;
+        Ok(self.show_terminal(slot, &terminal, false))
+    }
+
+    fn show_terminal(
+        &self,
+        slot: &str,
+        terminal: &Arc<Terminal>,
+        returning: bool,
+    ) -> (TerminalInfo, TerminalStream) {
+        for other in self
+            .inner
+            .terminals
+            .lock()
+            .expect("terminals lock")
+            .values()
+        {
+            if other.id != terminal.id {
                 other.detach(slot);
             }
         }
-        Ok(terminal.attach(slot, returning))
+        (terminal.info(), terminal.attach(slot, returning))
     }
 
     async fn start_terminal(
@@ -1415,38 +1471,41 @@ impl Core {
         let shell = terminal::shell(self.repo_shell(&root).await)
             .await
             .map_err(CoreError::Terminal)?;
-        let mut terminals = self.inner.terminals.lock().expect("terminals lock");
-        if let Some(terminal) = terminals.get(worktree) {
-            return Ok(terminal.clone()); // (started meanwhile, by another call)
-        }
         let id = self.inner.next_terminal.fetch_add(1, Ordering::Relaxed);
         let weak = Arc::downgrade(&self.inner);
-        let path = worktree.to_owned();
         let terminal = Terminal::start(id, shell, worktree, cols, rows, move || {
             // An exited shell goes; the panel asking again starts another.
             if let Some(inner) = weak.upgrade() {
-                let mut terminals = inner.terminals.lock().expect("terminals lock");
-                if terminals.get(&path).is_some_and(|t| t.id == id) {
-                    terminals.remove(&path);
+                let gone = inner
+                    .terminals
+                    .lock()
+                    .expect("terminals lock")
+                    .remove(&id)
+                    .is_some();
+                if gone {
+                    inner.terminals_changed();
                 }
             }
         })
         .map_err(CoreError::Terminal)?;
-        terminals.insert(worktree.to_owned(), terminal.clone());
+        self.inner
+            .terminals
+            .lock()
+            .expect("terminals lock")
+            .insert(id, terminal.clone());
+        self.inner.terminals_changed();
         Ok(terminal)
     }
 
-    /// Types `data` (keystrokes or a paste) into the Worktree's terminal.
-    pub fn terminal_input(&self, worktree: &Path, data: &str) -> Result<(), CoreError> {
-        self.terminal(worktree)
-            .ok_or(CoreError::NoTerminal)?
-            .write(data);
+    /// Types `data` (keystrokes or a paste) into a shell.
+    pub fn terminal_input(&self, id: TerminalId, data: &str) -> Result<(), CoreError> {
+        self.terminal(id).ok_or(CoreError::NoTerminal)?.write(data);
         Ok(())
     }
 
     /// The Terminal panel's new size, in characters.
-    pub fn resize_terminal(&self, worktree: &Path, cols: u16, rows: u16) -> Result<(), CoreError> {
-        self.terminal(worktree)
+    pub fn resize_terminal(&self, id: TerminalId, cols: u16, rows: u16) -> Result<(), CoreError> {
+        self.terminal(id)
             .ok_or(CoreError::NoTerminal)?
             .resize(cols, rows)
             .map_err(CoreError::Terminal)
@@ -1466,27 +1525,49 @@ impl Core {
         }
     }
 
-    /// Stops the Worktree's shell and everything it started.
-    pub async fn close_terminal(&self, worktree: &Path) {
-        let worktree = worktrees::normalize(worktree.to_owned());
+    /// Stops a shell and everything it started.
+    pub async fn close_terminal(&self, id: TerminalId) {
         let terminal = self
             .inner
             .terminals
             .lock()
             .expect("terminals lock")
-            .remove(&worktree);
+            .remove(&id);
         if let Some(terminal) = terminal {
+            self.inner.terminals_changed();
             terminal.stop().await;
         }
     }
 
-    fn terminal(&self, worktree: &Path) -> Option<Arc<Terminal>> {
+    /// Stops every shell of the Worktree.
+    async fn close_terminals_in(&self, worktree: &Path) {
         let worktree = worktrees::normalize(worktree.to_owned());
+        let stopping: Vec<Arc<Terminal>> = {
+            let mut terminals = self.inner.terminals.lock().expect("terminals lock");
+            let ids: Vec<TerminalId> = terminals
+                .values()
+                .filter(|t| t.worktree == worktree)
+                .map(|t| t.id)
+                .collect();
+            ids.iter().filter_map(|id| terminals.remove(id)).collect()
+        };
+        if stopping.is_empty() {
+            return;
+        }
+        self.inner.terminals_changed();
+        let mut stops = tokio::task::JoinSet::new();
+        for terminal in stopping {
+            stops.spawn(async move { terminal.stop().await });
+        }
+        while stops.join_next().await.is_some() {}
+    }
+
+    fn terminal(&self, id: TerminalId) -> Option<Arc<Terminal>> {
         self.inner
             .terminals
             .lock()
             .expect("terminals lock")
-            .get(&worktree)
+            .get(&id)
             .cloned()
     }
 
@@ -1611,8 +1692,8 @@ impl Core {
         options: &RemoveWorktree,
     ) -> Result<RemovedWorktree, CoreError> {
         self.stop_setup(&info.path).await;
-        // Its shell stands in the folder (on Windows, enough to stop it being deleted).
-        self.close_terminal(&info.path).await;
+        // Its shells stand in the folder (on Windows, enough to stop it being deleted).
+        self.close_terminals_in(&info.path).await;
         for session in self.sessions_in(&info.path) {
             self.close_session(session).await?;
         }
@@ -3289,6 +3370,25 @@ impl Core {
 }
 
 impl Inner {
+    /// Every running shell, oldest first.
+    fn terminal_list(&self) -> Vec<TerminalInfo> {
+        let mut list: Vec<TerminalInfo> = self
+            .terminals
+            .lock()
+            .expect("terminals lock")
+            .values()
+            .map(|t| t.info())
+            .collect();
+        list.sort_by_key(|t| t.id);
+        list
+    }
+
+    fn terminals_changed(&self) {
+        let _ = self.events.send(CoreEvent::TerminalsChanged {
+            terminals: self.terminal_list(),
+        });
+    }
+
     /// Drops a closed session from the editor and ends its Tab's stream. The saved Tabs no longer
     /// list it by the time `SessionClosed` goes out.
     fn forget_session(self: &Arc<Self>, session: &Arc<Session>) {
@@ -4229,12 +4329,16 @@ impl Inner {
                 });
             }
             drop(state);
-            // A removed Worktree's shell has nowhere to be (a failed listing keeps them).
+            // A removed Worktree's shells have nowhere to be (a failed listing keeps them).
             if !listed.is_empty() {
-                self.terminals
-                    .lock()
-                    .expect("terminals lock")
-                    .retain(|path, _| listed.iter().any(|w| &w.path == path));
+                let mut terminals = self.terminals.lock().expect("terminals lock");
+                let before = terminals.len();
+                terminals.retain(|_, t| listed.iter().any(|w| w.path == t.worktree));
+                let changed = terminals.len() != before;
+                drop(terminals);
+                if changed {
+                    self.terminals_changed();
+                }
             }
             let _ = self
                 .events

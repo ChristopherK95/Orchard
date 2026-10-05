@@ -35,7 +35,7 @@ import { ContextStrip, removedWorktree, Sidebar, worktreeColour, worktreeLabel, 
 import { notify, onNotificationClicked } from "./notify";
 import { keepOutput, Setup, type SetupView } from "./Setup";
 import { StateBadge } from "./StateDot";
-import { shellRunning } from "./shells";
+import { setShells, shellRunning } from "./shells";
 import { Banner, Composer, FindOtherConversations, OtherConversations, RecentList } from "./Chat";
 import { Columns, COLUMNS_MIN_WIDTH } from "./Columns";
 import { createTabView, type TabView } from "./TabView";
@@ -534,6 +534,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
 
   let sawWorktreesEvent = false;
   let sawSettingsEvent = false;
+  let sawTerminalsEvent = false;
   // Solid only ties an onCleanup to this view if it's registered before anything is awaited, and
   // the listeners below arrive after awaits: this one cleanup removes them all. Without it, a
   // Workspace switched away from would keep handling events (and hide the new view's Tab).
@@ -554,6 +555,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         // The active Worktree was removed: fall back to the main checkout.
         const active = activeWorktree();
         if (!event.worktrees.some((w) => w.path === active) && sessionsIn(active).length === 0) selectWorktree(props.workspace.root);
+      } else if (event.kind === "terminalsChanged") {
+        sawTerminalsEvent = true;
+        setShells(event.terminals);
       } else if (event.kind === "sessionClosed") {
         // Closed (its × or a middle-click, or its Worktree is being removed): its Tab goes.
         const id = event.sessionId;
@@ -688,6 +692,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     const onFocus = () => void core.windowFocused().catch(() => {});
     window.addEventListener("focus", onFocus);
     untilGone(() => window.removeEventListener("focus", onFocus));
+    // Shells started before this view (the webview reloaded, say); events since then win.
+    void core.terminals().then((list) => !sawTerminalsEvent && setShells(list), () => {});
     const loaded = await core.settings();
     if (disposed) return;
     if (!sawSettingsEvent) setSettings(loaded);

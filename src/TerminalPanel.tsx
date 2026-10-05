@@ -1,18 +1,22 @@
-// The Terminal panel: a Worktree's shell, docked beside the transcript in the Tabs view (following
-// the active Worktree) or filling a column in the Columns view, as its Terminal tab. The core runs one shell per
-// Worktree, which keeps running out of sight; a panel comes back to what its shell printed. Each
-// panel is a view slot of its own, so the columns' terminals stream side by side. xterm.js draws.
+// The Terminal panel: a Worktree's shells, docked beside the transcript in the Tabs view (following
+// the active Worktree) or filling a column in the Columns view, as its Terminal tab. A Worktree can
+// have several shells (ticket 35), one tab each; the panel shows one at a time. They keep running
+// out of sight, and a panel comes back to what a shell printed. Each panel is a view slot of its
+// own, so the columns' terminals stream side by side. xterm.js draws.
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { createEffect, createSignal, getOwner, on, onCleanup, onMount, runWithOwner, Show } from "solid-js";
-import { core, type TerminalOutput } from "./core";
-import { Eraser, Folder, GitBranch, Maximize2, Minimize2, SquareTerminal, Trash2, X } from "./icons";
-import { setShellRunning } from "./shells";
+import { createEffect, createSignal, For, getOwner, on, onCleanup, onMount, runWithOwner, Show } from "solid-js";
+import { core, type TerminalInfo, type TerminalOutput } from "./core";
+import { Eraser, Folder, GitBranch, Maximize2, Minimize2, Plus, SquareTerminal, Trash2, X } from "./icons";
+import { refreshShells, shellsIn } from "./shells";
 
 /** The panel's smallest width, and the least it leaves the transcript beside it. */
 const MIN_WIDTH = 280;
 const MIN_LEFT = 420;
+
+/** The shell each panel last showed, by view slot and Worktree (so switching back returns to it). */
+const lastShown = new Map<string, number>();
 
 export function TerminalPanel(props: {
   /** Its view slot: the Tabs view's, or its column's. */
@@ -34,6 +38,11 @@ export function TerminalPanel(props: {
 }) {
   let body!: HTMLDivElement;
   let clear = () => {};
+  /** Shows one of the Worktree's shells (null: the one it last showed, else its oldest, else a new
+   *  one), or a new one. */
+  let showShell = (_which: number | null | "new") => {};
+  /** The shell on screen. */
+  const [current, setCurrent] = createSignal<number | null>(null);
   const [exited, setExited] = createSignal(false);
   const [error, setError] = createSignal("");
   const [dragging, setDragging] = createSignal(false);
@@ -87,9 +96,10 @@ export function TerminalPanel(props: {
     let showing = 0;
     /** Replayed output being written: what xterm answers to queries in it isn't typed. */
     let replaying = 0;
-    const show = (path: string) => {
+    const show = (path: string, which: number | null | "new") => {
       const mine = ++showing;
       shown = path;
+      setCurrent(null);
       setExited(false);
       setError("");
       term.reset();
@@ -103,28 +113,51 @@ export function TerminalPanel(props: {
           } else if (out.kind === "output") term.write(out.text);
           else {
             setExited(true);
-            setShellRunning(path, false);
             const code = out.code === null ? "" : ` with code ${out.code}`;
             term.write(`\r\n\x1b[2m[The shell exited${code}. Press Enter for a new one.]\x1b[0m\r\n`);
           }
         }
       };
-      core
-        .openTerminal(props.slot, path, term.cols, term.rows, onOutput)
-        .then(() => mine === showing && !exited() && setShellRunning(path, true))
+      const key = `${props.slot}\n${path}`;
+      const opening =
+        which === "new"
+          ? core.newTerminal(props.slot, path, term.cols, term.rows, onOutput)
+          : core.openTerminal(props.slot, path, which ?? lastShown.get(key) ?? null, term.cols, term.rows, onOutput);
+      opening
+        .then((info: TerminalInfo) => {
+          if (mine !== showing) return;
+          setCurrent(info.id);
+          lastShown.set(key, info.id);
+        })
         .catch((err) => mine === showing && setError(String(err)));
       if (props.takeFocus) term.focus();
     };
-    createEffect(on(() => props.worktree, show));
+    showShell = (which) => shown !== null && show(shown, which);
+    createEffect(on(() => props.worktree, (path) => show(path, null)));
 
+    /** After Enter, what runs in the foreground may have changed (the tabs' names). */
+    let renamed = 0;
     const type = (data: string) => {
+      const id = current();
       if (replaying > 0 || shown === null) return;
-      if (!exited()) void core.terminalInput(shown, data).catch(() => {});
-      else if (data === "\r") show(shown);
+      if (exited()) {
+        if (data === "\r") show(shown, "new");
+        return;
+      }
+      if (id === null) return;
+      void core.terminalInput(id, data).catch(() => {});
+      if (data.includes("\r") || data === "\x03") {
+        clearTimeout(renamed);
+        renamed = window.setTimeout(refreshShells, 600);
+      }
     };
+    onCleanup(() => clearTimeout(renamed));
     term.onData(type);
     term.onBinary(type);
-    term.onResize(({ cols, rows }) => shown !== null && !exited() && void core.resizeTerminal(shown, cols, rows).catch(() => {}));
+    term.onResize(({ cols, rows }) => {
+      const id = current();
+      if (id !== null && !exited()) void core.resizeTerminal(id, cols, rows).catch(() => {});
+    });
     let frame = 0;
     const observer = new ResizeObserver(() => {
       cancelAnimationFrame(frame);
@@ -173,11 +206,48 @@ export function TerminalPanel(props: {
     handle.addEventListener("pointerup", up);
   };
 
-  const stop = () =>
-    core
-      .closeTerminal(props.worktree)
-      .then(() => setShellRunning(props.worktree, false))
+  const shells = () => shellsIn(props.worktree);
+  /** Stops a shell, asking first if something other than the shell runs in it. */
+  const stop = (shell: TerminalInfo | undefined) => {
+    if (!shell) return;
+    if (shell.busy && !window.confirm(`Stop ${shell.name}? It's still running in this shell.`)) return;
+    // The one on screen: on to another of the Worktree's, if it has one.
+    const next = shell.id === current() ? shells().find((t) => t.id !== shell.id) : undefined;
+    void core
+      .closeTerminal(shell.id)
+      .then(() => next && showShell(next.id))
       .catch((err) => setError(String(err)));
+  };
+  /** The shell tabs and +: in the panel's header beside the transcript, in the cwd strip in a column. */
+  const tabs = () => (
+    <>
+      <div class="tabs-list">
+        <For each={shells()}>
+          {(shell) => (
+            <span class="trigger-wrap" classList={{ on: shell.id === current() }}>
+              <button
+                class="trigger shell-trigger"
+                onClick={() => shell.id !== current() && showShell(shell.id)}
+                onAuxClick={(e) => e.button === 1 && stop(shell)}
+                title={`${shell.name} (middle-click stops it)`}
+              >
+                <SquareTerminal />
+                {shell.name}
+              </button>
+              <Show when={shells().length > 1}>
+                <button class="close-tab" aria-label={`Stop ${shell.name}`} title="Stop this shell and everything it started" onClick={() => stop(shell)}>
+                  <X />
+                </button>
+              </Show>
+            </span>
+          )}
+        </For>
+      </div>
+      <button class="ghost icon" onClick={() => showShell("new")} title="Another shell in this Worktree" aria-label="New shell">
+        <Plus />
+      </button>
+    </>
+  );
   const side = () => props.placement === "side";
 
   return (
@@ -193,12 +263,7 @@ export function TerminalPanel(props: {
       </Show>
       <Show when={side()}>
         <div class="terminal-head">
-          <div class="tabs-list">
-            <span class="trigger on">
-              <SquareTerminal />
-              Terminal
-            </span>
-          </div>
+          {tabs()}
           <span class="grow" />
           <button
             class="ghost icon"
@@ -214,6 +279,7 @@ export function TerminalPanel(props: {
         </div>
       </Show>
       <div class="terminal-cwd">
+        <Show when={!side() && shells().length > 1}>{tabs()}</Show>
         <Show when={side()} fallback={<Folder />}>
           <GitBranch class="wt-glyph" />
           <span class="branch">{props.label}</span>
@@ -222,10 +288,21 @@ export function TerminalPanel(props: {
           {props.worktree}
         </span>
         <span class="grow" />
+        <Show when={!side() && shells().length <= 1}>
+          <button class="ghost icon" onClick={() => showShell("new")} title="Another shell in this Worktree" aria-label="New shell">
+            <Plus />
+          </button>
+        </Show>
         <button class="ghost icon" onClick={() => clear()} title="Clear the screen" aria-label="Clear the screen">
           <Eraser />
         </button>
-        <button class="ghost icon" onClick={() => void stop()} disabled={exited()} title="Stop this shell and everything it started" aria-label="Stop the shell">
+        <button
+          class="ghost icon"
+          onClick={() => stop(shells().find((t) => t.id === current()))}
+          disabled={exited() || current() === null}
+          title="Stop this shell and everything it started"
+          aria-label="Stop the shell"
+        >
           <Trash2 />
         </button>
       </div>
