@@ -214,10 +214,15 @@ async fn removing_a_worktree_stops_every_shell_standing_in_it() {
         .worktree
         .path;
 
-    let (main_shell, _main_stream) = core
+    let (main_shell, mut main_stream) = core
         .open_terminal("column:main", &root, None, 80, 24)
         .await
         .unwrap();
+    // Answered as it starts, as every shell here is: an OpenConsole left waiting for its cursor
+    // position outlives the test.
+    core.terminal_input(main_shell.id, print_marker_and_folder())
+        .unwrap();
+    output_until(&core, main_shell.id, &mut main_stream, "[Orchard]").await;
     let (one, mut stream) = core
         .open_terminal(TABS_SLOT, &path, None, 80, 24)
         .await
