@@ -143,6 +143,29 @@ fn refuse_loss(check: &RemovalCheck, options: &RemoveWorktree) -> Result<(), Cor
     }
 }
 
+/// The diff of one file between two of its versions (git's bytes, None where it isn't there).
+/// `change` says which side has no file, so a missing side there is empty rather than an error.
+fn text_diff(
+    path: &str,
+    before: Option<Vec<u8>>,
+    after: Option<Vec<u8>>,
+    change: ChangeKind,
+) -> Result<Vec<crate::session::DiffLine>, CoreError> {
+    let side = |bytes: Option<Vec<u8>>, absent: bool| match (bytes, absent) {
+        (None, true) => Ok(String::new()),
+        (None, false) => Err(format!("{path} has no text to compare here (a submodule?)")),
+        (Some(bytes), _) => documents::decode_text(bytes)
+            .ok_or_else(|| format!("{path} isn't text, so there's no diff to show")),
+    };
+    let before = side(before, change == ChangeKind::Added).map_err(CoreError::File)?;
+    let after = side(after, change == ChangeKind::Deleted).map_err(CoreError::File)?;
+    Ok(crate::diff::unified_diff(
+        &before,
+        &after,
+        MAX_VIEW_DIFF_LINES,
+    ))
+}
+
 /// Whether a failed delete looks like Windows' "in use by another process" (worth retrying), not a
 /// refusal that will stay one.
 fn in_use(err: &str) -> bool {
@@ -2373,21 +2396,47 @@ impl Core {
         change: ChangeKind,
     ) -> Result<Vec<crate::session::DiffLine>, CoreError> {
         let worktree = self.known_worktree(worktree)?;
-        let side = |bytes: Option<Vec<u8>>, absent: bool| match (bytes, absent) {
-            (None, true) => Ok(String::new()),
-            (None, false) => Err(format!("{path} has no text to compare here (a submodule?)")),
-            (Some(bytes), _) => documents::decode_text(bytes)
-                .ok_or_else(|| format!("{path} isn't text, so there's no diff to show")),
-        };
         let before = git::file_at(&worktree, split, renamed_from.unwrap_or(path)).await;
         let after = git::file_at(&worktree, "HEAD", path).await;
-        let before = side(before, change == ChangeKind::Added).map_err(CoreError::File)?;
-        let after = side(after, change == ChangeKind::Deleted).map_err(CoreError::File)?;
-        Ok(crate::diff::unified_diff(
-            &before,
-            &after,
-            MAX_VIEW_DIFF_LINES,
-        ))
+        text_diff(path, before, after, change)
+    }
+
+    /// One file's working change, as the Git drawer lists it: a staged one from HEAD (under
+    /// `renamed_from`, for a rename) to the index; an unstaged one from the index to the file on
+    /// disk. `change` says which side has no file.
+    pub async fn diff_working(
+        &self,
+        worktree: &Path,
+        path: &str,
+        renamed_from: Option<&str>,
+        change: ChangeKind,
+        staged: bool,
+    ) -> Result<Vec<crate::session::DiffLine>, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let relative = Path::new(path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(CoreError::File(format!("{path} isn't in the Worktree")));
+        }
+        let (before, after) = if staged {
+            (
+                git::file_at(&worktree, "HEAD", renamed_from.unwrap_or(path)).await,
+                git::file_at(&worktree, "", path).await,
+            )
+        } else {
+            let on_disk = worktree.join(relative);
+            (
+                git::file_at(&worktree, "", path).await,
+                tokio::task::spawn_blocking(move || std::fs::read(on_disk))
+                    .await
+                    .ok()
+                    .and_then(Result::ok),
+            )
+        };
+        text_diff(path, before, after, change)
     }
 
     /// The Worktree's Base: the one set for it (or that it was created from in the editor), else

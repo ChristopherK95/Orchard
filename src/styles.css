@@ -919,7 +919,10 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .diff-head button { min-height: 26px; padding: 0 10px; font-size: 12px; }
 .diff.diff-view { flex: 1; min-height: 0; max-height: none; overflow: auto; border: 0; border-radius: 0; font-size: 12.5px; }
 .diff.side-by-side { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-content: start; }
-.diff.side-by-side .line { white-space: pre-wrap; overflow-wrap: anywhere; }
+.diff.diff-view .line { padding-left: 0; }
+.diff.diff-view .hunk { background: color-mix(in srgb, var(--hunk) 10%, transparent); }
+/* (Each side a grid, so a wrapped line stays right of its number.) */
+.diff.side-by-side .line { display: grid; grid-template-columns: auto auto minmax(0, 1fr); white-space: pre-wrap; overflow-wrap: anywhere; }
 .diff.side-by-side .line:nth-child(odd of :not(.wide)) { border-right: 1px solid var(--line); }
 .diff .line.wide { grid-column: 1 / -1; }
 .diff .line.empty { background: color-mix(in srgb, var(--line) 25%, transparent); }

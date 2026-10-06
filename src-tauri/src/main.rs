@@ -897,6 +897,27 @@ async fn diff_vs_base(
     .map_err(|e| e.to_string())
 }
 
+/// One file's working change: staged (HEAD to the index) or not (the index to the file on disk).
+#[tauri::command]
+async fn diff_working(
+    core: State<'_, Core>,
+    worktree: String,
+    path: String,
+    renamed_from: Option<String>,
+    change: editor_core::ChangeKind,
+    staged: bool,
+) -> CommandResult<Vec<editor_core::DiffLine>> {
+    core.diff_working(
+        worktree.as_ref(),
+        &path,
+        renamed_from.as_deref(),
+        change,
+        staged,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// Aborts the merge, rebase, cherry-pick or revert in progress.
 #[tauri::command]
 async fn abort_operation(core: State<'_, Core>, worktree: String) -> CommandResult<()> {
@@ -1273,6 +1294,7 @@ fn main() {
             changes_vs_base,
             set_base,
             diff_vs_base,
+            diff_working,
             set_permission_mode,
             transcript_page_before,
             notify_session,

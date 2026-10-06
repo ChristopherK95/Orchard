@@ -40,15 +40,17 @@ export type OpenRequest =
   | { kind: "file"; path: string }
   | { kind: "snippet"; code: string; label: string }
   | { kind: "poppedOut"; file: PoppedOutFile }
-  /** A read-only diff to review (ticket 21): one tab per `key` (Worktree, file and split); `name`
-   *  is the file relative to its Worktree; `path`, if the file is there, is what "Edit file" opens. */
+  /** A read-only diff to review (ticket 21: vs the Base; or a staged or unstaged change): one tab
+   *  per `key` (Worktree, file and which change); `name` is the file relative to its Worktree;
+   *  `path`, if the file is there, is what "Edit file" opens; `before` and `after` name the sides. */
   | {
       kind: "diff";
       key: string;
       title: string;
       name: string;
       path: string | null;
-      base: string;
+      before: string;
+      after: string;
       renamedFrom: string | null;
       lines: DiffLine[];
     }
@@ -796,11 +798,12 @@ export function ManualEditor(props: {
           <DiffPanel
             legend={
               <>
-                <span class="removed-key">− where it split from {review().base}</span> · <span class="added-key">+ on this branch</span>
+                <span class="removed-key">− {review().before}</span> · <span class="added-key">+ {review().after}</span>
               </>
             }
             lines={review().lines}
             language={languageOfPath(review().name)}
+            empty="No differences in the text."
             sideBySide={sideBySide()}
             onSideBySide={setSideBySide}
             note={
@@ -808,7 +811,7 @@ export function ManualEditor(props: {
                 ? `Renamed from ${review().renamedFrom}${review().lines.length === 0 ? ", with no changes." : "."}`
                 : null
             }
-            editTitle={review().path ? "Open the file itself (as it is now, uncommitted changes and all)" : "It's deleted on this branch"}
+            editTitle={review().path ? "Open the file itself (as it is now, uncommitted changes and all)" : "It's deleted"}
             editDisabled={!review().path}
             onEdit={() => review().path && void openFile(review().path!)}
           />

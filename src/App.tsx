@@ -1258,11 +1258,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onOpenDiff={(diff) =>
             openInEditor({
               kind: "diff",
-              key: [diff.worktree, diff.file.path, diff.split].join("\n"),
-              title: `${diff.file.path.split("/").pop()} vs ${diff.base}`,
+              key: diff.key,
+              title: diff.title,
               name: diff.file.path,
               path: diff.file.change === "deleted" ? null : worktreePath(diff.file.path, diff.worktree),
-              base: diff.base,
+              before: diff.before,
+              after: diff.after,
               renamedFrom: diff.file.renamedFrom,
               lines: diff.lines,
             })

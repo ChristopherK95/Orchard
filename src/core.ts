@@ -657,6 +657,9 @@ export const core = {
   /** One file's change since the split (as the list gave it). */
   diffVsBase: (worktree: string, split: string, file: BaseChange) =>
     invoke<DiffLine[]>("diff_vs_base", { worktree, split, path: file.path, renamedFrom: file.renamedFrom, change: file.change }),
+  /** One file's working change: staged (HEAD to the index) or not (the index to the file on disk). */
+  diffWorking: (worktree: string, file: BaseChange, staged: boolean) =>
+    invoke<DiffLine[]>("diff_working", { worktree, path: file.path, renamedFrom: file.renamedFrom, change: file.change, staged }),
   /** Aborts the merge, rebase, cherry-pick or revert in progress. */
   abortOperation: (worktree: string) => invoke<void>("abort_operation", { worktree }),
   /** Throws away every change to the file (ask first). */

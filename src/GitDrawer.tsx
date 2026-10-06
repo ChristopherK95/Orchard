@@ -43,8 +43,9 @@ export function GitDrawer(props: {
   onOpenFile: (path: string) => void;
   onGoToWorktree: (path: string) => void;
   onNewWorktreeFrom: (branch: string) => void;
-  /** A file's change vs the Base, to show in the Manual editor. */
-  onOpenDiff: (diff: { worktree: string; file: BaseChange; base: string; split: string; lines: DiffLine[] }) => void;
+  /** A file's change (vs the Base, or a working one), to show in the Manual editor: one tab per
+   *  `key`; `before` and `after` say what the two sides are. */
+  onOpenDiff: (diff: { worktree: string; file: BaseChange; key: string; title: string; before: string; after: string; lines: DiffLine[] }) => void;
   label: string;
   colour: string;
   pin?: DrawerPin;
@@ -144,7 +145,16 @@ export function GitDrawer(props: {
     if (!list) return;
     try {
       const lines = await core.diffVsBase(worktree, list.split, file);
-      if (worktree === props.worktree) props.onOpenDiff({ worktree, file, base: list.base, split: list.split, lines });
+      if (worktree === props.worktree)
+        props.onOpenDiff({
+          worktree,
+          file,
+          key: [worktree, file.path, list.split].join("\n"),
+          title: `${splitPath(file.path).name} vs ${list.base}`,
+          before: `where it split from ${list.base}`,
+          after: "on this branch",
+          lines,
+        });
     } catch (err) {
       if (worktree === props.worktree) setChangesError(String(err));
     }
@@ -245,6 +255,35 @@ export function GitDrawer(props: {
     }, true);
 
 
+  /** A staged change (HEAD to the index) or an unstaged one (the index to the file on disk). */
+  const openWorkingDiff = async (file: GitFile, side: "staged" | "unstaged") => {
+    const worktree = props.worktree;
+    const staged = side === "staged";
+    const letter = staged ? file.staged! : file.unstaged!;
+    const change: BaseChange = {
+      path: file.path,
+      change: letter === "?" || letter === "A" ? "added" : letter === "D" ? "deleted" : letter === "R" ? "renamed" : "modified",
+      // (A rename is staged: the unstaged side is the renamed file against its staged self.)
+      renamedFrom: staged ? file.renamedFrom : null,
+    };
+    try {
+      const lines = await core.diffWorking(worktree, change, staged);
+      if (worktree === props.worktree)
+        props.onOpenDiff({
+          worktree,
+          // (Deleted on disk: there's no file for "Edit file" to open.)
+          file: { ...change, change: deleted(file) ? "deleted" : change.change },
+          key: [worktree, file.path, side].join("\n"),
+          title: `${splitPath(file.path).name} (${side})`,
+          before: staged || !file.staged ? "last commit" : "staged",
+          after: staged ? "staged" : "on disk",
+          lines,
+        });
+    } catch (err) {
+      if (worktree === props.worktree) setError(String(err));
+    }
+  };
+
   const canCommit = () => !busy() && (amend() || (staged().length > 0 && message().trim() !== ""));
   const deleted = (file: GitFile) => file.staged === "D" || file.unstaged === "D";
 
@@ -254,11 +293,11 @@ export function GitDrawer(props: {
     return (
       <div class="git-file">
         <span class={`change change-${LETTER_KIND[letter] ?? "modified"}`}>{letter === "?" ? "U" : letter}</span>
+        {/* (A conflicted file opens as itself, to be resolved; any other shows its diff.) */}
         <button
           class="tree-name"
-          disabled={deleted(file)}
-          onClick={() => props.onOpenFile(file.path)}
-          title={deleted(file) ? `${file.path} (deleted)` : file.renamedFrom ? `${file.renamedFrom} → ${file.path}` : file.path}
+          onClick={() => (file.conflicted ? props.onOpenFile(file.path) : void openWorkingDiff(file, side))}
+          title={`${file.renamedFrom && side === "staged" ? `${file.renamedFrom} → ` : ""}${file.path}${deleted(file) ? " (deleted)" : ""}${file.conflicted ? "" : ": see the diff"}`}
         >
           {name}
           <span class="dir">{dir}</span>
