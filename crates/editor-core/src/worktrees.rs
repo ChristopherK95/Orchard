@@ -103,8 +103,10 @@ impl Discovery {
         let filter_dir = worktrees_dir.clone();
         let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
             // Only `worktrees/` itself or its entries: index/HEAD writes in `.git` are noise.
-            let touches_worktrees =
-                event.is_ok_and(|e| e.paths.iter().any(|p| p.starts_with(&filter_dir)));
+            // (Listing them, as `git worktree list` does, is no change.)
+            let touches_worktrees = event.is_ok_and(|e| {
+                crate::files::is_change(&e) && e.paths.iter().any(|p| p.starts_with(&filter_dir))
+            });
             if touches_worktrees {
                 let _ = tx.send(());
             }

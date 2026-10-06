@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
-use notify::event::{EventKind, ModifyKind};
+use notify::event::{AccessKind, AccessMode, EventKind, ModifyKind};
 use notify::{RecursiveMode, Watcher};
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -729,6 +729,12 @@ async fn changed_files(root: &Path) -> BTreeMap<String, String> {
         .collect()
 }
 
+/// Whether a watcher's event is a change. Opening or reading a file (or listing a folder) isn't,
+/// and counting it would loop: `git status` reads the git folder it was run for.
+pub(crate) fn is_change(event: &notify::Event) -> bool {
+    !matches!(event.kind, EventKind::Access(kind) if kind != AccessKind::Close(AccessMode::Write))
+}
+
 /// Follows the watcher's events, a burst at a time, until the actor is dropped; at the watch
 /// limit it switches to polling.
 async fn follow(
@@ -754,6 +760,7 @@ async fn follow(
         let mut rescan = false;
         for event in burst {
             match event {
+                Ok(event) if !is_change(&event) => {}
                 Ok(event) => {
                     rescan |= event.need_rescan();
                     let renamed = matches!(event.kind, EventKind::Modify(ModifyKind::Name(_)));

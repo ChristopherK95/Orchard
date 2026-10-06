@@ -274,6 +274,30 @@ async fn a_commit_in_a_terminal_updates_the_branch_status_live() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn reading_git_files_doesnt_refresh_the_branch_status() {
+    let repo = project();
+    let (_fake, core, root) = shown(repo.path(), FileWatchConfig::default()).await;
+    // (Whatever showing it set off has settled.)
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let mut events = core.subscribe();
+    // As `git status` (or a shell prompt) does. A read used to count as a change: the refresh ran
+    // `git status`, which read them again, and so on forever.
+    for file in ["HEAD", "index", "refs/heads/main"] {
+        let _ = std::fs::read(root.join(".git").join(file));
+    }
+    let refresh = next_event(&mut events, "a refresh", |e| match e {
+        CoreEvent::GitStatusChanged { worktree } if worktree == root => Some(()),
+        _ => None,
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), refresh)
+            .await
+            .is_err(),
+        "a read refreshed the branch status"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_build_in_an_ignored_folder_costs_no_re_read() {
     let repo = project();
     let (_fake, core, root) = shown(repo.path(), FileWatchConfig::default()).await;

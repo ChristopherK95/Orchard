@@ -410,10 +410,12 @@ pub(crate) fn watch(
     let (tx, rx) = mpsc::channel::<()>();
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
         // An error may mean changes were lost (e.g. the OS's event buffer overflowed): re-read.
+        // (Reading it, as a reload does, is no change.)
         let touches_file = event.map_or(true, |e| {
-            e.paths
-                .iter()
-                .any(|p| p.file_name() == Some(name.as_os_str()))
+            crate::files::is_change(&e)
+                && e.paths
+                    .iter()
+                    .any(|p| p.file_name() == Some(name.as_os_str()))
         });
         if touches_file {
             let _ = tx.send(());
