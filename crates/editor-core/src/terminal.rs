@@ -141,6 +141,12 @@ impl Terminal {
                 |stem| stem.to_string_lossy().into_owned(),
             );
         shell.cwd(cwd);
+        for (key, value) in crate::process::host_env() {
+            match value {
+                Some(value) => shell.env(key, value),
+                None => shell.env_remove(key),
+            }
+        }
         if !cfg!(windows) {
             shell.env("TERM", "xterm-256color");
         }

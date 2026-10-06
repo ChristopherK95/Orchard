@@ -43,6 +43,7 @@ pub use crate::git_status::{
 };
 pub use crate::merged::{MergeState, WorktreeMerge};
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};
+pub use crate::process::host_env;
 pub use crate::remove_worktree::{CommitSummary, RemovalCheck, RemoveWorktree, RemovedWorktree};
 pub use crate::session::{
     DiffLine, DiffLineKind, PermissionMode, PermissionOption, PermissionOptionKind,

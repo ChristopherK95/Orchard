@@ -92,6 +92,12 @@ async fn install_adapter(app: AppHandle) -> CommandResult<()> {
         .args(["--omit=dev", "--no-audit", "--no-fund", "--loglevel=error"])
         .arg(format!("{ADAPTER_PACKAGE}@{ADAPTER_VERSION}"))
         .stdin(std::process::Stdio::null());
+    for (key, value) in editor_core::host_env() {
+        match value {
+            Some(value) => npm.env(key, value),
+            None => npm.env_remove(key),
+        };
+    }
     #[cfg(windows)]
     npm.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     let output = npm

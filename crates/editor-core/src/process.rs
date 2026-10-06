@@ -1,17 +1,76 @@
 //! Spawning helpers shared by everything the core runs (the ACP adapter, git, version checks,
 //! setup commands).
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
+use std::sync::OnceLock;
 
 use tokio::process::{Child, Command};
 
-/// A command that won't flash a console window up from the GUI app on Windows.
+/// A command that won't flash a console window up from the GUI app on Windows, with the
+/// AppImage's environment undone (`host_env`).
 pub(crate) fn command(program: impl AsRef<OsStr>) -> Command {
-    #[allow(unused_mut)]
     let mut cmd = Command::new(program);
+    for (key, value) in host_env() {
+        match value {
+            Some(value) => cmd.env(key, value),
+            None => cmd.env_remove(key),
+        };
+    }
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     cmd
+}
+
+/// What to change in the environment of what Orchard starts (git, the terminal's shell, the
+/// adapter), as (variable, new value or `None` to unset). Run from an AppImage, Orchard was
+/// started with the image's own folders first on `LD_LIBRARY_PATH`, `PATH` and the like, for its
+/// bundled libraries: the system's git would load the image's older libcurl or pcre2 and fail. So
+/// the image's folders are dropped from every variable, and what its launcher set just for the
+/// app is unset. Empty outside an AppImage.
+pub fn host_env() -> &'static [(OsString, Option<OsString>)] {
+    static FIXES: OnceLock<Vec<(OsString, Option<OsString>)>> = OnceLock::new();
+    FIXES.get_or_init(
+        || match (std::env::var("APPDIR"), std::env::var_os("APPIMAGE")) {
+            (Ok(appdir), Some(_)) => appimage_fixes(&appdir, std::env::vars_os()),
+            _ => vec![],
+        },
+    )
+}
+
+/// `host_env` for an AppImage mounted at `appdir`, given the current environment.
+fn appimage_fixes(
+    appdir: &str,
+    vars: impl Iterator<Item = (OsString, OsString)>,
+) -> Vec<(OsString, Option<OsString>)> {
+    let appdir = appdir.trim_end_matches('/');
+    if appdir.is_empty() {
+        return vec![];
+    }
+    // Set by the launcher for the app alone (`GTK_THEME` by the image's GTK hook).
+    const APP_ONLY: &[&str] = &[
+        "APPDIR",
+        "APPIMAGE",
+        "ARGV0",
+        "OWD",
+        "PYTHONDONTWRITEBYTECODE",
+        "GTK_THEME",
+    ];
+    vars.filter_map(|(key, value)| {
+        if key.to_str().is_some_and(|key| APP_ONLY.contains(&key)) {
+            return Some((key, None));
+        }
+        let text = value.to_str()?;
+        if !text.contains(appdir) {
+            return None;
+        }
+        let kept: Vec<&str> = text
+            .split(':')
+            .filter(|part| !part.is_empty() && !part.starts_with(appdir))
+            .collect();
+        let value = (!kept.is_empty()).then(|| OsString::from(kept.join(":")));
+        Some((key, value))
+    })
+    .collect()
 }
 
 /// Kills a process and everything it started when dropped: killing just a shell would leave the
@@ -102,5 +161,47 @@ impl Drop for ProcessTree {
         unsafe {
             libc::killpg(self.group, libc::SIGKILL);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_appimages_folders_and_launcher_variables_are_dropped() {
+        let vars = [
+            ("APPDIR", "/tmp/.mount_X"),
+            (
+                "LD_LIBRARY_PATH",
+                "/tmp/.mount_X/usr/lib/:/tmp/.mount_X/usr/lib32/",
+            ),
+            (
+                "PATH",
+                "/tmp/.mount_X/usr/bin/:/home/me/.local/bin:/usr/bin",
+            ),
+            ("GTK_DATA_PREFIX", "/tmp/.mount_X"),
+            ("XDG_DATA_DIRS", "/tmp/.mount_X/usr/share/:/usr/share:"),
+            ("GTK_THEME", "Adwaita:dark"),
+            ("HOME", "/home/me"),
+        ]
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)));
+        let fixes = appimage_fixes("/tmp/.mount_X/", vars.into_iter());
+        let fix = |key: &str| {
+            fixes
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.as_ref().map(|v| v.to_str().unwrap().to_owned()))
+        };
+        assert_eq!(fix("APPDIR"), Some(None));
+        assert_eq!(fix("LD_LIBRARY_PATH"), Some(None));
+        assert_eq!(fix("GTK_DATA_PREFIX"), Some(None));
+        assert_eq!(fix("GTK_THEME"), Some(None));
+        assert_eq!(
+            fix("PATH"),
+            Some(Some("/home/me/.local/bin:/usr/bin".to_owned()))
+        );
+        assert_eq!(fix("XDG_DATA_DIRS"), Some(Some("/usr/share".to_owned())));
+        assert_eq!(fix("HOME"), None, "left alone");
     }
 }
