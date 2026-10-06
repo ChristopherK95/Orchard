@@ -96,7 +96,7 @@ export function BranchList(props: {
                   fallback={
                     <Show when={!current(b)}>
                       <button class="ghost small" onClick={() => props.onNewWorktreeFrom(b.name)} title="A new Worktree on this branch, with its own session">
-                        New Worktree from this branch
+                        New Worktree
                       </button>
                     </Show>
                   }
