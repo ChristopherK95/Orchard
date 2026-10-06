@@ -182,7 +182,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .state-dot.exited { color: var(--exited); }
 @keyframes breathe { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.12; } }
 @media (prefers-reduced-motion: reduce) {
-  .state-dot.working .pulse, .state-badge.working .dot { animation: none; }
+  .state-dot.working .pulse, .state-badge.working .dot, .composer-box.working { animation: none; }
   .spin { animation-timing-function: steps(8); }
 }
 .session-glyph { color: var(--fg-dim); }
@@ -659,6 +659,12 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .queued-msg .muted { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; }
 .queued-msg .muted .lucide { width: 11px; height: 11px; }
 .queued-msg .close-tab { visibility: visible; min-height: 20px; width: 20px; }
+/* While the Agent works: the working blue on the border, a faint tint, and a slow glow. */
+.composer-box.working, .composer-box.working:focus-within { border-color: rgba(59, 130, 246, 0.6); background: color-mix(in srgb, var(--working) 6%, var(--card)); animation: composer-working 2.4s ease-in-out infinite; }
+@keyframes composer-working {
+  0%, 100% { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(59, 130, 246, 0.25), 0 0 14px rgba(59, 130, 246, 0.18); }
+  50% { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(59, 130, 246, 0.45), 0 0 22px rgba(59, 130, 246, 0.35); }
+}
 .composer-box.dropping { border-color: var(--ring); border-style: dashed; }
 /* The permission mode, as an outline button; the riskier mode is warm, Plan is cool. */
 .mode-pill { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-md); color: var(--fg-1); font-size: 13px; font-weight: 500; }

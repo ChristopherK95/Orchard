@@ -402,7 +402,7 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
           {error()}
         </p>
       </Show>
-      <div class="composer-box" classList={{ locked: locked(), dropping: dropping() }}>
+      <div class="composer-box" classList={{ locked: locked(), dropping: dropping(), working: working() }}>
         <Show when={slash.open() && !locked()}>
           <SlashMenu
             items={slash.items()}
