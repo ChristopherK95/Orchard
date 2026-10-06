@@ -114,6 +114,10 @@ export function WorktreesOverview(props: {
   const [plan, setPlan] = createSignal<Planned[] | "checking" | null>(null);
   const [running, setRunning] = createSignal(false);
   const [outcomes, setOutcomes] = createSignal<Outcome[] | null>(null);
+  // While removing: how each one went so far, and the one being removed now.
+  const [progress, setProgress] = createSignal<Outcome[]>([]);
+  const [current, setCurrent] = createSignal<string | null>(null);
+  const progressOf = (path: string) => progress().find((o) => o.path === path);
   const planned = () => {
     const p = plan();
     return Array.isArray(p) ? p : [];
@@ -141,9 +145,11 @@ export function WorktreesOverview(props: {
   const removeAll = async () => {
     if (running()) return;
     setRunning(true);
+    setProgress([]);
     const done: Outcome[] = [];
     // One at a time: each stops its sessions and setup first, and the core refreshes in between.
     for (const p of toRemove()) {
+      setCurrent(p.path);
       try {
         // Never discards: work that appeared since the check is refused, not lost.
         const removed = await core.removeWorktree(p.path, { discard: null, deleteBranch: p.deleteBranch });
@@ -152,7 +158,10 @@ export function WorktreesOverview(props: {
       } catch (err) {
         done.push({ path: p.path, removed: false, message: String(err) });
       }
+      setProgress([...done]);
     }
+    setCurrent(null);
+    setProgress([]);
     setOutcomes(done);
     setPlan(null);
     setRunning(false);
@@ -206,7 +215,7 @@ export function WorktreesOverview(props: {
                   <ul class="plan-list">
                     <For each={done()}>
                       {(o) => (
-                        <li classList={{ failed: !o.removed }}>
+                        <li classList={{ removed: o.removed, failed: !o.removed }}>
                           <Show when={o.removed} fallback={<TriangleAlert />}>
                             <Check />
                           </Show>
@@ -241,10 +250,21 @@ export function WorktreesOverview(props: {
                 <ul class="plan-list">
                   <For each={planned()}>
                     {(p) => (
-                      <li classList={{ skipped: !!p.skip }} style={{ "--c": worktreeColour(p.path) }}>
-                        <Show when={!p.skip} fallback={<TriangleAlert />}>
-                          <Trash2 />
-                        </Show>
+                      <li
+                        classList={{ skipped: !!p.skip, removed: !!progressOf(p.path)?.removed, failed: progressOf(p.path)?.removed === false }}
+                        style={{ "--c": worktreeColour(p.path) }}
+                      >
+                        <Switch fallback={<Trash2 />}>
+                          <Match when={p.skip || progressOf(p.path)?.removed === false}>
+                            <TriangleAlert />
+                          </Match>
+                          <Match when={progressOf(p.path)?.removed}>
+                            <Check />
+                          </Match>
+                          <Match when={current() === p.path}>
+                            <Loader class="spin" />
+                          </Match>
+                        </Switch>
                         <span class="plan-text">
                           <span class="mono">{props.label(p.path)}</span>
                           <span class="small muted">
@@ -333,7 +353,7 @@ export function WorktreesOverview(props: {
                             <span class="mono muted small overview-path">{row.path}</span>
                           </button>
                           <Show when={!row.isMain}>
-                            <button onClick={() => props.onRemove(row.path)} title="Remove just this Worktree (shows what it would lose first)">
+                            <button class="overview-remove small" onClick={() => props.onRemove(row.path)} title="Remove just this Worktree (shows what it would lose first)">
                               <Trash2 />
                               Remove…
                             </button>

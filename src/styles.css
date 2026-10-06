@@ -464,27 +464,30 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .overview-list li { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 12px; border: 1px solid var(--line); border-left: 3px solid var(--c); border-radius: var(--r-sm) var(--r-lg) var(--r-lg) var(--r-sm); background: var(--card); }
 .overview-check { flex: none; width: 14px; height: 14px; margin: 0; }
 .overview-list li.ready { background: var(--ok-tint); }
-.overview-open { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 0; background: transparent; border: 0; text-align: left; font-weight: 400; }
+.overview-open { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: stretch; gap: 3px; min-height: 0; padding: 0; background: transparent; border: 0; text-align: left; font-weight: 400; white-space: normal; }
+.overview-open:hover:not(:disabled) { background: transparent; }
 .overview-open:hover:not(:disabled) .overview-name { text-decoration: underline; }
-.overview-name { display: flex; align-items: center; gap: 7px; color: var(--fg-1); }
-.overview-name .lucide { width: 13px; height: 13px; color: var(--c); }
+.overview-name { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--fg-1); }
+.overview-name .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overview-name .lucide { flex: none; width: 13px; height: 13px; color: var(--c); }
 .overview-status { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
-.overview-status .lucide { width: 12px; height: 12px; }
+.overview-status .lucide { flex: none; width: 12px; height: 12px; }
 .overview-status.ok { color: var(--ok); }
 .overview-status.warn { color: var(--warn); }
 .overview-status.muted { color: var(--fg-3); }
 .overview-status.error { color: var(--danger); }
 .overview-extra { display: flex; gap: 10px; font-size: 12px; color: var(--fg-3); }
 .overview-extra .warn { color: var(--warn); }
-.overview-path { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.overview-list li > button { flex: none; gap: 6px; }
-.overview-list li > button .lucide { width: 12px; height: 12px; }
+.overview-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overview-remove { flex: none; }
+.overview-remove .lucide { width: 12px; height: 12px; }
 .worktrees-overview .modal-foot button .lucide { width: 12px; height: 12px; }
 .plan-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
 .plan-list li { display: flex; align-items: flex-start; gap: 10px; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--card); }
 .plan-list li > .lucide { flex: none; margin-top: 3px; width: 13px; height: 13px; color: var(--fg-3); }
 .plan-list li.skipped > .lucide, .plan-list li.failed > .lucide { color: var(--warn); }
 .plan-list li.skipped { opacity: 0.8; }
+.plan-list li.removed > .lucide { color: var(--ok); }
 .plan-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .branch-list { max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 1px; }
 .branch { min-height: 30px; justify-content: flex-start; gap: 8px; padding: 0 10px; background: transparent; border-color: transparent; border-radius: var(--r-sm); font-weight: 400; text-align: left; }
