@@ -2,11 +2,12 @@
 // change (committed or not, new files too) is gone through one at a time, GitHub-style: a file list
 // with what's been viewed, each file's diff, Next / Previous. Then the PR step: the branch it goes
 // into, title and description, and Create PR, which commits what's left, pushes the branch, and
-// opens the PR assigned to the user.
+// opens the PR assigned to the user. A commit in the list narrows the files and diffs to what that
+// commit changed on its own (Viewed ticks belong to the whole review, so they're not shown then).
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { core, type DiffLine, type PullRequestOutcome, type Review, type ReviewFile } from "./core";
+import { core, type CommitChanges, type DiffLine, type PullRequestOutcome, type Review, type ReviewCommit, type ReviewFile } from "./core";
 import { DiffView } from "./DiffView";
 import { languageOfPath } from "./highlight";
 import { Check, ChevronLeft, ChevronRight, CircleCheck, ExternalLink, GitBranch, GitPullRequest, Loader, RefreshCw, TriangleAlert, X } from "./icons";
@@ -59,6 +60,7 @@ export function ReviewOverlay(props: { worktree: string; label: string; colour: 
     try {
       const next = await core.review(props.worktree);
       setDiffs(reconcile({}));
+      setScope(null);
       setReview(next);
       setAt((i) => Math.min(i, Math.max(0, next.files.length - 1)));
       seedForm(next);
@@ -68,15 +70,47 @@ export function ReviewOverlay(props: { worktree: string; label: string; colour: 
   };
   onMount(() => void load());
 
-  const files = () => review()?.files ?? [];
+  /** Every file the PR changes. */
+  const allFiles = () => review()?.files ?? [];
+  /** The commit the list is narrowed to (null: all the changes), and what it changed. */
+  const [scope, setScope] = createSignal<ReviewCommit | null>(null);
+  const [scoped, setScoped] = createSignal<{ id: string; changes: CommitChanges } | { id: string; error: string } | null>(null);
+  /** Where the whole review was when a commit was picked (it goes back there). */
+  let allAt = 0;
+  const pickCommit = (commit: ReviewCommit | null) => {
+    if (commit?.id === scope()?.id) commit = null; // (picking it again shows everything)
+    if (!scope()) allAt = at();
+    setScope(commit);
+    setAt(commit ? 0 : allAt);
+    if (!commit || (scoped()?.id === commit.id && "changes" in scoped()!)) return;
+    setScoped(null);
+    core
+      .commitChanges(props.worktree, commit.id)
+      .then((changes) => scope()?.id === commit.id && setScoped({ id: commit.id, changes }))
+      .catch((err) => scope()?.id === commit.id && setScoped({ id: commit.id, error: String(err) }));
+  };
+  const scopedChanges = () => {
+    const s = scoped();
+    return s && s.id === scope()?.id && "changes" in s ? s.changes : null;
+  };
+  const scopedError = () => {
+    const s = scoped();
+    return s && s.id === scope()?.id && "error" in s ? s.error : "";
+  };
+  /** The files listed: the commit's, or all of them. */
+  const files = () => (scope() ? (scopedChanges()?.files ?? []) : allFiles());
   const current = () => files()[at()] as ReviewFile | undefined;
+  /** A file's diff, by what it's shown in (a commit's id, or "" for the whole review). */
+  const keyOf = (file: ReviewFile, commit = scope()?.id ?? "") => `${commit}\n${file.path}`;
+  const diffOf = (file: ReviewFile) => diffs[keyOf(file)];
   const fetchDiff = (file: ReviewFile | undefined) => {
     const r = review();
-    if (!file || !r || diffs[file.path]) return;
-    core
-      .reviewDiff(props.worktree, r.split, file)
-      .then((lines) => setDiffs(file.path, { lines }))
-      .catch((err) => setDiffs(file.path, { error: String(err) }));
+    if (!file || !r || diffOf(file)) return;
+    const key = keyOf(file);
+    const commit = scope();
+    const parent = scopedChanges()?.parent;
+    const loading = commit && parent ? core.commitDiff(props.worktree, parent, commit.id, file) : core.reviewDiff(props.worktree, r.split, file);
+    loading.then((lines) => setDiffs(key, { lines })).catch((err) => setDiffs(key, { error: String(err) }));
   };
   // The file shown, and the next one ahead of time.
   createEffect(() => {
@@ -88,18 +122,18 @@ export function ReviewOverlay(props: { worktree: string; label: string; colour: 
     viewedRev();
     const seen = viewed.get(file.path);
     if (!seen) return false;
-    const d = diffs[file.path];
+    const d = diffs[keyOf(file, "")];
     return !d || !("lines" in d) || signature(d.lines) === seen;
   };
   const setViewed = (file: ReviewFile, on: boolean) => {
-    const d = diffs[file.path];
+    const d = diffs[keyOf(file, "")];
     if (on) viewed.set(file.path, d && "lines" in d ? signature(d.lines) : "?");
     else viewed.delete(file.path);
     setViewedRev((n) => n + 1);
   };
-  const viewedCount = () => files().filter(isViewed).length;
+  const viewedCount = () => allFiles().filter(isViewed).length;
   const stats = (file: ReviewFile) => {
-    const d = diffs[file.path];
+    const d = diffOf(file);
     if (!d || !("lines" in d)) return null;
     return {
       added: d.lines.filter((l) => l.kind === "added").length,
@@ -108,14 +142,15 @@ export function ReviewOverlay(props: { worktree: string; label: string; colour: 
   };
 
   const go = (i: number) => setAt(Math.max(0, Math.min(files().length - 1, i)));
-  /** Next file, marking this one viewed (as going on from it says it's been read). */
+  /** Next file, marking this one viewed (as going on from it says it's been read), in the whole
+   *  review: a commit's file is only part of the file's change. */
   const next = () => {
     const file = current();
-    if (file) setViewed(file, true);
+    if (file && !scope()) setViewed(file, true);
     if (at() < files().length - 1) go(at() + 1);
   };
   let diffBox: HTMLDivElement | undefined;
-  createEffect(on(at, () => diffBox?.scrollTo({ top: 0 })));
+  createEffect(on(current, () => diffBox?.scrollTo({ top: 0 })));
 
   // The PR step.
   const [target, setTarget] = createSignal("");
@@ -132,8 +167,8 @@ export function ReviewOverlay(props: { worktree: string; label: string; colour: 
     if (seeded) return;
     seeded = true;
     setTarget(r.target);
-    setTitle(r.commits.length === 1 ? r.commits[0] : r.branch ? titleFromBranch(r.branch) : "");
-    setBody(r.commits.length > 1 ? r.commits.map((c) => `- ${c}`).join("\n") : "");
+    setTitle(r.commits.length === 1 ? r.commits[0].subject : r.branch ? titleFromBranch(r.branch) : "");
+    setBody(r.commits.length > 1 ? r.commits.map((c) => `- ${c.subject}`).join("\n") : "");
   };
   const blocker = () => {
     const r = review();
@@ -188,7 +223,7 @@ export function ReviewOverlay(props: { worktree: string; label: string; colour: 
     if (typing) return;
     if (e.key === "j" || e.key === "ArrowRight") (e.preventDefault(), next());
     else if (e.key === "k" || e.key === "ArrowLeft") (e.preventDefault(), go(at() - 1));
-    else if (e.key === "v" && current()) (e.preventDefault(), setViewed(current()!, !isViewed(current()!)));
+    else if (e.key === "v" && current() && !scope()) (e.preventDefault(), setViewed(current()!, !isViewed(current()!)));
   };
   onMount(() => window.addEventListener("keydown", onKey, true));
   onCleanup(() => window.removeEventListener("keydown", onKey, true));
@@ -196,9 +231,9 @@ export function ReviewOverlay(props: { worktree: string; label: string; colour: 
   const lineCount = createMemo(() => {
     let added = 0;
     let removed = 0;
-    for (const f of files()) {
-      const s = stats(f);
-      if (s) (added += s.added), (removed += s.removed);
+    for (const f of allFiles()) {
+      const d = diffs[keyOf(f, "")];
+      if (d && "lines" in d) for (const l of d.lines) l.kind === "added" ? added++ : l.kind === "removed" && removed++;
     }
     return { added, removed };
   });
@@ -244,17 +279,37 @@ export function ReviewOverlay(props: { worktree: string; label: string; colour: 
           <Match when={step() === "review"}>
             <div class="review-body">
               <nav class="review-files">
-                <div class="review-progress">
-                  <span>
-                    {viewedCount()} / {files().length} viewed
-                  </span>
-                  <span class="review-bar">
-                    <span style={{ width: `${files().length ? (100 * viewedCount()) / files().length : 0}%` }} />
-                  </span>
-                </div>
-                <For each={files()} fallback={<p class="muted small center">No changes against {review()!.base}.</p>}>
+                <Show
+                  when={scope()}
+                  fallback={
+                    <div class="review-progress">
+                      <span>
+                        {viewedCount()} / {allFiles().length} viewed
+                      </span>
+                      <span class="review-bar">
+                        <span style={{ width: `${allFiles().length ? (100 * viewedCount()) / allFiles().length : 0}%` }} />
+                      </span>
+                    </div>
+                  }
+                >
+                  {(c) => (
+                    <div class="review-scope">
+                      <span class="grow">
+                        <span class="mono muted">{c().shortId}</span> {c().subject}
+                      </span>
+                      <button class="link" onClick={() => pickCommit(null)} title="Show every file the PR changes again">
+                        All changes
+                      </button>
+                    </div>
+                  )}
+                </Show>
+                <Show when={scopedError()}>
+                  <p class="error small">{scopedError()}</p>
+                </Show>
+                <Show when={!scope() || scopedChanges()} fallback={<Show when={!scopedError()}><p class="muted small center"><Loader class="spin" /></p></Show>}>
+                <For each={files()} fallback={<p class="muted small center">{scope() ? "This commit changed no files." : `No changes against ${review()!.base}.`}</p>}>
                   {(file, i) => (
-                    <button class="review-file" classList={{ on: i() === at(), viewed: isViewed(file) }} onClick={() => go(i())} title={file.renamedFrom ? `${file.renamedFrom} → ${file.path}` : file.path}>
+                    <button class="review-file" classList={{ on: i() === at(), viewed: !scope() && isViewed(file) }} onClick={() => go(i())} title={file.renamedFrom ? `${file.renamedFrom} → ${file.path}` : file.path}>
                       <span class={`change change-${file.change}`}>{LETTER[file.change]}</span>
                       <span class="review-file-name">
                         {splitPath(file.path).name}
@@ -263,23 +318,49 @@ export function ReviewOverlay(props: { worktree: string; label: string; colour: 
                       <Show when={file.uncommitted}>
                         <span class="uncommitted-dot" title="Has changes that aren't committed yet: Create PR commits them" />
                       </Show>
-                      <Show when={isViewed(file)}>
+                      <Show when={!scope() && isViewed(file)}>
                         <Check class="viewed-check" />
                       </Show>
                     </button>
                   )}
                 </For>
+                </Show>
                 <Show when={review()!.commits.length > 0}>
                   <div class="review-commits">
                     <div class="git-section">
                       Commits <span class="badge">{review()!.commits.length}</span>
                     </div>
-                    <For each={review()!.commits}>{(c) => <div class="review-commit">{c}</div>}</For>
+                    <For each={review()!.commits}>
+                      {(c) => (
+                        <button
+                          class="review-commit"
+                          classList={{ on: scope()?.id === c.id }}
+                          onClick={() => pickCommit(c)}
+                          title={scope()?.id === c.id ? "Show all the changes again" : `Only what ${c.shortId} changed`}
+                        >
+                          <span class="mono">{c.shortId}</span>
+                          <span class="review-commit-subject">{c.subject}</span>
+                        </button>
+                      )}
+                    </For>
+                    <Show when={review()!.uncommitted > 0}>
+                      <div class="review-commit muted" title="Create PR commits these">
+                        <span class="uncommitted-dot" />
+                        <span class="review-commit-subject">{plural(review()!.uncommitted, "uncommitted file")}</span>
+                      </div>
+                    </Show>
                   </div>
                 </Show>
               </nav>
               <section class="review-main">
-                <Show when={current()} fallback={<div class="center muted editor-placeholder">Nothing changed on this branch since it split from {review()!.base}.</div>}>
+                <Show
+                  when={current()}
+                  fallback={
+                    <div class="center muted editor-placeholder">
+                      {scope() ? "" : `Nothing changed on this branch since it split from ${review()!.base}.`}
+                    </div>
+                  }
+                >
                   {(file) => (
                     <>
                       <div class="review-file-head">
@@ -306,17 +387,19 @@ export function ReviewOverlay(props: { worktree: string; label: string; colour: 
                             Split
                           </button>
                         </div>
-                        <label class="viewed-toggle" title="Mark as viewed (V)">
-                          <input type="checkbox" checked={isViewed(file())} onChange={(e) => setViewed(file(), e.currentTarget.checked)} />
-                          Viewed
-                        </label>
+                        <Show when={!scope()}>
+                          <label class="viewed-toggle" title="Mark as viewed (V)">
+                            <input type="checkbox" checked={isViewed(file())} onChange={(e) => setViewed(file(), e.currentTarget.checked)} />
+                            Viewed
+                          </label>
+                        </Show>
                       </div>
                       <div class="review-diff" ref={diffBox}>
                         <Switch fallback={<p class="muted center review-loading"><Loader class="spin" /> Loading the diff…</p>}>
-                          <Match when={diffs[file().path] && "error" in diffs[file().path] && (diffs[file().path] as { error: string })}>
+                          <Match when={diffOf(file()) && "error" in diffOf(file()) && (diffOf(file()) as { error: string })}>
                             {(d) => <div class="center muted editor-placeholder">{d().error}</div>}
                           </Match>
-                          <Match when={diffs[file().path] && "lines" in diffs[file().path] && (diffs[file().path] as { lines: DiffLine[] })}>
+                          <Match when={diffOf(file()) && "lines" in diffOf(file()) && (diffOf(file()) as { lines: DiffLine[] })}>
                             {(d) => (
                               <DiffView
                                 lines={d().lines}
@@ -345,15 +428,15 @@ export function ReviewOverlay(props: { worktree: string; label: string; colour: 
                 <ChevronLeft />
                 Previous
               </button>
-              <button disabled={at() >= files().length - 1} onClick={next} title="Mark this file viewed and go to the next (J)">
+              <button disabled={at() >= files().length - 1} onClick={next} title={scope() ? "The commit's next file (J)" : "Mark this file viewed and go to the next (J)"}>
                 Next file
                 <ChevronRight />
               </button>
               <button
                 class="primary"
-                disabled={files().length === 0}
+                disabled={allFiles().length === 0}
                 onClick={() => setStep("pr")}
-                title={viewedCount() < files().length ? `${plural(files().length - viewedCount(), "file")} not marked viewed yet` : "On to the pull request"}
+                title={viewedCount() < allFiles().length ? `${plural(allFiles().length - viewedCount(), "file")} not marked viewed yet` : "On to the pull request"}
               >
                 Next: pull request
                 <ChevronRight />
@@ -362,10 +445,10 @@ export function ReviewOverlay(props: { worktree: string; label: string; colour: 
           </Match>
           <Match when={step() === "pr"}>
             <div class="modal-body review-pr">
-              <Show when={viewedCount() < files().length}>
+              <Show when={viewedCount() < allFiles().length}>
                 <p class="git-notice warn">
                   <TriangleAlert />
-                  {plural(files().length - viewedCount(), "file")} of {files().length} not marked viewed.
+                  {plural(allFiles().length - viewedCount(), "file")} of {allFiles().length} not marked viewed.
                 </p>
               </Show>
               <div class="review-pr-row">

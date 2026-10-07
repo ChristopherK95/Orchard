@@ -1051,7 +1051,13 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .uncommitted-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
 .viewed-check { flex: none; width: 13px; height: 13px; color: var(--ok); }
 .review-commits { margin-top: 12px; }
-.review-commit { padding: 4px 8px; font-size: 12px; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-commit { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 26px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--r-md); background: transparent; font-size: 12px; font-weight: 400; color: var(--fg-2); text-align: left; }
+button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-1); }
+.review-commit.on { background: var(--bg-4); border-color: var(--line-strong); color: var(--fg-1); }
+.review-commit .mono { flex: none; font-size: 11px; color: var(--fg-3); }
+.review-commit-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-scope { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; padding: 6px 8px; border: 1px solid var(--line-strong); border-left: 3px solid var(--c); border-radius: var(--r-md); background: var(--bg-1); font-size: 12px; }
+.review-scope .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .review-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .review-file-head { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--bg-1); font-size: 12.5px; }
 .review-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

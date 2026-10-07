@@ -1249,15 +1249,41 @@ async fn name_status(
     Ok(changes)
 }
 
-/// The subjects of the commits HEAD has since `split`, oldest first.
-pub(crate) async fn subjects_since(worktree: &Path, split: &str) -> Vec<String> {
+/// The commits HEAD has since `split`, oldest first: `(full id, short id, subject)`.
+pub(crate) async fn commits_since(worktree: &Path, split: &str) -> Vec<(String, String, String)> {
     let range = format!("{split}..HEAD");
-    output(worktree, &["log", "--reverse", "--format=%s", &range])
+    output(
+        worktree,
+        &["log", "--reverse", "--format=%H%x00%h%x00%s", &range],
+    )
+    .await
+    .unwrap_or_default()
+    .lines()
+    .filter_map(|line| {
+        let mut parts = line.splitn(3, '\0');
+        Some((
+            parts.next()?.to_owned(),
+            parts.next()?.to_owned(),
+            parts.next().unwrap_or_default().to_owned(),
+        ))
+    })
+    .collect()
+}
+
+/// git's empty tree: what a root commit's changes are measured from.
+const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/// What `commit` changed on its own (against its first parent, or nothing for a root commit):
+/// the parent it's measured from, and its files as `changes_since` gives them.
+pub(crate) async fn commit_changes(
+    worktree: &Path,
+    commit: &str,
+) -> Result<(String, Vec<(char, String, Option<String>)>), String> {
+    let parent = resolve_commit(worktree, &format!("{commit}^"))
         .await
-        .unwrap_or_default()
-        .lines()
-        .map(str::to_owned)
-        .collect()
+        .unwrap_or_else(|| EMPTY_TREE.to_owned());
+    let changes = name_status(worktree, &[&parent, commit]).await?;
+    Ok((parent, changes))
 }
 
 /// A file's bytes at `rev` (None if it isn't there).

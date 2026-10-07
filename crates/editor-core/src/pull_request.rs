@@ -21,8 +21,8 @@ pub struct Review {
     pub base: String,
     pub split: String,
     pub files: Vec<ReviewFile>,
-    /// The subjects of the branch's commits since the split, oldest first.
-    pub commits: Vec<String>,
+    /// The branch's commits since the split, oldest first.
+    pub commits: Vec<ReviewCommit>,
     /// How many files have changes that aren't committed yet (committed on "Create PR").
     pub uncommitted: u32,
     /// A merge, rebase or the like is in progress: no PR until it's finished or aborted.
@@ -32,6 +32,23 @@ pub struct Review {
     pub targets: Vec<String>,
     /// The branch the PR goes into unless another is chosen: the Base's, else the default one.
     pub target: String,
+}
+
+/// One of the branch's commits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewCommit {
+    pub id: String,
+    pub short_id: String,
+    pub subject: String,
+}
+
+/// What one commit changed on its own: its files, and the parent their diffs run from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitChanges {
+    pub parent: String,
+    pub files: Vec<ReviewFile>,
 }
 
 /// A file the PR would change.

@@ -927,6 +927,41 @@ async fn review_diff(
     .map_err(|e| e.to_string())
 }
 
+/// What one of the review's commits changed on its own.
+#[tauri::command]
+async fn commit_changes(
+    core: State<'_, Core>,
+    worktree: String,
+    commit: String,
+) -> CommandResult<editor_core::CommitChanges> {
+    core.commit_changes(worktree.as_ref(), &commit)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// One file's change in one commit (from `parent`, as `commit_changes` gave it).
+#[tauri::command]
+async fn commit_diff(
+    core: State<'_, Core>,
+    worktree: String,
+    parent: String,
+    commit: String,
+    path: String,
+    renamed_from: Option<String>,
+    change: editor_core::ChangeKind,
+) -> CommandResult<Vec<editor_core::DiffLine>> {
+    core.commit_diff(
+        worktree.as_ref(),
+        &parent,
+        &commit,
+        &path,
+        renamed_from.as_deref(),
+        change,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// "Create PR": commits what's left, pushes, and opens the PR with the GitHub CLI.
 #[tauri::command]
 async fn create_pull_request(
@@ -1357,6 +1392,8 @@ fn main() {
             diff_working,
             review,
             review_diff,
+            commit_changes,
+            commit_diff,
             create_pull_request,
             set_permission_mode,
             transcript_page_before,

@@ -84,7 +84,8 @@ async fn review_lists_committed_uncommitted_and_untracked_changes() {
     assert_eq!(review.branch.as_deref(), Some("agent/work"));
     assert_eq!(review.target, "main");
     assert!(review.targets.contains(&"main".to_owned()));
-    assert_eq!(review.commits, vec!["Add committed".to_owned()]);
+    let subjects: Vec<&str> = review.commits.iter().map(|c| c.subject.as_str()).collect();
+    assert_eq!(subjects, ["Add committed"]);
     assert_eq!(review.uncommitted, 2);
     let file = |p: &str| review.files.iter().find(|f| f.path == p).unwrap().clone();
     assert_eq!(file("committed.txt").change, ChangeKind::Added);
@@ -185,4 +186,60 @@ async fn an_open_pr_for_the_branch_is_reported_and_a_bad_request_does_nothing() 
             committed: None
         }
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_commit_shows_only_what_it_changed() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let gh = FakeGh::new("true");
+    let core = core_with_gh(&fake, &gh);
+    let root = open(&core, &setup.repo()).await;
+    git(&root, &["checkout", "--quiet", "-b", "agent/work"]);
+    write(&root, "first.txt", "one\n");
+    git(&root, &["add", "first.txt"]);
+    commit(&root, "First");
+    write(&root, "first.txt", "one\ntwo\n");
+    write(&root, "second.txt", "b\n");
+    git(&root, &["add", "-A"]);
+    commit(&root, "Second");
+    write(&root, "loose.txt", "not committed\n");
+
+    let review = core.review(&root).await.unwrap();
+    assert_eq!(review.files.len(), 3);
+    let second = &review.commits[1];
+    assert_eq!(second.subject, "Second");
+    assert_eq!(second.id, rev_parse(&root, "HEAD"));
+
+    let changes = core.commit_changes(&root, &second.id).await.unwrap();
+    assert_eq!(changes.parent, rev_parse(&root, "HEAD~1"));
+    let paths: Vec<(&str, ChangeKind)> = changes
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.change))
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            ("first.txt", ChangeKind::Modified),
+            ("second.txt", ChangeKind::Added)
+        ]
+    );
+    let lines = core
+        .commit_diff(
+            &root,
+            &changes.parent,
+            &second.id,
+            "first.txt",
+            None,
+            ChangeKind::Modified,
+        )
+        .await
+        .unwrap();
+    let added: Vec<&str> = lines
+        .iter()
+        .filter(|l| l.kind == editor_core::DiffLineKind::Added)
+        .map(|l| l.text.as_str())
+        .collect();
+    assert_eq!(added, ["two"]);
 }

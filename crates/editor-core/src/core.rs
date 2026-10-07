@@ -32,7 +32,9 @@ use crate::git_status::{
 };
 use crate::merged::{self, WorktreeMerge};
 use crate::permissions;
-use crate::pull_request::{PullRequestOutcome, PullRequestRequest, Review, ReviewFile};
+use crate::pull_request::{
+    CommitChanges, PullRequestOutcome, PullRequestRequest, Review, ReviewCommit, ReviewFile,
+};
 use crate::remove_worktree::{self, RemovalCheck, RemoveWorktree, RemovedWorktree};
 use crate::session::{
     PermissionMode, PermissionOutcome, SessionId, SessionInfo, SessionState, Transcript,
@@ -2600,7 +2602,15 @@ impl Core {
             })
             .unwrap_or_default();
         Ok(Review {
-            commits: git::subjects_since(&worktree, &split).await,
+            commits: git::commits_since(&worktree, &split)
+                .await
+                .into_iter()
+                .map(|(id, short_id, subject)| ReviewCommit {
+                    id,
+                    short_id,
+                    subject,
+                })
+                .collect(),
             uncommitted: status.files.len() as u32,
             operation_in_progress: status.operation.is_some(),
             branch: status.branch,
@@ -2638,6 +2648,49 @@ impl Core {
             .await
             .ok()
             .and_then(Result::ok);
+        text_diff(path, before, after, change)
+    }
+
+    /// What one of the review's commits changed on its own (against its first parent), and the
+    /// parent each file's diff runs from (`commit_diff`).
+    pub async fn commit_changes(
+        &self,
+        worktree: &Path,
+        commit: &str,
+    ) -> Result<CommitChanges, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        if !git::is_commit(&worktree, commit).await {
+            return Err(CoreError::Git(format!("`{commit}` isn't a commit here.")));
+        }
+        let (parent, changes) = git::commit_changes(&worktree, commit)
+            .await
+            .map_err(CoreError::Git)?;
+        let files = changes
+            .into_iter()
+            .map(|(letter, path, renamed_from)| ReviewFile {
+                change: ChangeKind::from_letter(letter),
+                path,
+                renamed_from,
+                uncommitted: false,
+            })
+            .collect();
+        Ok(CommitChanges { parent, files })
+    }
+
+    /// One file's change in one commit: from its text at `parent` (under `renamed_from`, for a
+    /// rename) to its text at `commit`. `change` says which side has no file.
+    pub async fn commit_diff(
+        &self,
+        worktree: &Path,
+        parent: &str,
+        commit: &str,
+        path: &str,
+        renamed_from: Option<&str>,
+        change: ChangeKind,
+    ) -> Result<Vec<crate::session::DiffLine>, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let before = git::file_at(&worktree, parent, renamed_from.unwrap_or(path)).await;
+        let after = git::file_at(&worktree, commit, path).await;
         text_diff(path, before, after, change)
     }
 

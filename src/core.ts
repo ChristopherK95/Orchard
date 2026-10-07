@@ -420,7 +420,7 @@ export interface Review {
   split: string;
   files: ReviewFile[];
   /** The branch's commits since the split, oldest first. */
-  commits: string[];
+  commits: ReviewCommit[];
   /** Files with changes not committed yet (committed on Create PR). */
   uncommitted: number;
   operationInProgress: boolean;
@@ -429,6 +429,18 @@ export interface Review {
   targets: string[];
   /** The branch the PR goes into unless another is chosen ("" if none could be told). */
   target: string;
+}
+
+export interface ReviewCommit {
+  id: string;
+  shortId: string;
+  subject: string;
+}
+
+/** What one commit changed on its own, and the parent its diffs run from. */
+export interface CommitChanges {
+  parent: string;
+  files: ReviewFile[];
 }
 
 export interface ReviewFile {
@@ -719,6 +731,11 @@ export const core = {
   /** One file's change in the review: from the split to the file on disk. */
   reviewDiff: (worktree: string, split: string, file: ReviewFile) =>
     invoke<DiffLine[]>("review_diff", { worktree, split, path: file.path, renamedFrom: file.renamedFrom, change: file.change }),
+  /** What one commit changed on its own (against its first parent). */
+  commitChanges: (worktree: string, commit: string) => invoke<CommitChanges>("commit_changes", { worktree, commit }),
+  /** One file's change in one commit (from `parent`, as `commitChanges` gave it). */
+  commitDiff: (worktree: string, parent: string, commit: string, file: ReviewFile) =>
+    invoke<DiffLine[]>("commit_diff", { worktree, parent, commit, path: file.path, renamedFrom: file.renamedFrom, change: file.change }),
   /** Commits what's left, pushes, and opens the PR with the GitHub CLI (assigned to the user). */
   createPullRequest: (worktree: string, request: PullRequestRequest) =>
     invoke<PullRequestOutcome>("create_pull_request", { worktree, request }),

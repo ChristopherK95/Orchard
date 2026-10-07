@@ -10,6 +10,7 @@
 - [x] One file's diff at a time (unified or split), a file list with Viewed ticks and progress, J / K and Next file (which marks the file viewed), V toggles viewed. A file's viewed tick drops when its diff changes.
 - [x] The PR step: target branch (the remote's branches offered; the Base's by default), title (the only commit's subject, else from the branch name), description (the commits, when several), commit message for what's uncommitted, draft.
 - [x] Create PR: asks first while a session there is mid-turn; commits everything left (`git add -A`), pushes as the drawer's Push does, then `gh pr create --assignee @me`. A branch with a PR already open says so and links it; a rejected push says to pull first.
+- [x] Clicking a commit in the list narrows the files and diffs to what that commit changed on its own (against its first parent); clicking it again, or "All changes", goes back. Viewed ticks belong to the whole review, so they're hidden while a commit is shown, and J doesn't tick files there.
 - [x] Core tests with real `git` and a fake `gh`.
 
 Notes:
