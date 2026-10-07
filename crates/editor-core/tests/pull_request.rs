@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use editor_core::{
     ChangeKind, Core, CoreConfig, PullRequestOutcome, PullRequestProgress, PullRequestRequest,
+    PushToPullRequestOutcome,
 };
 use support::*;
 
@@ -296,4 +297,55 @@ async fn a_failing_pre_push_hook_says_what_it_found() {
     assert!(streamed.contains("no-unused-vars"), "{streamed}");
     assert!(err.contains("failed to push"), "{err}");
     assert!(gh.args().is_empty(), "no PR without the push");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_branch_with_an_open_pr_pushes_to_it() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let gh = FakeGh::new(
+        r#"echo '[{"baseRefName":"main","number":12,"url":"https://github.com/o/r/pull/12"}]'"#,
+    );
+    let core = core_with_gh(&fake, &gh);
+    let root = open(&core, &setup.repo()).await;
+    git(&root, &["checkout", "--quiet", "-b", "agent/work"]);
+    commit(&root, "work");
+
+    let open_pr = core.open_pull_request(&root).await.unwrap().unwrap();
+    assert_eq!((open_pr.number, open_pr.target.as_str()), (12, "main"));
+    let args = gh.args();
+    assert_eq!(args[..2], ["pr", "list"]);
+    assert!(args.contains(&"agent/work".to_owned()));
+
+    // Uncommitted changes need a message; nothing is pushed without one.
+    write(&root, "more.txt", "more\n");
+    assert!(core
+        .push_to_pull_request(&root, " ", false, |_| {})
+        .await
+        .is_err());
+    let progress = std::sync::Mutex::new(vec![]);
+    let outcome = core
+        .push_to_pull_request(&root, "More", false, |p| progress.lock().unwrap().push(p))
+        .await
+        .unwrap();
+    let PushToPullRequestOutcome::Pushed { to, committed } = outcome else {
+        panic!("not pushed: {outcome:?}");
+    };
+    assert_eq!(to, "origin/agent/work");
+    assert!(committed.is_some());
+    assert!(core.git_status(&root).await.unwrap().files.is_empty());
+    assert_eq!(
+        rev_parse(&setup.root().join("origin.git"), "agent/work"),
+        rev_parse(&root, "HEAD")
+    );
+    let steps: Vec<String> = progress
+        .into_inner()
+        .unwrap()
+        .into_iter()
+        .filter_map(|p| match p {
+            PullRequestProgress::Step { text } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(steps, ["Committing 1 file", "Pushing agent/work to origin"]);
 }

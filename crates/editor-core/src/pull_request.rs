@@ -104,6 +104,31 @@ pub enum PullRequestOutcome {
     PushRejected { committed: Option<String> },
 }
 
+/// The PR already open from the Worktree's branch: "Review" then pushes to it instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenPullRequest {
+    pub number: u64,
+    pub url: String,
+    /// The branch it goes into.
+    pub target: String,
+}
+
+/// What "Push" (to a branch whose PR is open) did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PushToPullRequestOutcome {
+    /// Sessions in the Worktree are Working: ask first. Nothing was done.
+    SessionsWorking { sessions: Vec<String> },
+    /// Pushed to `to`; `committed` is the commit made of the uncommitted changes first.
+    Pushed {
+        to: String,
+        committed: Option<String>,
+    },
+    /// The remote has commits the branch hasn't (anything committed first stays committed).
+    Rejected { committed: Option<String> },
+}
+
 /// How "Create PR" is getting on, as it goes: a step starting, or output from what it runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -147,14 +172,72 @@ pub(crate) async fn create(
     draft: bool,
     sink: crate::process::Sink<'_>,
 ) -> Result<Opened, String> {
+    let mut args = vec!["pr", "create", "--head", branch, "--base", target];
+    args.extend(["--title", title, "--body", body, "--assignee", "@me"]);
+    args.extend(draft.then_some("--draft"));
+    let out = run_gh(gh, worktree, &args, Some(sink)).await?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    opened(out.status.success(), &stdout, &stderr)
+}
+
+/// The open PR from `branch`, if it has one (`gh pr list --head`).
+pub(crate) async fn open_for(
+    gh: &Path,
+    worktree: &Path,
+    branch: &str,
+) -> Result<Option<OpenPullRequest>, String> {
+    let args = [
+        "pr",
+        "list",
+        "--head",
+        branch,
+        "--state",
+        "open",
+        "--json",
+        "number,url,baseRefName",
+        "--limit",
+        "1",
+    ];
+    let out = run_gh(gh, worktree, &args, None).await?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if !out.status.success() {
+        return Err(gh_failure(&stdout, &String::from_utf8_lossy(&out.stderr)));
+    }
+    listed(&stdout)
+}
+
+/// Reads `gh pr list --json number,url,baseRefName`: its first PR.
+fn listed(stdout: &str) -> Result<Option<OpenPullRequest>, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Listed {
+        number: u64,
+        url: String,
+        base_ref_name: String,
+    }
+    let prs: Vec<Listed> = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("gh said something unexpected: {e}"))?;
+    Ok(prs.into_iter().next().map(|pr| OpenPullRequest {
+        number: pr.number,
+        url: pr.url,
+        target: pr.base_ref_name,
+    }))
+}
+
+/// Runs `gh` with `args` in `worktree`, never prompting, its output going to `sink` as it comes.
+async fn run_gh(
+    gh: &Path,
+    worktree: &Path,
+    args: &[&str],
+    sink: Option<crate::process::Sink<'_>>,
+) -> Result<std::process::Output, String> {
     let mut cmd = crate::process::command(gh);
     for (key, value) in gh_env().await {
         cmd.env(key, value);
     }
     cmd.current_dir(worktree)
-        .args(["pr", "create", "--head", branch, "--base", target])
-        .args(["--title", title, "--body", body, "--assignee", "@me"])
-        .args(draft.then_some("--draft"))
+        .args(args)
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_NO_UPDATE_NOTIFIER", "1")
         .env("NO_COLOR", "1")
@@ -167,13 +250,10 @@ pub(crate) async fn create(
         _ => format!("could not run gh: {e}"),
     })?;
     let _tree = crate::process::ProcessTree::attach(&child);
-    let out = tokio::time::timeout(GH_TIMEOUT, crate::process::collect(child, Some(sink)))
+    tokio::time::timeout(GH_TIMEOUT, crate::process::collect(child, sink))
         .await
         .map_err(|_| format!("gh took over {} s and was stopped.", GH_TIMEOUT.as_secs()))?
-        .map_err(|e| format!("could not run gh: {e}"))?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    opened(out.status.success(), &stdout, &stderr)
+        .map_err(|e| format!("could not run gh: {e}"))
 }
 
 /// Reads what `gh pr create` said: the new PR's URL (its last line), or the open one's when there
@@ -195,17 +275,20 @@ fn opened(success: bool, stdout: &str, stderr: &str) -> Result<Opened, String> {
             return Ok(Opened::AlreadyOpen(url));
         }
     }
+    Err(gh_failure(stdout, stderr))
+}
+
+/// What a `gh` that failed said, with how to log in if that's what it needs.
+fn gh_failure(stdout: &str, stderr: &str) -> String {
     let message = match stderr.trim() {
         "" => stdout.trim(),
         stderr => stderr,
     };
     let lower = message.to_lowercase();
-    Err(
-        match GH_LOGIN_SIGNS.iter().any(|sign| lower.contains(sign)) {
-            true => format!("{message}\n{GH_HINT}"),
-            false => message.to_owned(),
-        },
-    )
+    match GH_LOGIN_SIGNS.iter().any(|sign| lower.contains(sign)) {
+        true => format!("{message}\n{GH_HINT}"),
+        false => message.to_owned(),
+    }
 }
 
 /// The environment `gh` runs with: on Unix the login shell's (started from the desktop, Orchard's
@@ -249,6 +332,20 @@ mod tests {
     fn a_missing_login_says_how_to_log_in() {
         let err = "To get started with GitHub CLI, please run:  gh auth login";
         assert!(opened(false, "", err).unwrap_err().contains(GH_HINT));
+    }
+
+    #[test]
+    fn the_listed_pr_is_read() {
+        let out = r#"[{"baseRefName":"main","number":12,"url":"https://github.com/o/r/pull/12"}]"#;
+        assert_eq!(
+            listed(out),
+            Ok(Some(OpenPullRequest {
+                number: 12,
+                url: "https://github.com/o/r/pull/12".into(),
+                target: "main".into()
+            }))
+        );
+        assert_eq!(listed("[]\n"), Ok(None));
     }
 
     #[test]

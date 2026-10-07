@@ -14,6 +14,7 @@
 - [x] A failing hook says what it found: git puts a `pre-push` hook's own output (a linter's report) on its stdout, so pushes and commits now report stdout and stderr both (the drawer's Push and Commit too).
 - [x] A failed Create PR can be sent to one of the Worktree's sessions (or a new one): the error goes with a request to fix it and commit, queued if the session is mid-turn, and the session is shown. Review again to retry.
 - [x] Create PR shows a live log: each step (commit, push, open the PR) with what it printed as it came (hooks, git's push progress, `gh`); the failed step is marked. It stays under "Output" once the PR is open.
+- [x] A branch whose PR is already open (`gh pr list --head`) gets Push instead of the PR step: the header links the PR, and Push goes to a step of its own that asks for a commit message if anything's uncommitted, then commits and pushes with the live log. Failures can be sent to a session as with Create PR. Without `gh` (or off GitHub) it's the PR step as before.
 - [x] Core tests with real `git` and a fake `gh`.
 
 Notes:

@@ -33,8 +33,8 @@ use crate::git_status::{
 use crate::merged::{self, WorktreeMerge};
 use crate::permissions;
 use crate::pull_request::{
-    CommitChanges, PullRequestOutcome, PullRequestProgress, PullRequestRequest, Review,
-    ReviewCommit, ReviewFile,
+    CommitChanges, OpenPullRequest, PullRequestOutcome, PullRequestProgress, PullRequestRequest,
+    PushToPullRequestOutcome, Review, ReviewCommit, ReviewFile,
 };
 use crate::remove_worktree::{self, RemovalCheck, RemoveWorktree, RemovedWorktree};
 use crate::session::{
@@ -2737,40 +2737,15 @@ impl Core {
                 return Ok(PullRequestOutcome::SessionsWorking { sessions: working });
             }
         }
-        let status = git::status(&worktree).await.map_err(CoreError::Git)?;
-        if status.operation.is_some() || status.files.iter().any(|f| f.conflicted) {
-            return Err(CoreError::Git(
-                "A merge or rebase is in progress here: finish or abort it first.".into(),
-            ));
-        }
-        let committed = if status.files.is_empty() {
-            None
-        } else {
-            let message = match request.commit_message.trim() {
-                "" => title,
-                message => message,
-            };
-            let files = status.files.len();
-            step(format!(
-                "Committing {files} file{}",
-                if files == 1 { "" } else { "s" }
-            ));
-            let made = async {
-                git::stage_all(&worktree).await?;
-                git::commit(&worktree, message, false, Some(&output)).await
-            }
-            .await;
-            self.inner.status_due(worktree.clone());
-            Some(made.map_err(CoreError::Git)?)
+        let message = match request.commit_message.trim() {
+            "" => title,
+            message => message,
         };
         let _one_at_a_time = self.inner.remote_op.lock().await;
-        step(format!(
-            "Pushing {branch} to {}",
-            git::push_remote(&worktree, &branch).await
-        ));
-        let pushed = git::push(&worktree, Some(&output)).await;
-        self.inner.git_changed(worktree.clone());
-        if pushed.map_err(CoreError::Git)? == PushOutcome::Rejected {
+        let (committed, pushed) = self
+            .commit_and_push(&worktree, &branch, message, &progress)
+            .await?;
+        if pushed == PushOutcome::Rejected {
             return Ok(PullRequestOutcome::PushRejected { committed });
         }
         let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
@@ -2795,6 +2770,104 @@ impl Core {
                 PullRequestOutcome::AlreadyOpen { url, committed }
             }
         })
+    }
+
+    /// The PR open from the Worktree's branch, if there is one (asked of the GitHub CLI).
+    pub async fn open_pull_request(
+        &self,
+        worktree: &Path,
+    ) -> Result<Option<OpenPullRequest>, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let Some(branch) = git::current_branch(&worktree).await else {
+            return Ok(None);
+        };
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        crate::pull_request::open_for(&gh, &worktree, &branch)
+            .await
+            .map_err(CoreError::Git)
+    }
+
+    /// "Push", for a branch whose PR is already open: commits whatever isn't committed yet with
+    /// `commit_message` and pushes, telling `progress` as it goes. Asks first (doing nothing) while
+    /// a session in the Worktree is Working, unless `even_if_working`.
+    pub async fn push_to_pull_request(
+        &self,
+        worktree: &Path,
+        commit_message: &str,
+        even_if_working: bool,
+        progress: impl Fn(PullRequestProgress) + Send + Sync,
+    ) -> Result<PushToPullRequestOutcome, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let Some(branch) = git::current_branch(&worktree).await else {
+            return Err(CoreError::Git(
+                "HEAD is detached: check out a branch to push.".into(),
+            ));
+        };
+        if !even_if_working {
+            let working = self.mid_turn(&worktree);
+            if !working.is_empty() {
+                return Ok(PushToPullRequestOutcome::SessionsWorking { sessions: working });
+            }
+        }
+        let _one_at_a_time = self.inner.remote_op.lock().await;
+        let (committed, pushed) = self
+            .commit_and_push(&worktree, &branch, commit_message.trim(), &progress)
+            .await?;
+        Ok(match pushed {
+            PushOutcome::Pushed { to } => PushToPullRequestOutcome::Pushed { to, committed },
+            PushOutcome::Rejected => PushToPullRequestOutcome::Rejected { committed },
+        })
+    }
+
+    /// Commits everything that isn't committed yet (untracked files too) with `message`, then
+    /// pushes `branch`, telling `progress` each step and its output. The caller holds `remote_op`.
+    async fn commit_and_push(
+        &self,
+        worktree: &Path,
+        branch: &str,
+        message: &str,
+        progress: &(dyn Fn(PullRequestProgress) + Send + Sync),
+    ) -> Result<(Option<String>, PushOutcome), CoreError> {
+        let step = |text: String| progress(PullRequestProgress::Step { text });
+        let output = |text: &str| {
+            progress(PullRequestProgress::Output {
+                text: text.to_owned(),
+            })
+        };
+        let status = git::status(worktree).await.map_err(CoreError::Git)?;
+        if status.operation.is_some() || status.files.iter().any(|f| f.conflicted) {
+            return Err(CoreError::Git(
+                "A merge or rebase is in progress here: finish or abort it first.".into(),
+            ));
+        }
+        let committed = if status.files.is_empty() {
+            None
+        } else {
+            if message.is_empty() {
+                return Err(CoreError::Git(
+                    "There are uncommitted changes: give them a commit message.".into(),
+                ));
+            }
+            let files = status.files.len();
+            step(format!(
+                "Committing {files} file{}",
+                if files == 1 { "" } else { "s" }
+            ));
+            let made = async {
+                git::stage_all(worktree).await?;
+                git::commit(worktree, message, false, Some(&output)).await
+            }
+            .await;
+            self.inner.status_due(worktree.to_owned());
+            Some(made.map_err(CoreError::Git)?)
+        };
+        step(format!(
+            "Pushing {branch} to {}",
+            git::push_remote(worktree, branch).await
+        ));
+        let pushed = git::push(worktree, Some(&output)).await;
+        self.inner.git_changed(worktree.to_owned());
+        Ok((committed, pushed.map_err(CoreError::Git)?))
     }
 
     /// Aborts the merge, rebase, cherry-pick or revert in progress in the Worktree.

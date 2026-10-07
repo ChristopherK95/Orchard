@@ -2,15 +2,16 @@
 // change (committed or not, new files too) is gone through one at a time, GitHub-style: a file list
 // with what's been viewed, each file's diff, Next / Previous. Then the PR step: the branch it goes
 // into, title and description, and Create PR, which commits what's left, pushes the branch, and
-// opens the PR assigned to the user. A commit in the list narrows the files and diffs to what that
+// opens the PR assigned to the user. A branch whose PR is already open gets Push instead: a step of
+// its own that commits what's left and pushes, with git's output live. A commit in the list narrows the files and diffs to what that
 // commit changed on its own (Viewed ticks belong to the whole review, so they're not shown then).
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { core, type PullRequestProgress, type SessionId, type SessionInfo, type CommitChanges, type DiffLine, type PullRequestOutcome, type Review, type ReviewCommit, type ReviewFile } from "./core";
+import { core, type OpenPullRequest, type PushToPullRequestOutcome, type PullRequestProgress, type SessionId, type SessionInfo, type CommitChanges, type DiffLine, type PullRequestOutcome, type Review, type ReviewCommit, type ReviewFile } from "./core";
 import { DiffView } from "./DiffView";
 import { languageOfPath } from "./highlight";
-import { Send, Check, ChevronLeft, ChevronRight, CircleCheck, ExternalLink, GitBranch, GitPullRequest, Loader, RefreshCw, TriangleAlert, X } from "./icons";
+import { ArrowUp, Send, Check, ChevronLeft, ChevronRight, CircleCheck, ExternalLink, GitBranch, GitPullRequest, Loader, RefreshCw, TriangleAlert, X } from "./icons";
 
 const LETTER = { added: "A", modified: "M", deleted: "D", renamed: "R" } as const;
 const plural = (n: number, thing: string) => `${n} ${thing}${n === 1 ? "" : "s"}`;
@@ -80,16 +81,16 @@ function ProgressLog(props: { steps: LoggedStep[]; running: boolean; failed: boo
   );
 }
 
-/** What an Agent session is asked when Create PR failed (a hook's lint errors, say). */
-function fixPrompt(error: string, target: string) {
+/** What an Agent session is asked when Create PR or Push failed (a hook's lint errors, say). */
+function fixPrompt(error: string, tried: string) {
   return [
-    `I tried to open a pull request from this branch into ${target || "its base"}, but it failed with:`,
+    `I tried to ${tried}, but it failed with:`,
     "",
     "```",
     error.replace(/^git: /, ""),
     "```",
     "",
-    "Please fix what it reports (often the repo's commit or pre-push hooks: lint, type checks, tests) and commit the fixes. I'll try creating the PR again afterwards.",
+    "Please fix what it reports (often the repo's commit or pre-push hooks: lint, type checks, tests) and commit the fixes. I'll try again afterwards.",
   ].join("\n");
 }
 
@@ -105,7 +106,10 @@ export function ReviewOverlay(props: {
 }) {
   const [review, setReview] = createSignal<Review | null>(null);
   const [loadError, setLoadError] = createSignal("");
-  const [step, setStep] = createSignal<"review" | "pr" | "done">("review");
+  const [step, setStep] = createSignal<"review" | "pr" | "push" | "done">("review");
+  /** The PR already open from this branch: then there's Push instead of the PR step. */
+  const [existing, setExisting] = createSignal<OpenPullRequest | null>(null);
+  onMount(() => void core.openPullRequest(props.worktree).then(setExisting, () => {})); // (no gh, or not GitHub: the PR step)
   const [at, setAt] = createSignal(0);
   const [sideBySide, setSideBySide] = createSignal(false);
   const [diffs, setDiffs] = createStore<Record<string, Loaded>>({});
@@ -230,7 +234,11 @@ export function ReviewOverlay(props: {
   const sendError = async () => {
     setSending(true);
     try {
-      await props.onSendToSession(sendTo() === "" ? null : (Number(sendTo()) as SessionId), fixPrompt(prError(), target().trim()));
+      const tried =
+        step() === "push"
+          ? `push this branch to its open pull request (#${existing()?.number})`
+          : `open a pull request from this branch into ${target().trim() || "its base"}`;
+      await props.onSendToSession(sendTo() === "" ? null : (Number(sendTo()) as SessionId), fixPrompt(prError(), tried));
     } catch (err) {
       setPrError(`${prError()}\n\nCouldn't send it to the session: ${err}`);
     } finally {
@@ -301,12 +309,48 @@ export function ReviewOverlay(props: {
     }
   };
 
+  // Push (the branch's PR is open already).
+  const [pushed, setPushed] = createSignal<Exclude<PushToPullRequestOutcome, { kind: "sessionsWorking" }> | null>(null);
+  /** Uncommitted changes wait for a commit message before the push starts. */
+  const [askMessage, setAskMessage] = createSignal(false);
+  const needsMessage = () => ((review()?.uncommitted ?? 0) > 0 || askMessage()) && log.length === 0 && !pushed() && !creating();
+  const startPush = () => {
+    setPrError("");
+    setWorking(null);
+    setPushed(null);
+    setLog([]);
+    setStep("push");
+    if (!review()?.uncommitted) void push();
+  };
+  const push = async (evenIfWorking = false) => {
+    if (creating()) return;
+    setCreating(true);
+    setPrError("");
+    setWorking(null);
+    setPushed(null);
+    setLog([]);
+    try {
+      const result = await core.pushToPullRequest(props.worktree, commitMessage().trim(), evenIfWorking, onProgress);
+      if (result.kind === "sessionsWorking") setWorking(result.sessions);
+      else {
+        setPushed(result);
+        if (result.kind === "pushed") viewedBy.delete(props.worktree);
+      }
+    } catch (err) {
+      // (Files changed since the review was read: ask for the message it needs after all.)
+      if (String(err).includes("give them a commit message")) setAskMessage(true);
+      else setPrError(String(err));
+    } finally {
+      setCreating(false);
+    }
+  };
+
   // Keys: j / → next file, k / ← previous, v viewed, Esc closes (or steps back from the PR form).
   const onKey = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
       e.preventDefault();
       if (creating()) return;
-      if (step() === "pr") setStep("review");
+      if (step() === "pr" || step() === "push") setStep("review");
       else props.onClose();
       return;
     }
@@ -319,6 +363,23 @@ export function ReviewOverlay(props: {
   };
   onMount(() => window.addEventListener("keydown", onKey, true));
   onCleanup(() => window.removeEventListener("keydown", onKey, true));
+
+  /** Sends a failure to one of the Worktree's sessions (or a new one) to fix. */
+  const sendBlock = () => (
+    <div class="review-send">
+      <span class="grow">Have an Agent fix it, then come back and try again:</span>
+      <select value={sendTo()} onChange={(e) => setSendTo(e.currentTarget.value)} disabled={sending()}>
+        <For each={props.sessions}>{(s) => <option value={String(s.id)}>{s.name}</option>}</For>
+        <option value="">New session</option>
+      </select>
+      <button onClick={() => void sendError()} disabled={sending()} title="Sends the error with a request to fix it and commit, and shows the session">
+        <Show when={sending()} fallback={<Send />}>
+          <Loader class="spin" />
+        </Show>
+        Send to session
+      </button>
+    </div>
+  );
 
   const lineCount = createMemo(() => {
     let added = 0;
@@ -336,19 +397,31 @@ export function ReviewOverlay(props: {
         <div class="modal-head review-head">
           <GitPullRequest class="review-mark" />
           <b>
-            {step() === "review" ? "Review changes" : step() === "pr" ? "Create pull request" : "Pull request"}
+            {step() === "review" ? "Review changes" : step() === "pr" ? "Create pull request" : step() === "push" ? "Push" : "Pull request"}
             <span class="review-branch muted">
               <GitBranch />
               <span class="mono">{review()?.branch ?? props.label}</span>
-              <Show when={step() !== "review" && target()}>
-                <ChevronRight />
-                <span class="mono">{target()}</span>
+              <Show when={existing() ? existing()!.target : step() !== "review" && target()}>
+                {(into) => (
+                  <>
+                    <ChevronRight />
+                    <span class="mono">{into()}</span>
+                  </>
+                )}
               </Show>
             </span>
+            <Show when={existing()}>
+              {(pr) => (
+                <button class="link review-pr-link" onClick={() => void openUrl(pr().url)} title={`${pr().url}: open it in the browser`}>
+                  PR #{pr().number} open
+                  <ExternalLink />
+                </button>
+              )}
+            </Show>
           </b>
           <ol class="review-steps">
             <li classList={{ on: step() === "review" }}>1 Review</li>
-            <li classList={{ on: step() === "pr" }}>2 Pull request</li>
+            <li classList={{ on: step() === "pr" || step() === "push" }}>{existing() ? "2 Push" : "2 Pull request"}</li>
           </ol>
           <Show when={step() === "review"}>
             <button class="ghost icon" onClick={() => void load()} title="Read the changes again (the Agent may have changed files since)" aria-label="Refresh">
@@ -524,8 +597,17 @@ export function ReviewOverlay(props: {
                 Next file
                 <ChevronRight />
               </button>
+              <Show when={existing()}>
+                {(pr) => (
+                  <button class="primary" onClick={startPush} title={`Commit what's left and push to PR #${pr().number}`}>
+                    <ArrowUp />
+                    Push
+                  </button>
+                )}
+              </Show>
               <button
                 class="primary"
+                classList={{ hidden: !!existing() }}
                 disabled={allFiles().length === 0}
                 onClick={() => setStep("pr")}
                 title={viewedCount() < allFiles().length ? `${plural(allFiles().length - viewedCount(), "file")} not marked viewed yet` : "On to the pull request"}
@@ -620,19 +702,7 @@ export function ReviewOverlay(props: {
               </Show>
               <Show when={prError()}>
                 <p class="error small review-pr-error">{prError()}</p>
-                <div class="review-send">
-                  <span class="grow">Have an Agent fix it, then come back and create the PR again:</span>
-                  <select value={sendTo()} onChange={(e) => setSendTo(e.currentTarget.value)} disabled={sending()}>
-                    <For each={props.sessions}>{(s) => <option value={String(s.id)}>{s.name}</option>}</For>
-                    <option value="">New session</option>
-                  </select>
-                  <button onClick={() => void sendError()} disabled={sending()} title="Sends the error with a request to fix it and commit, and shows the session">
-                    <Show when={sending()} fallback={<Send />}>
-                      <Loader class="spin" />
-                    </Show>
-                    Send to session
-                  </button>
-                </div>
+                {sendBlock()}
               </Show>
             </div>
             <div class="modal-foot">
@@ -647,6 +717,101 @@ export function ReviewOverlay(props: {
                 </Show>
                 {creating() ? "Creating…" : "Create PR"}
               </button>
+            </div>
+          </Match>
+          <Match when={step() === "push"}>
+            <div class="modal-body review-pr">
+              <Show when={needsMessage()}>
+                <label>
+                  Commit message for the {review()!.uncommitted ? plural(review()!.uncommitted, "uncommitted file") : "uncommitted changes"}
+                  <input
+                    value={commitMessage()}
+                    onInput={(e) => setCommitMessage(e.currentTarget.value)}
+                    onKeyDown={(e) => e.key === "Enter" && commitMessage().trim() && void push()}
+                    ref={(el) => queueMicrotask(() => el.focus())}
+                    placeholder="What the Agent changed"
+                  />
+                </label>
+                <p class="hint">They're committed (untracked files too), then the branch is pushed.</p>
+              </Show>
+              <Show when={working()}>
+                {(sessions) => (
+                  <div class="git-ask">
+                    <span>
+                      {sessions().join(", ")} {sessions().length === 1 ? "is" : "are"} in the middle of a turn in this Worktree and may still change
+                      files. Push anyway?
+                    </span>
+                    <div class="actions">
+                      <button class="primary" onClick={() => void push(true)} disabled={creating()}>
+                        Push anyway
+                      </button>
+                      <button class="ghost" onClick={() => setWorking(null)}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </Show>
+              <Show when={log.length > 0}>
+                <ProgressLog steps={log} running={creating()} failed={!creating() && (!!prError() || pushed()?.kind === "rejected")} />
+              </Show>
+              <Show when={pushed()}>
+                {(p) => (
+                  <Show
+                    when={p().kind === "pushed" && (p() as { to: string }).to}
+                    fallback={
+                      <p class="git-notice warn">
+                        <TriangleAlert />
+                        {p().committed ? `Committed (${p().committed}), but the` : "The"} remote has commits this branch hasn't, so it turned the push down.
+                        Pull first (or have an Agent merge or rebase), then try again.
+                      </p>
+                    }
+                  >
+                    {(to) => (
+                      <p class="git-notice ok">
+                        <CircleCheck />
+                        Pushed to {to()}: PR #{existing()?.number} has the new commits.
+                      </p>
+                    )}
+                  </Show>
+                )}
+              </Show>
+              <Show when={prError()}>
+                <p class="error small review-pr-error">{prError()}</p>
+                {sendBlock()}
+              </Show>
+            </div>
+            <div class="modal-foot">
+              <button class="ghost" onClick={() => setStep("review")} disabled={creating()}>
+                <ChevronLeft />
+                Back to review
+              </button>
+              <span class="grow" />
+              <Show when={needsMessage()}>
+                <button class="primary" disabled={!commitMessage().trim()} onClick={() => void push()}>
+                  <ArrowUp />
+                  Commit and push
+                </button>
+              </Show>
+              <Show when={!needsMessage() && !creating() && pushed()?.kind !== "pushed" && (prError() || pushed())}>
+                <button onClick={() => void push()} title="Push again (after the fix)">
+                  <ArrowUp />
+                  Push again
+                </button>
+              </Show>
+              <Show when={pushed()?.kind === "pushed" && existing()}>
+                {(pr) => (
+                  <>
+                    <button class="ghost" onClick={() => props.onClose()}>
+                      Close
+                    </button>
+                    <button class="primary" onClick={() => void openUrl(pr().url).catch((err) => setPrError(String(err)))} ref={(el) => queueMicrotask(() => el.focus())}>
+                      <ExternalLink />
+                      Open PR #{pr().number}
+                    </button>
+                  </>
+                )}
+              </Show>
             </div>
           </Match>
           <Match when={step() === "done" && outcome()}>

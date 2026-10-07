@@ -459,6 +459,19 @@ export interface PullRequestRequest {
   evenIfWorking?: boolean;
 }
 
+/** The PR already open from the Worktree's branch (Review then offers Push instead). */
+export interface OpenPullRequest {
+  number: number;
+  url: string;
+  /** The branch it goes into. */
+  target: string;
+}
+
+export type PushToPullRequestOutcome =
+  | { kind: "sessionsWorking"; sessions: string[] }
+  | { kind: "pushed"; to: string; committed: string | null }
+  | { kind: "rejected"; committed: string | null };
+
 /** How Create PR is getting on: a step starting, or output from what it runs (hooks, git, gh). */
 export type PullRequestProgress = { kind: "step"; text: string } | { kind: "output"; text: string };
 
@@ -744,6 +757,14 @@ export const core = {
     const channel = new Channel<PullRequestProgress>();
     channel.onmessage = onProgress;
     return invoke<PullRequestOutcome>("create_pull_request", { worktree, request, onProgress: channel });
+  },
+  /** The PR open from the Worktree's branch, if it has one (asked of the GitHub CLI). */
+  openPullRequest: (worktree: string) => invoke<OpenPullRequest | null>("open_pull_request", { worktree }),
+  /** Push for a branch whose PR is open: commits what's left with `commitMessage`, then pushes. */
+  pushToPullRequest: (worktree: string, commitMessage: string, evenIfWorking: boolean, onProgress: (progress: PullRequestProgress) => void) => {
+    const channel = new Channel<PullRequestProgress>();
+    channel.onmessage = onProgress;
+    return invoke<PushToPullRequestOutcome>("push_to_pull_request", { worktree, commitMessage, evenIfWorking, onProgress: channel });
   },
   /** Aborts the merge, rebase, cherry-pick or revert in progress. */
   abortOperation: (worktree: string) => invoke<void>("abort_operation", { worktree }),
