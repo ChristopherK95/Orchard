@@ -1123,7 +1123,21 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         {(path) => {
           const w = rowWorktrees().find((w) => w.path === path());
           return (
-            <ReviewOverlay worktree={path()} label={w ? worktreeLabel(w) : path()} colour={worktreeColour(path())} onClose={() => setReviewing(null)} />
+            <ReviewOverlay
+              worktree={path()}
+              label={w ? worktreeLabel(w) : path()}
+              colour={worktreeColour(path())}
+              sessions={sessionsIn(path())}
+              onSendToSession={async (id, text) => {
+                const to = id ?? (await core.newSessionIn(path()));
+                // (One mid-turn, or waiting on the user, gets it once that turn is over.)
+                const busy = sessions[to]?.state === "working" || sessions[to]?.state === "needsYou";
+                await (busy ? core.queuePrompt(to, text, []) : core.sendPrompt(to, text));
+                setReviewing(null);
+                await show(to);
+              }}
+              onClose={() => setReviewing(null)}
+            />
           );
         }}
       </Show>

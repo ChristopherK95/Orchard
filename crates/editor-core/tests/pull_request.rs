@@ -243,3 +243,39 @@ async fn a_commit_shows_only_what_it_changed() {
         .collect();
     assert_eq!(added, ["two"]);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failing_pre_push_hook_says_what_it_found() {
+    use std::os::unix::fs::PermissionsExt;
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let gh = FakeGh::new("echo https://github.com/o/r/pull/1");
+    let core = core_with_gh(&fake, &gh);
+    let root = open(&core, &setup.repo()).await;
+    git(&root, &["checkout", "--quiet", "-b", "agent/work"]);
+    commit(&root, "work");
+    // A linter's report goes to stdout; git adds its own line on stderr.
+    let hook = root.join(".git/hooks/pre-push");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\necho 'src/a.ts 3:1 error no-unused-vars'\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let err = core
+        .create_pull_request(
+            &root,
+            PullRequestRequest {
+                target: "main".into(),
+                title: "Work".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("no-unused-vars"), "{err}");
+    assert!(err.contains("failed to push"), "{err}");
+    assert!(gh.args().is_empty(), "no PR without the push");
+}

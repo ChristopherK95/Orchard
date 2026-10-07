@@ -52,6 +52,19 @@ fn failure(out: &std::process::Output) -> String {
     }
 }
 
+/// What a git that ran hooks said when it failed: stdout as well as stderr. A failing `pre-push`
+/// hook's own output (a linter's report, say) comes out on git's stdout, while stderr only has
+/// git's "failed to push some refs".
+fn hook_failure(out: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, _) => stderr,
+        (false, true) => stdout,
+        (false, false) => format!("{stdout}\n{stderr}"),
+    }
+}
+
 async fn has_origin(repo: &Path) -> bool {
     run(repo, &["remote"])
         .await
@@ -925,7 +938,7 @@ pub(crate) async fn commit(worktree: &Path, message: &str, amend: bool) -> Resul
         })?
         .map_err(|e| format!("could not run git: {e}"))?;
     if !out.status.success() {
-        return Err(failure(&out));
+        return Err(hook_failure(&out));
     }
     Ok(run(worktree, &["rev-parse", "--short", "HEAD"])
         .await?
@@ -1051,7 +1064,7 @@ async fn run_remote(worktree: &Path, args: &[&str]) -> Result<String, String> {
     if out.status.success() {
         return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
     }
-    let message = failure(&out);
+    let message = hook_failure(&out);
     let lower = message.to_lowercase();
     Err(match LOGIN_SIGNS.iter().any(|sign| lower.contains(sign)) {
         true => format!("{message}\n{LOGIN_HINT}"),

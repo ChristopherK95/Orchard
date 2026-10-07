@@ -7,10 +7,10 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { core, type CommitChanges, type DiffLine, type PullRequestOutcome, type Review, type ReviewCommit, type ReviewFile } from "./core";
+import { core, type SessionId, type SessionInfo, type CommitChanges, type DiffLine, type PullRequestOutcome, type Review, type ReviewCommit, type ReviewFile } from "./core";
 import { DiffView } from "./DiffView";
 import { languageOfPath } from "./highlight";
-import { Check, ChevronLeft, ChevronRight, CircleCheck, ExternalLink, GitBranch, GitPullRequest, Loader, RefreshCw, TriangleAlert, X } from "./icons";
+import { Send, Check, ChevronLeft, ChevronRight, CircleCheck, ExternalLink, GitBranch, GitPullRequest, Loader, RefreshCw, TriangleAlert, X } from "./icons";
 
 const LETTER = { added: "A", modified: "M", deleted: "D", renamed: "R" } as const;
 const plural = (n: number, thing: string) => `${n} ${thing}${n === 1 ? "" : "s"}`;
@@ -38,7 +38,29 @@ function titleFromBranch(branch: string) {
 
 type Loaded = { lines: DiffLine[] } | { error: string };
 
-export function ReviewOverlay(props: { worktree: string; label: string; colour: string; onClose: () => void }) {
+/** What an Agent session is asked when Create PR failed (a hook's lint errors, say). */
+function fixPrompt(error: string, target: string) {
+  return [
+    `I tried to open a pull request from this branch into ${target || "its base"}, but it failed with:`,
+    "",
+    "```",
+    error.replace(/^git: /, ""),
+    "```",
+    "",
+    "Please fix what it reports (often the repo's commit or pre-push hooks: lint, type checks, tests) and commit the fixes. I'll try creating the PR again afterwards.",
+  ].join("\n");
+}
+
+export function ReviewOverlay(props: {
+  worktree: string;
+  label: string;
+  colour: string;
+  /** The Worktree's Agent sessions, which a failure can be sent to. */
+  sessions: SessionInfo[];
+  /** Sends `text` to session `id` (null: a new one in the Worktree) and shows it. */
+  onSendToSession: (id: SessionId | null, text: string) => Promise<void>;
+  onClose: () => void;
+}) {
   const [review, setReview] = createSignal<Review | null>(null);
   const [loadError, setLoadError] = createSignal("");
   const [step, setStep] = createSignal<"review" | "pr" | "done">("review");
@@ -160,6 +182,19 @@ export function ReviewOverlay(props: { worktree: string; label: string; colour: 
   const [draft, setDraft] = createSignal(false);
   const [creating, setCreating] = createSignal(false);
   const [prError, setPrError] = createSignal("");
+  /** The session a failure goes to ("" for a new one): the Worktree's first, else a new one. */
+  const [sendTo, setSendTo] = createSignal(props.sessions[0] ? String(props.sessions[0].id) : "");
+  const [sending, setSending] = createSignal(false);
+  const sendError = async () => {
+    setSending(true);
+    try {
+      await props.onSendToSession(sendTo() === "" ? null : (Number(sendTo()) as SessionId), fixPrompt(prError(), target().trim()));
+    } catch (err) {
+      setPrError(`${prError()}\n\nCouldn't send it to the session: ${err}`);
+    } finally {
+      setSending(false);
+    }
+  };
   const [working, setWorking] = createSignal<string[] | null>(null);
   const [outcome, setOutcome] = createSignal<Exclude<PullRequestOutcome, { kind: "sessionsWorking" }> | null>(null);
   let seeded = false;
@@ -523,6 +558,19 @@ export function ReviewOverlay(props: { worktree: string; label: string; colour: 
               </Show>
               <Show when={prError()}>
                 <p class="error small review-pr-error">{prError()}</p>
+                <div class="review-send">
+                  <span class="grow">Have an Agent fix it, then come back and create the PR again:</span>
+                  <select value={sendTo()} onChange={(e) => setSendTo(e.currentTarget.value)} disabled={sending()}>
+                    <For each={props.sessions}>{(s) => <option value={String(s.id)}>{s.name}</option>}</For>
+                    <option value="">New session</option>
+                  </select>
+                  <button onClick={() => void sendError()} disabled={sending()} title="Sends the error with a request to fix it and commit, and shows the session">
+                    <Show when={sending()} fallback={<Send />}>
+                      <Loader class="spin" />
+                    </Show>
+                    Send to session
+                  </button>
+                </div>
               </Show>
             </div>
             <div class="modal-foot">

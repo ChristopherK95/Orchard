@@ -1087,7 +1087,10 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .review-body-text { min-height: 160px; resize: vertical; font: 13px/1.5 var(--mono); }
 .modal-body label.check-row { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; }
 .review-plan { margin: 0; padding: 10px 12px 10px 30px; border: 1px dashed var(--line-strong); border-radius: var(--r-md); font-size: 12.5px; color: var(--fg-2); line-height: 1.7; }
-.review-pr-error { white-space: pre-wrap; }
+.review-pr-error { margin: 0; max-height: 240px; overflow: auto; padding: 8px 10px; border: 1px solid var(--danger-border); border-radius: var(--r-md); background: var(--danger-tint); font: 12px/1.5 var(--mono); white-space: pre-wrap; user-select: text; }
+.review-send { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--fg-2); }
+.review-send select { height: 30px; max-width: 220px; }
+.review-send button .lucide { width: 14px; height: 14px; }
 .review-done { flex: 1; align-items: center; justify-content: center; text-align: center; }
 .review-done p { margin: 0; max-width: 520px; }
 .done-mark { width: 40px; height: 40px; color: var(--ok); }
