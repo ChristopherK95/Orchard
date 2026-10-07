@@ -74,10 +74,25 @@ impl TerminalStream {
     }
 }
 
-/// A terminal asking where the cursor is (DSR 6), and the answer given when no panel can: the top
-/// left corner.
-const CURSOR_QUERY: &str = "\x1b[6n";
-const CURSOR_ANSWER: &str = "\x1b[1;1R";
+/// The queries a shell waits on an answer to, and the answer the core gives when no panel can (a
+/// shell started, or still starting, out of sight: an Action's, say). Where the cursor is (DSR 6;
+/// ConPTY asks as it starts): the top left corner. The Primary Device Attributes (DA1; fish asks
+/// as it starts, and waits 10 seconds): a VT100 with advanced video, as xterm.js answers.
+const QUERIES: [(&str, &str); 3] = [
+    ("\x1b[6n", "\x1b[1;1R"),
+    ("\x1b[c", "\x1b[?1;2c"),
+    ("\x1b[0c", "\x1b[?1;2c"),
+];
+
+/// The answers owed to the queries in `text`, in order.
+fn answers(text: &str) -> Vec<&'static str> {
+    let mut found: Vec<(usize, &'static str)> = QUERIES
+        .iter()
+        .flat_map(|(query, answer)| text.match_indices(query).map(move |(at, _)| (at, *answer)))
+        .collect();
+    found.sort_by_key(|(at, _)| *at);
+    found.into_iter().map(|(_, answer)| answer).collect()
+}
 
 /// How much output is kept for the panel coming back.
 const SCROLLBACK: usize = 512 * 1024;
@@ -120,8 +135,9 @@ struct Shared {
     exited: Option<Option<u32>>,
     /// The core answered a query in the kept output itself, so a panel mustn't again.
     answered: bool,
-    /// A cursor position query went to a panel that hasn't typed anything since (its answer, say).
-    query_pending: bool,
+    /// Answers owed to queries that went to a panel that hasn't typed anything since (its answer,
+    /// say).
+    owed: Vec<&'static str>,
 }
 
 impl Shared {
@@ -218,16 +234,16 @@ impl Terminal {
                     continue;
                 }
                 let mut shared = output.lock().expect("terminal lock");
-                // A cursor position query with no panel to answer it (a shell started, or still
-                // starting, out of sight): ConPTY waits for the answer, so the core gives one. A
-                // panel coming back replays the query and doesn't answer again.
+                // A query with no panel to answer it: the shell waits for the answer, so the core
+                // gives one. A panel coming back replays the query and doesn't answer again.
+                let owed = answers(&text);
                 if shared.viewers.is_empty() {
-                    for _ in text.matches(CURSOR_QUERY) {
-                        let _ = answer.send(CURSOR_ANSWER.as_bytes().to_vec());
+                    for reply in &owed {
+                        let _ = answer.send(reply.as_bytes().to_vec());
                         shared.answered = true;
                     }
-                } else if text.contains(CURSOR_QUERY) {
-                    shared.query_pending = true;
+                } else {
+                    shared.owed.extend(owed);
                 }
                 keep_scrollback(&mut shared.output, &text);
                 shared.send(TerminalOutput::Output { text });
@@ -327,16 +343,17 @@ impl Terminal {
         let mut shared = self.shared.lock().expect("terminal lock");
         if shared.viewers.remove(slot).is_some()
             && shared.viewers.is_empty()
-            && shared.query_pending
+            && !shared.owed.is_empty()
         {
-            shared.query_pending = false;
             shared.answered = true;
-            let _ = self.input.send(CURSOR_ANSWER.as_bytes().to_vec());
+            for reply in std::mem::take(&mut shared.owed) {
+                let _ = self.input.send(reply.as_bytes().to_vec());
+            }
         }
     }
 
     pub(crate) fn write(&self, data: &str) {
-        self.shared.lock().expect("terminal lock").query_pending = false;
+        self.shared.lock().expect("terminal lock").owed.clear();
         let _ = self.input.send(data.as_bytes().to_vec());
     }
 
@@ -422,6 +439,16 @@ pub(crate) async fn shell(windows_shell: WindowsShell) -> Result<CommandBuilder,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queries_are_answered_in_the_order_they_were_asked() {
+        assert_eq!(
+            answers("\x1b[?u\x1b[0cprompt\x1b[6n\x1b[c"),
+            ["\x1b[?1;2c", "\x1b[1;1R", "\x1b[?1;2c"]
+        );
+        // (Not the secondary or tertiary attributes.)
+        assert!(answers("\x1b[>c\x1b[=c").is_empty());
+    }
 
     #[test]
     fn kept_output_drops_whole_lines_from_the_front() {
