@@ -1132,6 +1132,24 @@ fn resize_terminal(
         .map_err(|e| e.to_string())
 }
 
+/// Runs the repo's Action `name` in the Worktree (restarting it if it runs there): its new shells.
+#[tauri::command]
+async fn run_action(
+    core: State<'_, Core>,
+    worktree: PathBuf,
+    name: String,
+) -> CommandResult<Vec<TerminalInfo>> {
+    core.run_action(&worktree, &name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Stops an Action's shell and runs its command again in a new one.
+#[tauri::command]
+async fn restart_terminal(core: State<'_, Core>, id: TerminalId) -> CommandResult<TerminalInfo> {
+    core.restart_terminal(id).await.map_err(|e| e.to_string())
+}
+
 /// View slot `slot`'s Terminal panel is hidden; the shells keep running.
 #[tauri::command]
 fn hide_terminal(core: State<'_, Core>, slot: String) {
@@ -1313,6 +1331,8 @@ fn main() {
             terminal_input,
             resize_terminal,
             hide_terminal,
+            run_action,
+            restart_terminal,
             close_terminal
         ])
         .run(tauri::generate_context!())

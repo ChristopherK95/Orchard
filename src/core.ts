@@ -33,6 +33,8 @@ export interface TerminalInfo {
   name: string;
   /** Something other than the shell is in the foreground (Linux only). */
   busy: boolean;
+  /** The Action that started it (it's then named after the Action, or its command). */
+  action: string | null;
 }
 
 /** What a Worktree's terminal sends the Terminal panel. */
@@ -284,6 +286,14 @@ export interface RepoSettings {
   setupWindows: string[] | null;
   setupLinux: string[] | null;
   windowsShell: WindowsShell;
+  /** Named commands run on demand, each command in a shell of its own. */
+  actions: Action[];
+}
+
+/** An Action: its commands each run in a new shell of the Worktree's Terminal panel. */
+export interface Action {
+  name: string;
+  run: string[];
 }
 
 /** One change the settings page makes (repo ones are to the open repo's section). */
@@ -300,7 +310,8 @@ export type SettingChange =
   | { kind: "setup"; commands: string[] }
   | { kind: "setupWindows"; commands: string[] | null }
   | { kind: "setupLinux"; commands: string[] | null }
-  | { kind: "windowsShell"; shell: WindowsShell };
+  | { kind: "windowsShell"; shell: WindowsShell }
+  | { kind: "actions"; actions: Action[] };
 
 export interface LoadedSettings {
   settings: Settings;
@@ -716,6 +727,10 @@ export const core = {
   /** Types keystrokes (or a paste) into a shell. */
   terminalInput: (id: number, data: string) => invoke<void>("terminal_input", { id, data }),
   resizeTerminal: (id: number, cols: number, rows: number) => invoke<void>("resize_terminal", { id, cols, rows }),
+  /** Runs the repo's Action `name` in the Worktree, restarting it if it runs there: its new shells. */
+  runAction: (worktree: string, name: string) => invoke<TerminalInfo[]>("run_action", { worktree, name }),
+  /** Stops an Action's shell and runs its command again in a new one. */
+  restartTerminal: (id: number) => invoke<TerminalInfo>("restart_terminal", { id }),
   /** View slot `slot`'s Terminal panel is hidden; the shells keep running. */
   hideTerminal: (slot: string) => invoke<void>("hide_terminal", { slot }),
   /** Stops a shell and everything it started. */

@@ -95,7 +95,11 @@ async fn a_worktrees_shell_runs_in_its_folder_and_keeps_its_output_while_out_of_
         .unwrap();
     let seen = output_until(&core, shell.id, &mut stream, "[Orchard]").await;
     let folder = root.file_name().unwrap().to_string_lossy().into_owned();
-    let seen = seen + &output_until(&core, shell.id, &mut stream, &folder).await;
+    // (It may have come with the marker.)
+    let seen = match seen.contains(&folder) {
+        true => seen,
+        false => seen + &output_until(&core, shell.id, &mut stream, &folder).await,
+    };
     assert!(seen.contains(&folder), "{seen}");
 
     // Hidden, then shown again: the same shell, with what it printed.
@@ -293,4 +297,62 @@ async fn each_column_shows_its_own_worktrees_shell_at_once() {
     // Both stream: the one shown second didn't take the first one's panel away.
     output_until(&core, a.id, &mut left, "[Orchard]").await;
     output_until(&core, b.id, &mut right, "[Orchard]").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_action_runs_each_command_in_a_shell_of_its_own_and_running_it_again_restarts_them() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let (alpha, bravo) = (print("alpha"), print("bravo"));
+    // (A basic string: the commands have single quotes in them.)
+    let run = |command: &str| format!("{:?}", command.trim_end_matches('\r'));
+    let settings = repo_settings(
+        &origin_url(&setup.repo()),
+        &format!(
+            "actions = [{{ name = \"Dev\", run = [{}, {}] }}, {{ name = \"Solo\", run = [{}] }}]",
+            run(&alpha),
+            run(&bravo),
+            run(&alpha)
+        ),
+    );
+    let core = core_with_settings(&fake, &settings);
+    let root = core.open_workspace(&setup.repo()).await.unwrap().root;
+
+    let started = core.run_action(&root, "Dev").await.unwrap();
+    assert_eq!(started.len(), 2);
+    assert!(started.iter().all(|t| t.action.as_deref() == Some("Dev")));
+    assert_eq!(started[0].name, alpha.trim_end_matches('\r'));
+    for (shell, word) in started.iter().zip(["alpha", "bravo"]) {
+        let (shown, mut stream) = core
+            .open_terminal(TABS_SLOT, &root, Some(shell.id), 80, 24)
+            .await
+            .unwrap();
+        assert_eq!(shown.id, shell.id);
+        output_until(&core, shell.id, &mut stream, word).await;
+    }
+
+    // Again: the same two commands in new shells, the old ones stopped.
+    let again = core.run_action(&root, "Dev").await.unwrap();
+    let ids = |list: &[editor_core::TerminalInfo]| list.iter().map(|t| t.id).collect::<Vec<_>>();
+    assert!(ids(&again).iter().all(|id| !ids(&started).contains(id)));
+    assert_eq!(ids(&core.terminals()), ids(&again));
+
+    // A single command's shell is named after the Action; other Actions' shells are left alone.
+    let solo = core.run_action(&root, "Solo").await.unwrap();
+    assert_eq!(solo[0].name, "Solo");
+    assert_eq!(core.terminals().len(), 3);
+
+    // One of its shells restarted alone: a new shell running the same command.
+    let restarted = core.restart_terminal(again[1].id).await.unwrap();
+    assert_ne!(restarted.id, again[1].id);
+    assert_eq!(restarted.name, again[1].name);
+    assert_eq!(restarted.action.as_deref(), Some("Dev"));
+    let (_, mut stream) = core
+        .open_terminal(TABS_SLOT, &root, Some(restarted.id), 80, 24)
+        .await
+        .unwrap();
+    output_until(&core, restarted.id, &mut stream, "bravo").await;
+    assert_eq!(core.terminals().len(), 3);
+
+    assert!(core.run_action(&root, "Nope").await.is_err());
 }

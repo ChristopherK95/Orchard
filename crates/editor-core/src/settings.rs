@@ -101,6 +101,19 @@ pub struct RepoSettings {
     /// The shell setup and the Terminal panel run on Windows (on Linux, setup uses `bash` and the
     /// terminal the user's `$SHELL`).
     pub windows_shell: WindowsShell,
+    /// Actions: named commands the user runs on demand, each in a shell of its own.
+    pub actions: Vec<Action>,
+}
+
+/// A named set of commands run on demand in a Worktree (a dev server, say), each command typed
+/// into a new shell of the Terminal panel, so its output stays in view and it can be stopped,
+/// rerun or restarted.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
+pub struct Action {
+    pub name: String,
+    /// One shell per command, in the Worktree's folder.
+    pub run: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -191,6 +204,10 @@ pub enum SettingChange {
     WindowsShell {
         shell: WindowsShell,
     },
+    /// The whole list (an empty one removes the key).
+    Actions {
+        actions: Vec<Action>,
+    },
 }
 
 impl SettingChange {
@@ -201,6 +218,7 @@ impl SettingChange {
                 | Self::SetupWindows { .. }
                 | Self::SetupLinux { .. }
                 | Self::WindowsShell { .. }
+                | Self::Actions { .. }
         )
     }
 
@@ -252,6 +270,35 @@ impl SettingChange {
                     WindowsShell::GitBash => "git-bash",
                 })),
             ),
+            Self::Actions { actions } => {
+                let mut actions: toml_edit::Array = actions
+                    .iter()
+                    .filter(|a| !a.name.trim().is_empty())
+                    .map(|a| {
+                        let mut table = toml_edit::InlineTable::new();
+                        table.insert("name", a.name.trim().into());
+                        let run: toml_edit::Array = a
+                            .run
+                            .iter()
+                            .map(|c| c.trim())
+                            .filter(|c| !c.is_empty())
+                            .collect();
+                        table.insert("run", run.into());
+                        table
+                    })
+                    .collect();
+                // (One per line.)
+                for action in actions.iter_mut() {
+                    action.decor_mut().set_prefix("\n  ");
+                }
+                actions.set_trailing("\n");
+                actions.set_trailing_comma(true);
+                (
+                    repo(),
+                    "actions",
+                    (!actions.is_empty()).then(|| value(actions)),
+                )
+            }
         }
     }
 }

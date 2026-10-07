@@ -1,10 +1,16 @@
 // Ctrl+P (ticket 13): fuzzy-find a file in the active Worktree (typos allowed), plus the commands to
-// start a new Agent session here or in a fresh Worktree. Arrow keys move, Enter picks, Esc closes.
+// start a new Agent session here or in a fresh Worktree, and the repo's Actions. Arrow keys move,
+// Enter picks, Esc closes.
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import { core, type FileMatch } from "./core";
-import { FileIcon, GitBranch, Search, Sparkles } from "./icons";
+import { FileIcon, GitBranch, Play, RefreshCw, Search, Sparkles } from "./icons";
+import { shellsIn } from "./shells";
 
-export type PaletteCommand = { kind: "newSessionHere" } | { kind: "newSessionInFreshWorktree" } | { kind: "switchWorkspace" };
+export type PaletteCommand =
+  | { kind: "newSessionHere" }
+  | { kind: "newSessionInFreshWorktree" }
+  | { kind: "switchWorkspace" }
+  | { kind: "runAction"; name: string };
 
 type Item = { kind: "command"; command: PaletteCommand; label: string } | { kind: "file"; file: FileMatch };
 
@@ -31,12 +37,19 @@ export function CommandPalette(props: {
   const [query, setQuery] = createSignal("");
   const [files, setFiles] = createSignal<FileMatch[]>([]);
   const [selected, setSelected] = createSignal(0);
+  const [actions, setActions] = createSignal<string[]>([]);
+  void core.repoSettings().then((repo) => setActions(repo.actions.map((a) => a.name)), () => {});
   let input!: HTMLInputElement;
   let asked = 0;
 
   const items = (): Item[] => {
     const words = query().trim().toLowerCase();
-    const commands = COMMANDS.filter((c) => !words || c.label.toLowerCase().includes(words)).map(
+    const running = new Set(shellsIn(props.worktree).map((t) => t.action));
+    const runs = actions().map((name) => ({
+      command: { kind: "runAction", name } as PaletteCommand,
+      label: `${running.has(name) ? "Restart" : "Run"} ${name}`,
+    }));
+    const commands = [...runs, ...COMMANDS].filter((c) => !words || c.label.toLowerCase().includes(words)).map(
       (c) => ({ kind: "command", ...c }) as Item,
     );
     return [...commands, ...files().map((file) => ({ kind: "file", file }) as Item)];
@@ -119,7 +132,11 @@ export function CommandPalette(props: {
                     when={item.kind === "file" ? item.file : null}
                     fallback={
                       <>
-                        <Sparkles />
+                        {(() => {
+                          const command = (item as { command: PaletteCommand }).command;
+                          if (command.kind !== "runAction") return <Sparkles />;
+                          return shellsIn(props.worktree).some((t) => t.action === command.name) ? <RefreshCw /> : <Play />;
+                        })()}
                         <span class="file">{(item as { label: string }).label}</span>
                       </>
                     }

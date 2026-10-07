@@ -13,6 +13,12 @@ export const shellsIn = (worktree: string) => all().filter((t) => t.worktree ===
 
 export const shellRunning = (worktree: string) => all().some((t) => t.worktree === worktree);
 
+/** A shell a Terminal panel on its Worktree should show next (an Action's, just started). `n`
+ *  tells one request from the next. */
+const [wanted, setWanted] = createSignal<{ worktree: string; id: number; n: number } | null>(null);
+export { wanted as wantedShell };
+export const showShellOf = (worktree: string, id: number) => setWanted((now) => ({ worktree, id, n: (now?.n ?? 0) + 1 }));
+
 /** Looks again for the shells' names (what runs in the foreground changes with no event). */
 export function refreshShells() {
   void core.terminals().then(setAll, () => {});

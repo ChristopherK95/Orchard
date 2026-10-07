@@ -8,8 +8,8 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { createEffect, createSignal, For, getOwner, on, onCleanup, onMount, runWithOwner, Show } from "solid-js";
 import { core, type TerminalInfo, type TerminalOutput } from "./core";
-import { Eraser, Folder, GitBranch, Maximize2, Minimize2, Plus, SquareTerminal, Trash2, X } from "./icons";
-import { refreshShells, shellsIn } from "./shells";
+import { Eraser, Folder, GitBranch, Maximize2, Minimize2, Play, Plus, RefreshCw, SquareTerminal, Trash2, X } from "./icons";
+import { refreshShells, shellsIn, wantedShell } from "./shells";
 
 /** The panel's smallest width, and the least it leaves the transcript beside it. */
 const MIN_WIDTH = 280;
@@ -17,6 +17,8 @@ const MIN_LEFT = 420;
 
 /** The shell each panel last showed, by view slot and Worktree (so switching back returns to it). */
 const lastShown = new Map<string, number>();
+/** The last `wantedShell` request each view slot took (one opening later doesn't take it again). */
+const wantedTaken = new Map<string, number>();
 
 export function TerminalPanel(props: {
   /** Its view slot: the Tabs view's, or its column's. */
@@ -133,7 +135,24 @@ export function TerminalPanel(props: {
       if (props.takeFocus) term.focus();
     };
     showShell = (which) => shown !== null && show(shown, which);
-    createEffect(on(() => props.worktree, (path) => show(path, null)));
+    /** A shell asked for on this Worktree (an Action's, just started), unless already taken. */
+    const take = (path: string) => {
+      const wanted = wantedShell();
+      if (!wanted || wanted.worktree !== path || (wantedTaken.get(props.slot) ?? 0) >= wanted.n) return null;
+      wantedTaken.set(props.slot, wanted.n);
+      return wanted.id;
+    };
+    createEffect(on(() => props.worktree, (path) => show(path, take(path))));
+    createEffect(
+      on(
+        wantedShell,
+        () => {
+          const id = shown !== null ? take(shown) : null;
+          if (id !== null && shown !== null) show(shown, id);
+        },
+        { defer: true },
+      ),
+    );
 
     /** After Enter, what runs in the foreground may have changed (the tabs' names). */
     let renamed = 0;
@@ -218,6 +237,14 @@ export function TerminalPanel(props: {
       .then(() => next && showShell(next.id))
       .catch((err) => setError(String(err)));
   };
+  /** Runs an Action's shell's command again in a new shell, and shows that. */
+  const restart = (id: number | null) => {
+    if (id === null) return;
+    void core
+      .restartTerminal(id)
+      .then((fresh) => showShell(fresh.id))
+      .catch((err) => setError(String(err)));
+  };
   /** The shell tabs and +: in the panel's header beside the transcript, in the cwd strip in a column. */
   const tabs = () => (
     <>
@@ -231,7 +258,7 @@ export function TerminalPanel(props: {
                 onAuxClick={(e) => e.button === 1 && stop(shell)}
                 title={`${shell.name} (middle-click stops it)`}
               >
-                <SquareTerminal />
+                {shell.action ? <Play /> : <SquareTerminal />}
                 {shell.name}
               </button>
               <Show when={shells().length > 1}>
@@ -292,6 +319,13 @@ export function TerminalPanel(props: {
           <button class="ghost icon" onClick={() => showShell("new")} title="Another shell in this Worktree" aria-label="New shell">
             <Plus />
           </button>
+        </Show>
+        <Show when={shells().find((t) => t.id === current())?.action}>
+          {(action) => (
+            <button class="ghost icon" onClick={() => restart(current())} title={`Stop this shell and run its command again (Action: ${action()})`} aria-label="Restart">
+              <RefreshCw />
+            </button>
+          )}
         </Show>
         <button class="ghost icon" onClick={() => clear()} title="Clear the screen" aria-label="Clear the screen">
           <Eraser />

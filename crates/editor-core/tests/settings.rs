@@ -172,3 +172,34 @@ async fn the_settings_page_writes_nothing_over_a_file_that_doesnt_parse() {
         "[editor\nvim = "
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_settings_page_writes_the_repos_actions_one_per_line() {
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let repo = git_repo();
+    let core = core_with_settings(&fake, "");
+    core.open_workspace(repo.path()).await.unwrap();
+
+    let dev = editor_core::Action {
+        name: "Dev".into(),
+        run: vec![
+            "cd server && pnpm start".into(),
+            "cd client && pnpm start".into(),
+        ],
+    };
+    core.change_setting(editor_core::SettingChange::Actions {
+        actions: vec![dev.clone()],
+    })
+    .await
+    .unwrap();
+    assert_eq!(core.repo_settings().await.unwrap().actions, [dev]);
+    let text = std::fs::read_to_string(fake.settings_path()).unwrap();
+    assert!(text.contains("actions = [\n  { name = \"Dev\""), "{text}");
+
+    // None left: the key goes.
+    core.change_setting(editor_core::SettingChange::Actions { actions: vec![] })
+        .await
+        .unwrap();
+    let text = std::fs::read_to_string(fake.settings_path()).unwrap();
+    assert!(!text.contains("actions"), "{text}");
+}

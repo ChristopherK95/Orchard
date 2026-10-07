@@ -252,6 +252,10 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .settings-command { display: flex; align-items: center; gap: 4px; }
 .settings-command input { flex: 1; min-width: 0; }
 .settings-commands .add-command { align-self: flex-start; }
+.settings-actions { display: flex; flex-direction: column; gap: 10px; }
+.settings-action { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: var(--r-lg); }
+.settings-action > .settings-commands { padding-left: 12px; }
+.settings-actions > .add-command { align-self: flex-start; }
 .font-picker { position: relative; width: 260px; max-width: 100%; }
 .font-picker-button { width: 100%; justify-content: flex-start; gap: 8px; min-height: 30px; padding: 0 8px 0 10px; font-weight: 400; text-align: left; }
 .font-picker-button .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -77,6 +77,10 @@ _Avoid_: Text editor window, code view
 The user's own shell in a Worktree's folder: docked beside the chat in the Tabs view and under the column's transcript in the Columns view. Opening or closing it is per Worktree and holds in both views (Ctrl+` toggles the active Worktree's, which in the Columns view is the focused column's). Each Worktree has one shell, started the first time a panel shows that Worktree. It keeps running while out of sight (a dev server, say) and a panel comes back to its output. It stops when the user stops it, or when its Worktree is removed or the Workspace closes. It runs the repo's Windows shell setting on Windows, and `$SHELL` on Linux.
 _Avoid_: Console, integrated terminal
 
+**Action**:
+A named list of commands in the repo's settings, run on demand in a Worktree (from Ctrl+P): each command is typed into a new shell of the Terminal panel, named after the Action (or after the command, when it has several), so its output stays in view and it can be stopped or rerun there. Running the Action again restarts its shells in that Worktree; one of them can be restarted alone from the panel.
+_Avoid_: Task, script, run configuration
+
 **Agent**:
 The coding-agent program driving an Agent session. Claude Code first; others may be supported later behind the same boundary.
 

@@ -39,7 +39,7 @@ use crate::session::{
 };
 use crate::settings::{self, LoadedSettings, RepoSettings, SettingChange, WindowsShell};
 use crate::setup::{self, SetupInfo, SetupStatus};
-use crate::terminal::{self, Terminal, TerminalId, TerminalInfo, TerminalStream};
+use crate::terminal::{self, ActionShell, Terminal, TerminalId, TerminalInfo, TerminalStream};
 use crate::worktrees::{self, Discovery, WorktreeInfo};
 
 /// A slash command the Agent offers (one of Claude Code's, a custom command or a skill), from ACP's
@@ -1464,7 +1464,10 @@ impl Core {
                 terminal.resize(cols, rows).map_err(CoreError::Terminal)?;
                 (terminal, true)
             }
-            None => (self.start_terminal(&worktree, cols, rows).await?, false),
+            None => (
+                self.start_terminal(&worktree, cols, rows, None).await?,
+                false,
+            ),
         };
         Ok(self.show_terminal(slot, &terminal, returning))
     }
@@ -1478,7 +1481,7 @@ impl Core {
         rows: u16,
     ) -> Result<(TerminalInfo, TerminalStream), CoreError> {
         let worktree = worktrees::normalize(worktree.to_owned());
-        let terminal = self.start_terminal(&worktree, cols, rows).await?;
+        let terminal = self.start_terminal(&worktree, cols, rows, None).await?;
         Ok(self.show_terminal(slot, &terminal, false))
     }
 
@@ -1507,6 +1510,7 @@ impl Core {
         worktree: &Path,
         cols: u16,
         rows: u16,
+        action: Option<ActionShell>,
     ) -> Result<Arc<Terminal>, CoreError> {
         let root = self.workspace()?.root;
         if !self.worktrees().iter().any(|w| w.path == worktree) {
@@ -1527,7 +1531,7 @@ impl Core {
             .map_err(CoreError::Terminal)?;
         let id = self.inner.next_terminal.fetch_add(1, Ordering::Relaxed);
         let weak = Arc::downgrade(&self.inner);
-        let terminal = Terminal::start(id, shell, worktree, cols, rows, move || {
+        let terminal = Terminal::start(id, shell, worktree, cols, rows, action, move || {
             // An exited shell goes; the panel asking again starts another.
             if let Some(inner) = weak.upgrade() {
                 let gone = inner
@@ -1549,6 +1553,68 @@ impl Core {
             .insert(id, terminal.clone());
         self.inner.terminals_changed();
         Ok(terminal)
+    }
+
+    /// Runs the open repo's Action `name` in the Worktree: a new shell per command, named after it.
+    /// Shells it started there before are stopped first, so running it again restarts it. The
+    /// shells aren't shown anywhere yet (a Terminal panel opens them by id).
+    pub async fn run_action(
+        &self,
+        worktree: &Path,
+        name: &str,
+    ) -> Result<Vec<TerminalInfo>, CoreError> {
+        let worktree = worktrees::normalize(worktree.to_owned());
+        self.inner.reload_settings(); // (a save a moment ago may not have been reloaded yet)
+        let action = self
+            .repo_settings()
+            .await?
+            .actions
+            .into_iter()
+            .find(|a| a.name == name)
+            .ok_or_else(|| CoreError::Terminal(format!("there's no Action called {name:?}")))?;
+        let stopping: Vec<TerminalId> = {
+            let terminals = self.inner.terminals.lock().expect("terminals lock");
+            terminals
+                .values()
+                .filter(|t| t.worktree == worktree)
+                .filter(|t| t.action.as_ref().is_some_and(|a| a.action == action.name))
+                .map(|t| t.id)
+                .collect()
+        };
+        for id in stopping {
+            self.close_terminal(id).await;
+        }
+        let several = action.run.len() > 1;
+        let mut started = vec![];
+        for command in &action.run {
+            let shell = ActionShell {
+                action: action.name.clone(),
+                label: match several {
+                    true => command.clone(),
+                    false => action.name.clone(),
+                },
+                command: command.clone(),
+            };
+            // (The panel that shows it sets its size.)
+            let terminal = self.start_terminal(&worktree, 80, 24, Some(shell)).await?;
+            started.push(terminal.info());
+        }
+        Ok(started)
+    }
+
+    /// Stops an Action's shell and runs its command again in a new one (in its place in the
+    /// Worktree's list of shells only by being the newest).
+    pub async fn restart_terminal(&self, id: TerminalId) -> Result<TerminalInfo, CoreError> {
+        let old = self.terminal(id).ok_or(CoreError::NoTerminal)?;
+        let action = old
+            .action
+            .clone()
+            .ok_or_else(|| CoreError::Terminal("only an Action's shell can be restarted".into()))?;
+        let worktree = old.worktree.clone();
+        drop(old);
+        self.close_terminal(id).await;
+        let terminal = self.start_terminal(&worktree, 80, 24, Some(action)).await?;
+        Ok(terminal.info())
     }
 
     /// Types `data` (keystrokes or a paste) into a shell.

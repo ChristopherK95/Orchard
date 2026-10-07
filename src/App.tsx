@@ -36,7 +36,7 @@ import { ContextStrip, removedWorktree, Sidebar, worktreeColour, worktreeLabel, 
 import { notify, onNotificationClicked } from "./notify";
 import { keepOutput, Setup, type SetupView } from "./Setup";
 import { StateBadge } from "./StateDot";
-import { setShells, shellRunning } from "./shells";
+import { setShells, shellRunning, showShellOf } from "./shells";
 import { Banner, Composer, FindOtherConversations, OtherConversations, RecentList } from "./Chat";
 import { Columns, COLUMNS_MIN_WIDTH } from "./Columns";
 import { createTabView, type TabView } from "./TabView";
@@ -363,7 +363,26 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   };
   const openWorktreeFile = (rel: string, root = activeWorktree()) => openInEditor({ kind: "file", path: worktreePath(rel, root) });
   const runCommand = (command: PaletteCommand) =>
-    command.kind === "newSessionHere" ? void newSession() : command.kind === "switchWorkspace" ? setSwitching(true) : setCreatingWorktree(true);
+    command.kind === "runAction"
+      ? runAction(command.name)
+      : command.kind === "newSessionHere"
+        ? void newSession()
+        : command.kind === "switchWorkspace"
+          ? setSwitching(true)
+          : setCreatingWorktree(true);
+  /** Runs (or restarts) an Action in the active Worktree, and shows its first shell. */
+  const runAction = (name: string) => {
+    const path = activeWorktree();
+    void core
+      .runAction(path, name)
+      .then((started) => {
+        if (!started.length) return;
+        setBoardOpen(false);
+        if (!terminalOpen(path)) toggleTerminalOf(path);
+        showShellOf(path, started[0].id);
+      })
+      .catch((err) => setError(String(err)));
+  };
 
   /** The Workspace picker is open over this Workspace (ticket 30). */
   const [switching, setSwitching] = createSignal(false);

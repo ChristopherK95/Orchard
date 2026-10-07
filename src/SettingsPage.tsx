@@ -3,7 +3,7 @@
 // layout: toggles apply at once, fields when they lose focus or on Enter. While the file doesn't
 // parse, the controls are locked (nothing is written over it) and the error says why.
 import { createEffect, createSignal, For, type JSX, on, onCleanup, onMount, Show } from "solid-js";
-import { core, type FontFamily, type LoadedSettings, type RepoSettings, type SettingChange } from "./core";
+import { type Action, core, type FontFamily, type LoadedSettings, type RepoSettings, type SettingChange } from "./core";
 import { CODE_FONT_SIZES } from "./appearance";
 import { ArrowDown, ArrowUp, ChevronDown, Plus, TriangleAlert, X } from "./icons";
 
@@ -214,6 +214,13 @@ export function SettingsPage(props: {
                       <Row label="Worktree setup" hint="Run in order in each new Worktree before its first Agent session, stopping at the first failure." block>
                         <CommandList commands={r().setup} onCommit={(commands) => void change({ kind: "setup", commands })} />
                       </Row>
+                      <Row
+                        label="Actions"
+                        hint="Commands you run on demand from Ctrl+P (a dev server, say). Each command gets a shell of its own in the Terminal panel; running the Action again restarts them."
+                        block
+                      >
+                        <ActionList actions={r().actions} onCommit={(actions) => void change({ kind: "actions", actions })} />
+                      </Row>
                       <Row label="Windows shell" hint="What setup and the Terminal panel run on Windows (Linux: bash for setup, your $SHELL for the terminal).">
                         <div class="segmented">
                           <button classList={{ on: r().windowsShell === "powershell" }} onClick={() => void change({ kind: "windowsShell", shell: "powershell" })}>
@@ -376,7 +383,55 @@ function NumberField(props: { value: number; unit: string; min?: number; max?: n
 
 /** Commands to edit, add, remove and reorder. Edits apply when a field loses focus or on Enter;
  *  the rest at once. Empty commands are dropped. */
-function CommandList(props: { commands: string[]; onCommit: (commands: string[]) => void }) {
+/** The repo's Actions: a name and its commands each. One without a name isn't saved. */
+function ActionList(props: { actions: Action[]; onCommit: (actions: Action[]) => void }) {
+  const [rows, setRows] = createSignal<Action[]>([]);
+  createEffect(on(() => props.actions, (actions) => setRows(actions.map((a) => ({ ...a })))));
+  let list!: HTMLDivElement;
+
+  const commit = (next: Action[]) => {
+    setRows(next);
+    const kept = next.map((a) => ({ name: a.name.trim(), run: a.run })).filter((a) => a.name);
+    if (JSON.stringify(kept) !== JSON.stringify(props.actions)) props.onCommit(kept);
+  };
+  const set = (at: number, changed: Partial<Action>) => commit(rows().map((a, j) => (j === at ? { ...a, ...changed } : a)));
+
+  return (
+    <div class="settings-actions" ref={list}>
+      <For each={rows()} fallback={<p class="muted small">No Actions.</p>}>
+        {(action, i) => (
+          <div class="settings-action">
+            <div class="settings-command">
+              <input
+                value={action.name}
+                placeholder="Name, e.g. Dev servers"
+                spellcheck={false}
+                onChange={(e) => set(i(), { name: e.currentTarget.value })}
+                onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+              />
+              <button class="ghost icon" onClick={() => commit(rows().filter((_, j) => j !== i()))} title="Remove this Action" aria-label="Remove this Action">
+                <X />
+              </button>
+            </div>
+            <CommandList commands={action.run} placeholder="e.g. cd server && pnpm start" onCommit={(run) => set(i(), { run })} />
+          </div>
+        )}
+      </For>
+      <button
+        class="ghost add-command"
+        onClick={() => {
+          setRows([...rows(), { name: "", run: [] }]);
+          list.querySelectorAll<HTMLInputElement>(".settings-action > .settings-command input").item(rows().length - 1)?.focus();
+        }}
+      >
+        <Plus />
+        Add Action
+      </button>
+    </div>
+  );
+}
+
+function CommandList(props: { commands: string[]; placeholder?: string; onCommit: (commands: string[]) => void }) {
   const [rows, setRows] = createSignal<string[]>([]);
   createEffect(on(() => props.commands, (commands) => setRows([...commands])));
   let list!: HTMLDivElement;
@@ -400,7 +455,7 @@ function CommandList(props: { commands: string[]; onCommit: (commands: string[])
             <input
               class="mono"
               value={command}
-              placeholder="e.g. pnpm install"
+              placeholder={props.placeholder ?? "e.g. pnpm install"}
               spellcheck={false}
               onChange={(e) => commit(rows().map((c, j) => (j === i() ? e.currentTarget.value : c)))}
               onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}

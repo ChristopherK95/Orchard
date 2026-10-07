@@ -33,6 +33,17 @@ pub struct TerminalInfo {
     /// Something other than the shell is in the foreground (Linux only; never on Windows), so
     /// stopping it would stop that too.
     pub busy: bool,
+    /// The Action that started it, if one did (it's then named after the Action).
+    pub action: Option<String>,
+}
+
+/// What an Action's shell runs, and what it's called.
+#[derive(Debug, Clone)]
+pub(crate) struct ActionShell {
+    pub(crate) action: String,
+    /// The tab's name: the Action's, or the command when the Action runs several.
+    pub(crate) label: String,
+    pub(crate) command: String,
 }
 
 /// What the Terminal panel is sent.
@@ -83,6 +94,8 @@ pub(crate) struct Terminal {
     pub(crate) worktree: PathBuf,
     /// The shell's program name, without a path or extension.
     shell: String,
+    /// Started by an Action.
+    pub(crate) action: Option<ActionShell>,
     /// Taken when the terminal goes, to be closed on a thread of its own: closing a ConPTY can
     /// block for a while.
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
@@ -119,14 +132,15 @@ impl Shared {
 }
 
 impl Terminal {
-    /// Starts `shell` in `cwd` at `cols` × `rows`; `on_exit` runs (on another thread) once it has
-    /// exited.
+    /// Starts `shell` in `cwd` at `cols` × `rows`, typing in the Action's command if it's for one;
+    /// `on_exit` runs (on another thread) once it has exited.
     pub(crate) fn start(
         id: TerminalId,
         mut shell: CommandBuilder,
         cwd: &Path,
         cols: u16,
         rows: u16,
+        action: Option<ActionShell>,
         on_exit: impl FnOnce() + Send + 'static,
     ) -> Result<Arc<Self>, String> {
         let pair = portable_pty::native_pty_system()
@@ -173,6 +187,10 @@ impl Terminal {
         let shared = Arc::new(Mutex::new(Shared::default()));
 
         let (input, keystrokes) = std::sync::mpsc::channel::<Vec<u8>>();
+        // Typed once the shell first prints (typed sooner, the terminal echoes it as well as the
+        // shell). Typed, not run with `-c`: it goes in the shell's history to run again, and the
+        // shell stays when it ends.
+        let mut command = action.as_ref().map(|a| format!("{}\r", a.command));
         std::thread::spawn(move || {
             for bytes in keystrokes {
                 if writer
@@ -213,6 +231,9 @@ impl Terminal {
                 }
                 keep_scrollback(&mut shared.output, &text);
                 shared.send(TerminalOutput::Output { text });
+                if let Some(command) = command.take() {
+                    let _ = answer.send(command.into_bytes());
+                }
             }
         });
 
@@ -233,6 +254,7 @@ impl Terminal {
             id,
             worktree: cwd.to_owned(),
             shell: shell_name,
+            action,
             master: Mutex::new(Some(pair.master)),
             input,
             killer: Mutex::new(killer),
@@ -245,11 +267,16 @@ impl Terminal {
 
     pub(crate) fn info(&self) -> TerminalInfo {
         let foreground = self.foreground();
+        let action = self.action.as_ref();
         TerminalInfo {
             id: self.id,
             worktree: self.worktree.clone(),
             busy: foreground.is_some(),
-            name: foreground.unwrap_or_else(|| self.shell.clone()),
+            name: match action {
+                Some(action) => action.label.clone(),
+                None => foreground.unwrap_or_else(|| self.shell.clone()),
+            },
+            action: action.map(|a| a.action.clone()),
         }
     }
 
