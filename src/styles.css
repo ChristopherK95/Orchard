@@ -498,6 +498,17 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .branch:hover:not(:disabled) { background: var(--bg-3); }
 .branch .lucide { width: 12px; height: 12px; color: var(--fg-3); }
 .branch.taken { opacity: 0.6; }
+/* New Worktree's "Start from": a search box over the branches, its list in the dialog's flow. */
+.start-pick { position: relative; display: flex; }
+.start-pick input { flex: 1; padding-right: 32px; cursor: pointer; }
+.start-pick.open input { cursor: text; }
+.start-pick .chev { position: absolute; right: 10px; top: 50%; width: 14px; height: 14px; transform: translateY(-50%); color: var(--fg-3); pointer-events: none; }
+.start-pick.open .chev { transform: translateY(-50%) rotate(180deg); }
+.start-options { max-height: 220px; overflow: auto; display: flex; flex-direction: column; gap: 1px; margin-top: -6px; padding: 4px; border: 1px solid var(--line-strong); border-radius: var(--r-md); background: var(--bg-2); }
+.start-options .branch { flex: none; }
+.start-options .branch.on { background: var(--bg-4); }
+.start-options .branch.chosen .mono { font-weight: 600; }
+.start-options p { margin: 6px 10px; }
 .taken-note { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--card); font-size: 12.5px; }
 .taken-note > span { flex: 1; }
 .loss { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--card); overflow: hidden; }

@@ -5,10 +5,11 @@
 // Agent session (so a failure there doesn't leave the dialog stuck on an already-created branch).
 import { createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { type BranchInfo, core, type CreatedWorktree, type NewWorktree } from "./core";
-import { GitBranch, X } from "./icons";
+import { ChevronDown, GitBranch, X } from "./icons";
 
-/** "Start from": "" for the default (`origin/<default>`), a branch's name, or `OTHER`. */
-const OTHER = "\0other";
+/** A "Start from" choice: `value` is "" for the default (`origin/<default>`), else what to start
+ *  from (a branch, or a tag or commit typed in). */
+type StartOption = { value: string; label: string; note?: string };
 
 export function NewWorktreeDialog(props: {
   /** Opened to check out this existing branch ("New Worktree from this branch"). */
@@ -21,7 +22,10 @@ export function NewWorktreeDialog(props: {
   const [name, setName] = createSignal("");
   const [typed, setTyped] = createSignal(false);
   const [startChoice, setStartChoice] = createSignal("");
-  const [otherStart, setOtherStart] = createSignal("");
+  /** "Start from" is a search box while it has focus: what's typed, and the highlighted row. */
+  const [startQuery, setStartQuery] = createSignal("");
+  const [startOpen, setStartOpen] = createSignal(false);
+  const [highlight, setHighlight] = createSignal(0);
   const [filter, setFilter] = createSignal(props.existing ?? "");
   const [busy, setBusy] = createSignal("");
   const [error, setError] = createSignal("");
@@ -59,6 +63,38 @@ export function NewWorktreeDialog(props: {
     return [...names.filter((n) => n === twin), ...names.filter((n) => n !== twin)];
   });
 
+  /** The default, then the branches, filtered by what's typed; something typed that isn't a branch
+   *  can be started from as a tag or commit. */
+  const startOptions = createMemo((): StartOption[] => {
+    const words = startQuery().trim();
+    const lower = words.toLowerCase();
+    const def = defaultStart() ?? "origin/<default>";
+    const all: StartOption[] = [
+      { value: "", label: def, note: def.startsWith("origin/") ? "default, fetched first" : "default" },
+      ...startBranches().map((b) => ({ value: b, label: b })),
+    ];
+    const matching = all.filter((o) => o.label.toLowerCase().includes(lower));
+    if (words && !all.some((o) => o.label === words)) matching.push({ value: words, label: words, note: "tag or commit" });
+    return matching;
+  });
+  const startLabel = () => (startChoice() === "" ? (defaultStart() ?? "origin/<default>") : startChoice());
+  const openStart = () => {
+    setStartQuery("");
+    setStartOpen(true);
+    setHighlight(Math.max(0, startOptions().findIndex((o) => o.value === startChoice())));
+  };
+  const chooseStart = (option: StartOption) => {
+    setStartChoice(option.value);
+    setStartOpen(false);
+  };
+  let startList: HTMLDivElement | undefined;
+  const moveHighlight = (by: number) => {
+    const n = startOptions().length;
+    if (!n) return;
+    setHighlight((i) => (i + by + n) % n);
+    startList?.children[highlight()]?.scrollIntoView({ block: "nearest" });
+  };
+
   const shown = createMemo(() => {
     const words = filter().toLowerCase();
     return (branchList()?.branches ?? []).filter((b) => b.name.toLowerCase().includes(words));
@@ -81,8 +117,7 @@ export function NewWorktreeDialog(props: {
     e.preventDefault();
     const branch = name().trim() || (typed() ? "" : await suggestion.catch(() => ""));
     if (!branch) return setError("Give the branch a name.");
-    const startPoint = startChoice() === "" ? null : startChoice() === OTHER ? otherStart().trim() || null : startChoice();
-    if (startChoice() === OTHER && !startPoint) return setError("Name the branch, tag or commit to start from.");
+    const startPoint = startChoice() || null;
     void create({ kind: "newBranch", name: branch, startPoint });
   };
 
@@ -131,20 +166,68 @@ export function NewWorktreeDialog(props: {
             <p class="hint">Prefilled and selected, so typing replaces it.</p>
             <label>
               Start from
-              <select class="mono" value={startChoice()} onChange={(e) => setStartChoice(e.currentTarget.value)}>
-                <option value="">
-                  {defaultStart() ?? "origin/<default>"}
-                  {defaultStart()?.startsWith("origin/") ? " (default, fetched first)" : " (default)"}
-                </option>
-                <For each={startBranches()}>{(b) => <option value={b}>{b}</option>}</For>
-                <Show when={branchList.loading}>
-                  <option disabled>Fetching branches…</option>
-                </Show>
-                <option value={OTHER}>A tag or commit…</option>
-              </select>
+              <div class="start-pick" classList={{ open: startOpen() }}>
+                <input
+                  class="mono"
+                  role="combobox"
+                  aria-expanded={startOpen()}
+                  value={startOpen() ? startQuery() : startLabel()}
+                  placeholder={startOpen() ? `Search branches (${startLabel()})` : undefined}
+                  spellcheck={false}
+                  onFocus={openStart}
+                  onClick={() => !startOpen() && openStart()}
+                  onBlur={() => setStartOpen(false)}
+                  onInput={(e) => {
+                    setStartQuery(e.currentTarget.value);
+                    setStartOpen(true);
+                    setHighlight(0);
+                  }}
+                  onKeyDown={(e) => {
+                    if (!startOpen()) return; // (Enter then creates, as anywhere in the form)
+                    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                      e.preventDefault();
+                      moveHighlight(e.key === "ArrowDown" ? 1 : -1);
+                    } else if (e.key === "Enter") {
+                      e.preventDefault();
+                      const option = startOptions()[highlight()];
+                      if (option) chooseStart(option);
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      e.stopPropagation(); // (closes the list, not the dialog)
+                      setStartOpen(false);
+                    }
+                  }}
+                />
+                <ChevronDown class="chev" />
+              </div>
             </label>
-            <Show when={startChoice() === OTHER}>
-              <input class="mono" placeholder="tag or commit" value={otherStart()} onInput={(e) => setOtherStart(e.currentTarget.value)} autofocus />
+            <Show when={startOpen()}>
+              <div class="start-options" ref={startList} role="listbox">
+                <For each={startOptions()} fallback={<p class="muted small">No matching branches.</p>}>
+                  {(option, i) => (
+                    <button
+                      type="button"
+                      class="branch"
+                      classList={{ on: i() === highlight(), chosen: option.value === startChoice() }}
+                      role="option"
+                      // (mousedown, not click: the input's blur would close the list first)
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        chooseStart(option);
+                      }}
+                      onMouseEnter={() => setHighlight(i())}
+                    >
+                      <GitBranch />
+                      <span class="mono">{option.label}</span>
+                      <span class="grow" />
+                      <Show when={option.note}>{(note) => <span class="muted small">{note()}</span>}</Show>
+                    </button>
+                  )}
+                </For>
+                <Show when={branchList.loading}>
+                  <p class="muted small">Fetching branches…</p>
+                </Show>
+              </div>
             </Show>
             <p class="hint">Created next to the repo, then an Agent session starts in it.</p>
             </div>
