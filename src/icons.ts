@@ -43,6 +43,7 @@ export { default as PinOff } from "lucide-solid/icons/pin-off";
 export { default as Play } from "lucide-solid/icons/play";
 export { default as Plus } from "lucide-solid/icons/plus";
 export { default as RefreshCw } from "lucide-solid/icons/refresh-cw";
+export { default as RotateCcw } from "lucide-solid/icons/rotate-ccw";
 export { default as Send } from "lucide-solid/icons/send";
 export { default as Search } from "lucide-solid/icons/search";
 export { default as Settings } from "lucide-solid/icons/settings";

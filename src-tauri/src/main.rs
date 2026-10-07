@@ -985,7 +985,22 @@ async fn pull_request_details(
         .map_err(|e| e.to_string())
 }
 
-/// The user's open PRs in the Worktree's repo.
+/// Re-runs GitHub Actions jobs: `job` alone, or else every failed job of run `run`.
+#[tauri::command]
+async fn rerun_checks(
+    core: State<'_, Core>,
+    worktree: String,
+    run: u64,
+    job: Option<u64>,
+    name: Option<String>,
+) -> CommandResult<()> {
+    let job = job.map(|job| (job, name.unwrap_or_default()));
+    core.rerun_checks(worktree.as_ref(), run, job)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The user's PRs in the Worktree's repo.
 #[tauri::command]
 async fn my_pull_requests(
     core: State<'_, Core>,
@@ -1456,6 +1471,7 @@ fn main() {
             open_pull_request,
             pull_request_details,
             my_pull_requests,
+            rerun_checks,
             push_to_pull_request,
             set_permission_mode,
             transcript_page_before,

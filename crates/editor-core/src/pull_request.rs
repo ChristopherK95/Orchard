@@ -509,6 +509,73 @@ pub struct Check {
     pub workflow: Option<String>,
     pub outcome: CheckOutcome,
     pub url: Option<String>,
+    /// The GitHub Actions job it is (it can be re-run), if it's one.
+    pub job: Option<ActionsJob>,
+}
+
+/// A GitHub Actions job: the workflow run it's in, and its id as its link has it (not always the
+/// one `gh run rerun --job` takes: see `rerun`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionsJob {
+    pub run: u64,
+    pub job: u64,
+}
+
+impl ActionsJob {
+    /// The job a check run's details link (`…/actions/runs/<run>/job/<job>`, or `jobs`) is to.
+    fn from_url(url: &str) -> Option<Self> {
+        let (_, rest) = url.split_once("/actions/runs/")?;
+        let mut parts = rest.split(['/', '?', '#']);
+        let run = parts.next()?.parse().ok()?;
+        matches!(parts.next()?, "job" | "jobs").then_some(())?;
+        let job = parts.next()?.parse().ok()?;
+        Some(ActionsJob { run, job })
+    }
+}
+
+/// Re-runs GitHub Actions jobs (`gh run rerun`): the job `job` names (its id, else its name), or
+/// else every failed job of `run`. A job's link doesn't always carry the id `--job` takes, so the
+/// run's jobs are asked for first and the job found among them.
+pub(crate) async fn rerun(
+    gh: &Path,
+    worktree: &Path,
+    run: u64,
+    job: Option<(u64, String)>,
+) -> Result<(), String> {
+    let run = run.to_string();
+    let Some((id, name)) = job else {
+        return gh_text(gh, worktree, &["run", "rerun", &run, "--failed"])
+            .await
+            .map(drop);
+    };
+    let jq = ".jobs[] | [.databaseId, .name] | @tsv";
+    let jobs = gh_text(
+        gh,
+        worktree,
+        &["run", "view", &run, "--json", "jobs", "--jq", jq],
+    )
+    .await?;
+    let id = job_id(&jobs, id, &name)
+        .ok_or_else(|| format!("run {run} has no job \"{name}\" to re-run."))?;
+    gh_text(gh, worktree, &["run", "rerun", "--job", &id.to_string()])
+        .await
+        .map(drop)
+}
+
+/// The job among a run's (`<databaseId>\t<name>` lines) whose id is `id`, else whose name is `name`.
+fn job_id(jobs: &str, id: u64, name: &str) -> Option<u64> {
+    let jobs: Vec<(u64, &str)> = jobs
+        .lines()
+        .filter_map(|line| {
+            let (id, name) = line.split_once('\t')?;
+            Some((id.trim().parse().ok()?, name))
+        })
+        .collect();
+    jobs.iter()
+        .find(|(j, _)| *j == id)
+        .or_else(|| jobs.iter().find(|(_, n)| *n == name))
+        .map(|(j, _)| *j)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -796,6 +863,10 @@ impl Status {
                 _ => CheckOutcome::Failure,
             }
         };
+        let job = match self.typename.as_str() {
+            "CheckRun" => self.details_url.as_deref().and_then(ActionsJob::from_url),
+            _ => None,
+        };
         Check {
             name: self.name.or(self.context).unwrap_or_default(),
             workflow: self.workflow_name.filter(|w| !w.is_empty()),
@@ -804,6 +875,7 @@ impl Status {
                 .details_url
                 .or(self.target_url)
                 .filter(|u| !u.is_empty()),
+            job,
         }
     }
 }
@@ -1193,6 +1265,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_actions_checks_link_names_its_run_and_job() {
+        let job = |url| ActionsJob::from_url(url);
+        assert_eq!(
+            job("https://github.com/o/r/actions/runs/123/job/456"),
+            Some(ActionsJob { run: 123, job: 456 })
+        );
+        assert_eq!(
+            job("https://github.com/o/r/actions/runs/123/job/456?pr=7"),
+            Some(ActionsJob { run: 123, job: 456 })
+        );
+        assert_eq!(
+            job("https://github.com/o/r/actions/runs/123/jobs/9"),
+            Some(ActionsJob { run: 123, job: 9 })
+        );
+        assert_eq!(job("https://github.com/o/r/actions/runs/123"), None);
+        assert_eq!(job("https://ci.example.com/build/9"), None);
+    }
+
+    #[test]
+    fn a_job_to_rerun_is_found_by_its_id_else_its_name() {
+        let jobs = "11\tbuild\n22\tlint\n";
+        assert_eq!(job_id(jobs, 22, "whatever"), Some(22));
+        assert_eq!(job_id(jobs, 9, "build"), Some(11));
+        assert_eq!(job_id(jobs, 9, "deploy"), None);
+    }
+
+    #[test]
     fn my_prs_are_listed_most_recently_updated_first() {
         let out = r#"[
             {"number":3,"title":"Old","url":"u3","state":"OPEN","isDraft":false,"headRefName":"a","baseRefName":"main","reviewDecision":"","latestReviews":[],"reviewRequests":[{"__typename":"User","login":"bo"}],"statusCheckRollup":[],"mergeable":"CONFLICTING","updatedAt":"2026-01-01T00:00:00Z","mergedAt":null,"closedAt":null},
@@ -1217,6 +1316,7 @@ mod tests {
             workflow: None,
             outcome,
             url: None,
+            job: None,
         };
         let failing = [check(CheckOutcome::Failure)];
         let passing = [check(CheckOutcome::Success), check(CheckOutcome::Pending)];

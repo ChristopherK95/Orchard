@@ -46,7 +46,7 @@ pub use crate::merged::{MergeState, WorktreeMerge};
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};
 pub use crate::process::host_env;
 pub use crate::pull_request::{
-    Check, CheckOutcome, CodeThread, CommitChanges, MyPullRequest, OpenPullRequest,
+    ActionsJob, Check, CheckOutcome, CodeThread, CommitChanges, MyPullRequest, OpenPullRequest,
     PullRequestComment, PullRequestCommit, PullRequestDetails, PullRequestLabel,
     PullRequestOutcome, PullRequestProgress, PullRequestRequest, PullRequestStage,
     PullRequestState, PushToPullRequestOutcome, Review, ReviewCommit, ReviewFile, Reviewer,

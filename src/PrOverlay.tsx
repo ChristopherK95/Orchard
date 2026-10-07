@@ -6,7 +6,7 @@
 // of the user's PRs (any of the repo's, by number). Comments can be narrowed to the people in some
 // of the organisation's teams (a sub-team counts as its top team).
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { createContext, createMemo, createSignal, For, type JSX, Match, onCleanup, onMount, Show, Switch, useContext } from "solid-js";
+import { createContext, createEffect, createMemo, createSignal, For, type JSX, Match, on, onCleanup, onMount, Show, Switch, useContext } from "solid-js";
 import { createStore } from "solid-js/store";
 import { ago } from "./Chat";
 import { core, type Check, type CodeThread, type PullRequestComment, type PullRequestDetails, type Reviewer, type ReviewerState } from "./core";
@@ -28,6 +28,7 @@ import {
   MessageSquare,
   MessageSquareCode,
   RefreshCw,
+  RotateCcw,
   TriangleAlert,
   X,
 } from "./icons";
@@ -192,6 +193,13 @@ export function PrOverlay(props: {
     }
   };
   onMount(() => void load());
+  /** A re-run takes GitHub a moment to start: its checks are asked for again after it. */
+  let reloadTimer: number | undefined;
+  const rerunStarted = () => {
+    clearTimeout(reloadTimer);
+    reloadTimer = window.setTimeout(() => void load(), 4000);
+  };
+  onCleanup(() => clearTimeout(reloadTimer));
 
   const onKey = (e: KeyboardEvent) => {
     if (e.key !== "Escape") return;
@@ -341,29 +349,7 @@ export function PrOverlay(props: {
                             </ul>
                           </Match>
                           <Match when={tab() === "checks"}>
-                            <ul class="pr-list">
-                              <For each={p().checks} fallback={<li class="muted">No checks ran on it.</li>}>
-                                {(c) => (
-                                  <li class="pr-check">
-                                    <CheckMark check={c} />
-                                    <span class="grow ellipsis">
-                                      <Show when={c.workflow}>
-                                        <span class="muted">{c.workflow} / </span>
-                                      </Show>
-                                      {c.name}
-                                    </span>
-                                    <Show when={c.url}>
-                                      {(url) => (
-                                        <button class="link" onClick={() => open(url())} title={url()}>
-                                          Details
-                                          <ExternalLink />
-                                        </button>
-                                      )}
-                                    </Show>
-                                  </li>
-                                )}
-                              </For>
-                            </ul>
+                            <Checks pr={p()} worktree={props.worktree} onOpen={open} onError={setError} onRerun={rerunStarted} />
                           </Match>
                         </Switch>
                       </div>
@@ -618,6 +604,87 @@ function Hunk(props: { text: string }) {
         <For each={lines()}>{(l) => <span class={l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : ""}>{l || " "}</span>}</For>
       </pre>
     </Show>
+  );
+}
+
+/** The Checks tab: every check, a GitHub Actions one with Re-run once it's finished, and Re-run
+ *  failed for every failed job of the runs that have them. */
+function Checks(props: { pr: PullRequestDetails; worktree: string; onOpen: (url: string) => void; onError: (e: string) => void; onRerun: () => void }) {
+  /** What's being re-run (a job id, or "failed"), and what has been since the checks were read. */
+  const [busy, setBusy] = createSignal<number | "failed" | null>(null);
+  const [started, setStarted] = createSignal<(number | "failed")[]>([]);
+  // (Read again, the checks say for themselves what's running: a re-run job gets a new id.)
+  createEffect(on(() => props.pr, () => setStarted([]), { defer: true }));
+  const finished = (c: Check) => c.outcome !== "pending";
+  /** The runs with a failed job. */
+  const failedRuns = () => [...new Set(props.pr.checks.filter((c) => c.outcome === "failure" && c.job).map((c) => c.job!.run))];
+  const rerun = async (what: number | "failed", go: () => Promise<unknown>) => {
+    setBusy(what);
+    props.onError("");
+    try {
+      await go();
+      setStarted((s) => [...s, what]);
+      props.onRerun();
+    } catch (err) {
+      props.onError(`Couldn't re-run: ${String(err)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <>
+      <Show when={failedRuns().length}>
+        <div class="pr-checks-actions">
+          <button
+            class="outline"
+            disabled={busy() !== null || started().includes("failed")}
+            onClick={() => void rerun("failed", () => Promise.all(failedRuns().map((run) => core.rerunChecks(props.worktree, run))))}
+            title="Re-run every failed job (and what depends on it) of the workflow runs that have one"
+          >
+            <RotateCcw classList={{ spin: busy() === "failed" }} />
+            {started().includes("failed") ? "Re-run started" : "Re-run failed jobs"}
+          </button>
+        </div>
+      </Show>
+      <ul class="pr-list">
+        <For each={props.pr.checks} fallback={<li class="muted">No checks ran on it.</li>}>
+          {(c) => (
+            <li class="pr-check">
+              <CheckMark check={c} />
+              <span class="grow ellipsis">
+                <Show when={c.workflow}>
+                  <span class="muted">{c.workflow} / </span>
+                </Show>
+                {c.name}
+              </span>
+              <Show when={c.job && finished(c) ? c.job : null}>
+                {(job) => (
+                  <Show when={!started().includes(job().job)} fallback={<span class="muted pr-rerun-started">Re-run started</span>}>
+                    <button
+                      class="link"
+                      disabled={busy() !== null}
+                      onClick={() => void rerun(job().job, () => core.rerunChecks(props.worktree, job().run, { id: job().job, name: c.name }))}
+                      title="Re-run this job (and the jobs that depend on it)"
+                    >
+                      <RotateCcw classList={{ spin: busy() === job().job }} />
+                      Re-run
+                    </button>
+                  </Show>
+                )}
+              </Show>
+              <Show when={c.url}>
+                {(url) => (
+                  <button class="link" onClick={() => props.onOpen(url())} title={url()}>
+                    Details
+                    <ExternalLink />
+                  </button>
+                )}
+              </Show>
+            </li>
+          )}
+        </For>
+      </ul>
+    </>
   );
 }
 

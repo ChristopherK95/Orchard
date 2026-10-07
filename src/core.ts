@@ -549,6 +549,8 @@ export interface Check {
   workflow: string | null;
   outcome: "pending" | "success" | "failure" | "skipped";
   url: string | null;
+  /** The GitHub Actions job it is (it can be re-run), if it's one. */
+  job: { run: number; job: number } | null;
 }
 
 export interface PullRequestComment {
@@ -873,6 +875,10 @@ export const core = {
   /** The PR of the Worktree's branch (its open one, else its latest), with its reviews and comments. */
   pullRequestDetails: (worktree: string, number?: number) =>
     invoke<PullRequestDetails | null>("pull_request_details", { worktree, number: number ?? null }),
+  /** Re-runs GitHub Actions jobs in the Worktree's repo: `job` (its id as its link has it, and its
+   *  name) alone, or else every failed job of run `run`. */
+  rerunChecks: (worktree: string, run: number, job?: { id: number; name: string }) =>
+    invoke<void>("rerun_checks", { worktree, run, job: job?.id ?? null, name: job?.name ?? null }),
   /** The user's PRs in the Worktree's repo: every open one, then the latest merged or closed. */
   myPullRequests: (worktree: string) => invoke<MyPullRequest[]>("my_pull_requests", { worktree }),
   /** Push for a branch whose PR is open: commits what's left with `commitMessage`, then pushes. */

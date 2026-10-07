@@ -2809,6 +2809,21 @@ impl Core {
             .map_err(CoreError::Git)
     }
 
+    /// Re-runs GitHub Actions jobs in the Worktree's repo: `job` (its id as its link has it, and its
+    /// name) alone, or else every failed job of workflow run `run` (asked of the GitHub CLI).
+    pub async fn rerun_checks(
+        &self,
+        worktree: &Path,
+        run: u64,
+        job: Option<(u64, String)>,
+    ) -> Result<(), CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        crate::pull_request::rerun(&gh, &worktree, run, job)
+            .await
+            .map_err(CoreError::Git)
+    }
+
     /// The open PRs the user (whoever the GitHub CLI is logged in as) opened in the Worktree's
     /// repo, most recently updated first.
     pub async fn my_pull_requests(&self, worktree: &Path) -> Result<Vec<MyPullRequest>, CoreError> {
