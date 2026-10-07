@@ -6,7 +6,9 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use editor_core::{ChangeKind, Core, CoreConfig, PullRequestOutcome, PullRequestRequest};
+use editor_core::{
+    ChangeKind, Core, CoreConfig, PullRequestOutcome, PullRequestProgress, PullRequestRequest,
+};
 use support::*;
 
 async fn open(core: &Core, repo: &Path) -> PathBuf {
@@ -122,6 +124,7 @@ async fn create_pr_commits_what_is_left_pushes_and_runs_gh() {
                 commit_message: "Add new.txt".into(),
                 ..Default::default()
             },
+            |_| {},
         )
         .await
         .unwrap();
@@ -166,17 +169,17 @@ async fn an_open_pr_for_the_branch_is_reported_and_a_bad_request_does_nothing() 
         ..Default::default()
     };
     assert!(core
-        .create_pull_request(&root, request("agent/work", "T"))
+        .create_pull_request(&root, request("agent/work", "T"), |_| {})
         .await
         .is_err());
     assert!(core
-        .create_pull_request(&root, request("main", " "))
+        .create_pull_request(&root, request("main", " "), |_| {})
         .await
         .is_err());
     assert!(gh.args().is_empty());
 
     let outcome = core
-        .create_pull_request(&root, request("main", "Work"))
+        .create_pull_request(&root, request("main", "Work"), |_| {})
         .await
         .unwrap();
     assert_eq!(
@@ -263,6 +266,7 @@ async fn a_failing_pre_push_hook_says_what_it_found() {
     .unwrap();
     std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
 
+    let progress = std::sync::Mutex::new(vec![]);
     let err = core
         .create_pull_request(
             &root,
@@ -271,11 +275,25 @@ async fn a_failing_pre_push_hook_says_what_it_found() {
                 title: "Work".into(),
                 ..Default::default()
             },
+            |p| progress.lock().unwrap().push(p),
         )
         .await
         .unwrap_err()
         .to_string();
     assert!(err.contains("no-unused-vars"), "{err}");
+    // The hook's report came out live, after the push step started.
+    let progress = progress.into_inner().unwrap();
+    assert!(
+        matches!(&progress[0], PullRequestProgress::Step { text } if text.starts_with("Pushing agent/work"))
+    );
+    let streamed: String = progress
+        .iter()
+        .filter_map(|p| match p {
+            PullRequestProgress::Output { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(streamed.contains("no-unused-vars"), "{streamed}");
     assert!(err.contains("failed to push"), "{err}");
     assert!(gh.args().is_empty(), "no PR without the push");
 }

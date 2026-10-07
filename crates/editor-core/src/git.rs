@@ -76,7 +76,7 @@ pub(crate) async fn fetch_origin(repo: &Path) -> Result<(), String> {
     if !has_origin(repo).await {
         return Ok(());
     }
-    run_remote(repo, &["fetch", "--quiet", "origin"])
+    run_remote(repo, &["fetch", "--quiet", "origin"], None)
         .await
         .map(drop)
 }
@@ -918,7 +918,13 @@ const COMMIT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Commits what's staged with `message` (amending the last commit if `amend`; an empty message
 /// then keeps its own). The new commit's short id.
-pub(crate) async fn commit(worktree: &Path, message: &str, amend: bool) -> Result<String, String> {
+/// With a `sink`, its hooks' output goes there as it comes.
+pub(crate) async fn commit(
+    worktree: &Path,
+    message: &str,
+    amend: bool,
+    sink: Option<crate::process::Sink<'_>>,
+) -> Result<String, String> {
     let mut args = vec!["commit", "-q"];
     if amend {
         args.push("--amend");
@@ -930,8 +936,12 @@ pub(crate) async fn commit(worktree: &Path, message: &str, amend: bool) -> Resul
     }
     // (A hook or a signing prompt that never finishes: given up on, and the drawer is usable again.)
     let mut cmd = git(worktree);
-    cmd.args(&args).kill_on_drop(true);
-    let out = tokio::time::timeout(COMMIT_TIMEOUT, cmd.output())
+    cmd.args(&args)
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let child = cmd.spawn().map_err(|e| format!("could not run git: {e}"))?;
+    let out = tokio::time::timeout(COMMIT_TIMEOUT, crate::process::collect(child, sink))
         .await
         .map_err(|_| {
             "The commit took too long (a hook or signing prompt?) and was stopped.".to_owned()
@@ -1026,8 +1036,12 @@ const LOGIN_SIGNS: &[&str] = &[
 /// never a prompt or a login window (SSH in batch mode unless the user has an SSH command of their
 /// own; Git Credential Manager non-interactive), and never longer than `NETWORK_TIMEOUT`, after
 /// which git and everything it started are stopped. A failure that looks like a login problem
-/// gets `LOGIN_HINT`.
-async fn run_remote(worktree: &Path, args: &[&str]) -> Result<String, String> {
+/// gets `LOGIN_HINT`. Its output goes to `sink` as it comes, if there is one.
+async fn run_remote(
+    worktree: &Path,
+    args: &[&str],
+    sink: Option<crate::process::Sink<'_>>,
+) -> Result<String, String> {
     let mut cmd = git(worktree);
     // (Nobody's askpass either: a terminal's, VS Code's, inherited from wherever the editor started.)
     cmd.args(["-c", "core.askPass="])
@@ -1051,16 +1065,17 @@ async fn run_remote(worktree: &Path, args: &[&str]) -> Result<String, String> {
     let child = cmd.spawn().map_err(|e| format!("could not run git: {e}"))?;
     // (Dropped on the way out, it stops whatever git left running: ssh, a credential helper.)
     let _tree = crate::process::ProcessTree::attach(&child);
-    let out = match tokio::time::timeout(NETWORK_TIMEOUT, child.wait_with_output()).await {
-        Err(_) => {
-            return Err(format!(
-                "git {} took over {} s and was stopped. {LOGIN_HINT}",
-                args[0],
-                NETWORK_TIMEOUT.as_secs()
-            ))
-        }
-        Ok(out) => out.map_err(|e| format!("could not run git: {e}"))?,
-    };
+    let out =
+        match tokio::time::timeout(NETWORK_TIMEOUT, crate::process::collect(child, sink)).await {
+            Err(_) => {
+                return Err(format!(
+                    "git {} took over {} s and was stopped. {LOGIN_HINT}",
+                    args[0],
+                    NETWORK_TIMEOUT.as_secs()
+                ))
+            }
+            Ok(out) => out.map_err(|e| format!("could not run git: {e}"))?,
+        };
     if out.status.success() {
         return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
     }
@@ -1074,7 +1089,7 @@ async fn run_remote(worktree: &Path, args: &[&str]) -> Result<String, String> {
 
 /// Fetches the branch's remote (or `origin`), pruning branches gone from it.
 pub(crate) async fn fetch(worktree: &Path) -> Result<(), String> {
-    run_remote(worktree, &["fetch", "--quiet", "--prune"])
+    run_remote(worktree, &["fetch", "--quiet", "--prune"], None)
         .await
         .map(drop)
 }
@@ -1117,17 +1132,26 @@ pub(crate) async fn push_remote(worktree: &Path, branch: &str) -> String {
 /// Pushes the branch to the branch of the same name on its remote, which becomes its upstream.
 /// Always by name: a branch tracking another (an Agent's branch made from `origin/main`) never
 /// pushes onto that one, whatever `push.default` says. A push the remote turns down because it has
-/// commits this branch hasn't is `Rejected`, not an error.
-pub(crate) async fn push(worktree: &Path) -> Result<crate::git_status::PushOutcome, String> {
+/// commits this branch hasn't is `Rejected`, not an error. With a `sink`, git's progress and its
+/// hooks' output go there as they come.
+pub(crate) async fn push(
+    worktree: &Path,
+    sink: Option<crate::process::Sink<'_>>,
+) -> Result<crate::git_status::PushOutcome, String> {
     use crate::git_status::PushOutcome;
     let branch = current_branch(worktree)
         .await
         .ok_or("HEAD is detached: check out a branch to push.")?;
     let remote = push_remote(worktree, &branch).await;
     let target = format!("HEAD:refs/heads/{branch}");
+    let progress = match sink {
+        Some(_) => "--progress",
+        None => "--quiet",
+    };
     match run_remote(
         worktree,
-        &["push", "--quiet", "--set-upstream", &remote, &target],
+        &["push", progress, "--set-upstream", &remote, &target],
+        sink,
     )
     .await
     {

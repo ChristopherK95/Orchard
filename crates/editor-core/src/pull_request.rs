@@ -104,6 +104,14 @@ pub enum PullRequestOutcome {
     PushRejected { committed: Option<String> },
 }
 
+/// How "Create PR" is getting on, as it goes: a step starting, or output from what it runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PullRequestProgress {
+    Step { text: String },
+    Output { text: String },
+}
+
 /// `<remote>/<branch>` as the branch on the remote, if it's one of `remote`'s.
 pub(crate) fn on_remote<'a>(name: &'a str, remote: &str) -> Option<&'a str> {
     name.strip_prefix(remote)?.strip_prefix('/')
@@ -127,7 +135,8 @@ pub(crate) enum Opened {
 }
 
 /// Opens a PR from `branch` into `target` with `gh pr create` (in `worktree`, so for its repo),
-/// assigned to whoever `gh` is logged in as. Never prompts.
+/// assigned to whoever `gh` is logged in as. Never prompts. Its output goes to `sink` as it comes.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn create(
     gh: &Path,
     worktree: &Path,
@@ -136,6 +145,7 @@ pub(crate) async fn create(
     title: &str,
     body: &str,
     draft: bool,
+    sink: crate::process::Sink<'_>,
 ) -> Result<Opened, String> {
     let mut cmd = crate::process::command(gh);
     for (key, value) in gh_env().await {
@@ -157,7 +167,7 @@ pub(crate) async fn create(
         _ => format!("could not run gh: {e}"),
     })?;
     let _tree = crate::process::ProcessTree::attach(&child);
-    let out = tokio::time::timeout(GH_TIMEOUT, child.wait_with_output())
+    let out = tokio::time::timeout(GH_TIMEOUT, crate::process::collect(child, Some(sink)))
         .await
         .map_err(|_| format!("gh took over {} s and was stopped.", GH_TIMEOUT.as_secs()))?
         .map_err(|e| format!("could not run gh: {e}"))?;

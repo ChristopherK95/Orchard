@@ -164,6 +164,51 @@ impl Drop for ProcessTree {
     }
 }
 
+/// Where a command's output goes as it comes (stdout and stderr alike, in whole characters).
+pub(crate) type Sink<'a> = &'a (dyn Fn(&str) + Send + Sync);
+
+/// Waits for `child` like `wait_with_output`, handing its output to `sink` as it arrives (when
+/// there is one). Its stdout and stderr must be piped.
+pub(crate) async fn collect(
+    mut child: Child,
+    sink: Option<Sink<'_>>,
+) -> std::io::Result<std::process::Output> {
+    use tokio::io::{AsyncRead, AsyncReadExt};
+    async fn read(pipe: Option<impl AsyncRead + Unpin>, sink: Option<Sink<'_>>) -> Vec<u8> {
+        let Some(mut pipe) = pipe else {
+            return vec![];
+        };
+        let mut all = vec![];
+        let mut pending = vec![];
+        let mut buffer = [0u8; 8192];
+        while let Ok(read) = pipe.read(&mut buffer).await {
+            if read == 0 {
+                break;
+            }
+            all.extend_from_slice(&buffer[..read]);
+            if let Some(sink) = sink {
+                pending.extend_from_slice(&buffer[..read]);
+                let text = crate::setup::take_text(&mut pending);
+                if !text.is_empty() {
+                    sink(&text);
+                }
+            }
+        }
+        if let (Some(sink), false) = (sink, pending.is_empty()) {
+            sink(&String::from_utf8_lossy(&pending));
+        }
+        all
+    }
+    let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
+    let (stdout, stderr, status) =
+        tokio::join!(read(stdout, sink), read(stderr, sink), child.wait());
+    Ok(std::process::Output {
+        status: status?,
+        stdout,
+        stderr,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

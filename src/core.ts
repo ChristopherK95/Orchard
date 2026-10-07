@@ -459,6 +459,9 @@ export interface PullRequestRequest {
   evenIfWorking?: boolean;
 }
 
+/** How Create PR is getting on: a step starting, or output from what it runs (hooks, git, gh). */
+export type PullRequestProgress = { kind: "step"; text: string } | { kind: "output"; text: string };
+
 export type PullRequestOutcome =
   | { kind: "sessionsWorking"; sessions: string[] }
   | { kind: "created"; url: string; committed: string | null }
@@ -737,8 +740,11 @@ export const core = {
   commitDiff: (worktree: string, parent: string, commit: string, file: ReviewFile) =>
     invoke<DiffLine[]>("commit_diff", { worktree, parent, commit, path: file.path, renamedFrom: file.renamedFrom, change: file.change }),
   /** Commits what's left, pushes, and opens the PR with the GitHub CLI (assigned to the user). */
-  createPullRequest: (worktree: string, request: PullRequestRequest) =>
-    invoke<PullRequestOutcome>("create_pull_request", { worktree, request }),
+  createPullRequest: (worktree: string, request: PullRequestRequest, onProgress: (progress: PullRequestProgress) => void) => {
+    const channel = new Channel<PullRequestProgress>();
+    channel.onmessage = onProgress;
+    return invoke<PullRequestOutcome>("create_pull_request", { worktree, request, onProgress: channel });
+  },
   /** Aborts the merge, rebase, cherry-pick or revert in progress. */
   abortOperation: (worktree: string) => invoke<void>("abort_operation", { worktree }),
   /** Throws away every change to the file (ask first). */

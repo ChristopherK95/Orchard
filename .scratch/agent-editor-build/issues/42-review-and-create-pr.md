@@ -13,6 +13,7 @@
 - [x] Clicking a commit in the list narrows the files and diffs to what that commit changed on its own (against its first parent); clicking it again, or "All changes", goes back. Viewed ticks belong to the whole review, so they're hidden while a commit is shown, and J doesn't tick files there.
 - [x] A failing hook says what it found: git puts a `pre-push` hook's own output (a linter's report) on its stdout, so pushes and commits now report stdout and stderr both (the drawer's Push and Commit too).
 - [x] A failed Create PR can be sent to one of the Worktree's sessions (or a new one): the error goes with a request to fix it and commit, queued if the session is mid-turn, and the session is shown. Review again to retry.
+- [x] Create PR shows a live log: each step (commit, push, open the PR) with what it printed as it came (hooks, git's push progress, `gh`); the failed step is marked. It stays under "Output" once the PR is open.
 - [x] Core tests with real `git` and a fake `gh`.
 
 Notes:

@@ -1095,3 +1095,13 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .review-done p { margin: 0; max-width: 520px; }
 .done-mark { width: 40px; height: 40px; color: var(--ok); }
 .review-url { color: var(--fg-2); user-select: text; }
+
+/* Create PR's live log: each step, then what it printed (hooks, git's progress, gh). */
+.pr-log { max-height: 300px; overflow: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--code-bg); }
+.pr-log-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 500; color: var(--fg-1); }
+.pr-log-head .lucide { flex: none; width: 13px; height: 13px; color: var(--ok); }
+.pr-log-head .lucide.spin { color: var(--fg-2); }
+.pr-log-step.failed .pr-log-head, .pr-log-step.failed .pr-log-head .lucide { color: var(--danger); }
+.pr-log pre { margin: 4px 0 0 21px; font: 11.5px/1.5 var(--mono); color: var(--fg-2); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.pr-log-details { width: min(720px, 100%); text-align: left; }
+.pr-log-details summary { cursor: pointer; font-size: 12.5px; color: var(--fg-3); margin-bottom: 6px; }

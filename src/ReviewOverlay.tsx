@@ -7,7 +7,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { core, type SessionId, type SessionInfo, type CommitChanges, type DiffLine, type PullRequestOutcome, type Review, type ReviewCommit, type ReviewFile } from "./core";
+import { core, type PullRequestProgress, type SessionId, type SessionInfo, type CommitChanges, type DiffLine, type PullRequestOutcome, type Review, type ReviewCommit, type ReviewFile } from "./core";
 import { DiffView } from "./DiffView";
 import { languageOfPath } from "./highlight";
 import { Send, Check, ChevronLeft, ChevronRight, CircleCheck, ExternalLink, GitBranch, GitPullRequest, Loader, RefreshCw, TriangleAlert, X } from "./icons";
@@ -37,6 +37,48 @@ function titleFromBranch(branch: string) {
 }
 
 type Loaded = { lines: DiffLine[] } | { error: string };
+
+/** One step of Create PR in its log, with what it printed. */
+type LoggedStep = { text: string; output: string };
+
+/** Output as a terminal shows it: a carriage return (git's progress) starts its line over. */
+const asShown = (output: string) =>
+  output
+    .split("\n")
+    .map((line) => line.split("\r").filter((part) => part !== "").pop() ?? "")
+    .join("\n")
+    .trimEnd();
+
+/** Create PR's steps as they go: the last one spins while running, or is marked failed. */
+function ProgressLog(props: { steps: LoggedStep[]; running: boolean; failed: boolean }) {
+  let box: HTMLDivElement | undefined;
+  // Follows the output, unless scrolled up to read.
+  let following = true;
+  createEffect(() => {
+    for (const step of props.steps) void step.output;
+    if (box && following) box.scrollTop = box.scrollHeight;
+  });
+  return (
+    <div class="pr-log" ref={box} onScroll={(e) => (following = e.currentTarget.scrollHeight - e.currentTarget.scrollTop - e.currentTarget.clientHeight < 24)}>
+      <For each={props.steps}>
+        {(step, i) => {
+          const last = () => i() === props.steps.length - 1;
+          return (
+            <div class="pr-log-step" classList={{ failed: last() && props.failed }}>
+              <div class="pr-log-head">
+                <Show when={last() && props.running} fallback={<Show when={last() && props.failed} fallback={<Check />}><X /></Show>}>
+                  <Loader class="spin" />
+                </Show>
+                {step.text}
+              </div>
+              <Show when={asShown(step.output)}>{(text) => <pre>{text()}</pre>}</Show>
+            </div>
+          );
+        }}
+      </For>
+    </div>
+  );
+}
 
 /** What an Agent session is asked when Create PR failed (a hook's lint errors, say). */
 function fixPrompt(error: string, target: string) {
@@ -215,20 +257,35 @@ export function ReviewOverlay(props: {
     return "";
   };
   const canCreate = () => !creating() && !blocker() && target().trim() !== "" && title().trim() !== "";
+  /** Create PR's log, live: each step and what it printed. */
+  const [log, setLog] = createStore<LoggedStep[]>([]);
+  const onProgress = (progress: PullRequestProgress) => {
+    if (progress.kind === "step") setLog(log.length, { text: progress.text, output: "" });
+    else if (log.length) setLog(log.length - 1, "output", (output) => output + progress.text);
+    else setLog(0, { text: "Starting", output: progress.text });
+  };
+  let logAnchor: HTMLDivElement | undefined;
   const create = async (evenIfWorking = false) => {
     if (!evenIfWorking && !canCreate()) return;
     setCreating(true);
     setPrError("");
     setWorking(null);
+    setOutcome(null);
+    setLog([]);
+    queueMicrotask(() => logAnchor?.scrollIntoView({ block: "nearest" }));
     try {
-      const result = await core.createPullRequest(props.worktree, {
-        target: target().trim(),
-        title: title().trim(),
-        body: body(),
-        commitMessage: commitMessage().trim(),
-        draft: draft(),
-        evenIfWorking,
-      });
+      const result = await core.createPullRequest(
+        props.worktree,
+        {
+          target: target().trim(),
+          title: title().trim(),
+          body: body(),
+          commitMessage: commitMessage().trim(),
+          draft: draft(),
+          evenIfWorking,
+        },
+        onProgress,
+      );
       if (result.kind === "sessionsWorking") setWorking(result.sessions);
       else {
         setOutcome(result);
@@ -531,6 +588,11 @@ export function ReviewOverlay(props: {
               <Show when={blocker()}>
                 <p class="error small">{blocker()}</p>
               </Show>
+              <div ref={logAnchor}>
+                <Show when={log.length > 0}>
+                  <ProgressLog steps={log} running={creating()} failed={!creating() && (!!prError() || outcome()?.kind === "pushRejected")} />
+                </Show>
+              </div>
               <Show when={working()}>
                 {(sessions) => (
                   <div class="git-ask">
@@ -598,6 +660,12 @@ export function ReviewOverlay(props: {
                   </p>
                   <Show when={"url" in o() && (o() as { url: string }).url}>
                     {(url) => <p class="mono small review-url">{url()}</p>}
+                  </Show>
+                  <Show when={log.length > 0}>
+                    <details class="pr-log-details">
+                      <summary>Output</summary>
+                      <ProgressLog steps={log} running={false} failed={false} />
+                    </details>
                   </Show>
                 </div>
                 <div class="modal-foot">

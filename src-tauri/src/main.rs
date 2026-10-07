@@ -968,10 +968,13 @@ async fn create_pull_request(
     core: State<'_, Core>,
     worktree: String,
     request: editor_core::PullRequestRequest,
+    on_progress: Channel<editor_core::PullRequestProgress>,
 ) -> CommandResult<editor_core::PullRequestOutcome> {
-    core.create_pull_request(worktree.as_ref(), request)
-        .await
-        .map_err(|e| e.to_string())
+    core.create_pull_request(worktree.as_ref(), request, |progress| {
+        let _ = on_progress.send(progress);
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// One file's working change: staged (HEAD to the index) or not (the index to the file on disk).

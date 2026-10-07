@@ -33,7 +33,8 @@ use crate::git_status::{
 use crate::merged::{self, WorktreeMerge};
 use crate::permissions;
 use crate::pull_request::{
-    CommitChanges, PullRequestOutcome, PullRequestRequest, Review, ReviewCommit, ReviewFile,
+    CommitChanges, PullRequestOutcome, PullRequestProgress, PullRequestRequest, Review,
+    ReviewCommit, ReviewFile,
 };
 use crate::remove_worktree::{self, RemovalCheck, RemoveWorktree, RemovedWorktree};
 use crate::session::{
@@ -2697,12 +2698,20 @@ impl Core {
     /// "Create PR": commits whatever isn't committed yet (all of it, untracked files too) with the
     /// request's commit message, pushes the branch, and opens a PR from it into `target` with the
     /// GitHub CLI, assigned to whoever it's logged in as. Asks first (doing nothing) while a session
-    /// in the Worktree is Working, unless told to go ahead.
+    /// in the Worktree is Working, unless told to go ahead. Each step, and the output of what it
+    /// runs (hooks, git's progress, `gh`), goes to `progress` as it happens.
     pub async fn create_pull_request(
         &self,
         worktree: &Path,
         request: PullRequestRequest,
+        progress: impl Fn(PullRequestProgress) + Send + Sync,
     ) -> Result<PullRequestOutcome, CoreError> {
+        let step = |text: String| progress(PullRequestProgress::Step { text });
+        let output = |text: &str| {
+            progress(PullRequestProgress::Output {
+                text: text.to_owned(),
+            })
+        };
         let worktree = self.known_worktree(worktree)?;
         let target = request.target.trim();
         let title = request.title.trim();
@@ -2741,21 +2750,31 @@ impl Core {
                 "" => title,
                 message => message,
             };
+            let files = status.files.len();
+            step(format!(
+                "Committing {files} file{}",
+                if files == 1 { "" } else { "s" }
+            ));
             let made = async {
                 git::stage_all(&worktree).await?;
-                git::commit(&worktree, message, false).await
+                git::commit(&worktree, message, false, Some(&output)).await
             }
             .await;
             self.inner.status_due(worktree.clone());
             Some(made.map_err(CoreError::Git)?)
         };
         let _one_at_a_time = self.inner.remote_op.lock().await;
-        let pushed = git::push(&worktree).await;
+        step(format!(
+            "Pushing {branch} to {}",
+            git::push_remote(&worktree, &branch).await
+        ));
+        let pushed = git::push(&worktree, Some(&output)).await;
         self.inner.git_changed(worktree.clone());
         if pushed.map_err(CoreError::Git)? == PushOutcome::Rejected {
             return Ok(PullRequestOutcome::PushRejected { committed });
         }
         let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        step(format!("Opening the PR into {target}"));
         let opened = crate::pull_request::create(
             &gh,
             &worktree,
@@ -2764,6 +2783,7 @@ impl Core {
             title,
             &request.body,
             request.draft,
+            &output,
         )
         .await
         .map_err(CoreError::Git)?;
@@ -2840,7 +2860,7 @@ impl Core {
         if request.amend && !request.even_if_pushed && git::head_pushed(&worktree).await {
             return Ok(CommitOutcome::AlreadyPushed);
         }
-        let done = git::commit(&worktree, &request.message, request.amend)
+        let done = git::commit(&worktree, &request.message, request.amend, None)
             .await
             .map_err(CoreError::Git);
         self.inner.status_due(worktree);
@@ -2859,7 +2879,7 @@ impl Core {
     pub async fn push(&self, worktree: &Path) -> Result<PushOutcome, CoreError> {
         let worktree = self.known_worktree(worktree)?;
         let _one_at_a_time = self.inner.remote_op.lock().await;
-        let pushed = git::push(&worktree).await.map_err(CoreError::Git);
+        let pushed = git::push(&worktree, None).await.map_err(CoreError::Git);
         self.inner.git_changed(worktree);
         pushed
     }
