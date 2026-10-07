@@ -1,16 +1,16 @@
 // "＋ worktree" (ticket 07): a new branch (prefilled agent/task-N, starting from origin/<default>
-// after a fetch, or elsewhere) or an existing branch, created next to the repo. Enter accepts the
+// after a fetch, or from any other branch: the default first, then every local and remote one) or
+// an existing branch, created next to the repo. Enter accepts the
 // defaults. The dialog hands the new Worktree back as soon as it exists; the caller starts the
 // Agent session (so a failure there doesn't leave the dialog stuck on an already-created branch).
 import { createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { type BranchInfo, core, type CreatedWorktree, type NewWorktree } from "./core";
 import { GitBranch, X } from "./icons";
 
-type StartChoice = "default" | "active" | "other";
+/** "Start from": "" for the default (`origin/<default>`), a branch's name, or `OTHER`. */
+const OTHER = "\0other";
 
 export function NewWorktreeDialog(props: {
-  /** The active Worktree's branch, offered as a start point. */
-  activeBranch: string | null;
   /** Opened to check out this existing branch ("New Worktree from this branch"). */
   existing?: string;
   onCreated: (created: CreatedWorktree) => void;
@@ -20,15 +20,15 @@ export function NewWorktreeDialog(props: {
   const [mode, setMode] = createSignal<"new" | "existing">(props.existing ? "existing" : "new");
   const [name, setName] = createSignal("");
   const [typed, setTyped] = createSignal(false);
-  const [startChoice, setStartChoice] = createSignal<StartChoice>("default");
+  const [startChoice, setStartChoice] = createSignal("");
   const [otherStart, setOtherStart] = createSignal("");
   const [filter, setFilter] = createSignal(props.existing ?? "");
   const [busy, setBusy] = createSignal("");
   const [error, setError] = createSignal("");
   const [taken, setTaken] = createSignal<BranchInfo | null>(null);
   const [defaultStart] = createResource(() => core.defaultStartPoint());
-  // Fetching for the branch list can take a moment; only start it when that mode is chosen.
-  const [branchList] = createResource(() => mode() === "existing", () => core.branches());
+  // Fetching for the branch list can take a moment: "Start from" offers the default until it's in.
+  const [branchList] = createResource(() => core.branches());
   // The suggested name, awaited by Enter if it hasn't arrived yet.
   const suggestion = core.suggestBranchName();
   let nameInput!: HTMLInputElement;
@@ -47,6 +47,16 @@ export function NewWorktreeDialog(props: {
         nameInput?.select(); // (not there when it opened on an existing branch)
       })
       .catch((err) => setError(String(err)));
+  });
+
+  /** Every branch but the default, its local twin (`master` for `origin/master`) first. */
+  const startBranches = createMemo(() => {
+    const def = defaultStart();
+    const twin = def?.replace(/^origin\//, "");
+    // (A listing that failed leaves just the default and "a tag or commit".)
+    const listed = branchList.state === "ready" ? branchList().branches : [];
+    const names = listed.map((b) => b.name).filter((n) => n !== def);
+    return [...names.filter((n) => n === twin), ...names.filter((n) => n !== twin)];
   });
 
   const shown = createMemo(() => {
@@ -71,9 +81,8 @@ export function NewWorktreeDialog(props: {
     e.preventDefault();
     const branch = name().trim() || (typed() ? "" : await suggestion.catch(() => ""));
     if (!branch) return setError("Give the branch a name.");
-    const startPoint =
-      startChoice() === "default" ? null : startChoice() === "active" ? props.activeBranch : otherStart().trim() || null;
-    if (startChoice() === "other" && !startPoint) return setError("Name the branch, tag or commit to start from.");
+    const startPoint = startChoice() === "" ? null : startChoice() === OTHER ? otherStart().trim() || null : startChoice();
+    if (startChoice() === OTHER && !startPoint) return setError("Name the branch, tag or commit to start from.");
     void create({ kind: "newBranch", name: branch, startPoint });
   };
 
@@ -122,17 +131,20 @@ export function NewWorktreeDialog(props: {
             <p class="hint">Prefilled and selected, so typing replaces it.</p>
             <label>
               Start from
-              <select class="mono" value={startChoice()} onChange={(e) => setStartChoice(e.currentTarget.value as StartChoice)}>
-                <option value="default">
+              <select class="mono" value={startChoice()} onChange={(e) => setStartChoice(e.currentTarget.value)}>
+                <option value="">
                   {defaultStart() ?? "origin/<default>"}
-                  {defaultStart()?.startsWith("origin/") ? " (fetched first)" : ""}
+                  {defaultStart()?.startsWith("origin/") ? " (default, fetched first)" : " (default)"}
                 </option>
-                <Show when={props.activeBranch}>{(b) => <option value="active">{b()} (this Worktree)</option>}</Show>
-                <option value="other">Another branch, tag or commit…</option>
+                <For each={startBranches()}>{(b) => <option value={b}>{b}</option>}</For>
+                <Show when={branchList.loading}>
+                  <option disabled>Fetching branches…</option>
+                </Show>
+                <option value={OTHER}>A tag or commit…</option>
               </select>
             </label>
-            <Show when={startChoice() === "other"}>
-              <input class="mono" placeholder="branch, tag or commit" value={otherStart()} onInput={(e) => setOtherStart(e.currentTarget.value)} autofocus />
+            <Show when={startChoice() === OTHER}>
+              <input class="mono" placeholder="tag or commit" value={otherStart()} onInput={(e) => setOtherStart(e.currentTarget.value)} autofocus />
             </Show>
             <p class="hint">Created next to the repo, then an Agent session starts in it.</p>
             </div>

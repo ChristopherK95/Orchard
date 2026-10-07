@@ -982,7 +982,6 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       </Show>
       <Show when={creatingWorktree()}>
         <NewWorktreeDialog
-          activeBranch={worktree()?.branch ?? null}
           existing={creatingFrom()}
           onCreated={async (created) => {
             // The Worktree exists now: close, and start its session in the main view, where a
