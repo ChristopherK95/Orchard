@@ -331,11 +331,7 @@ fn mine_listed(stdout: &str) -> Result<Vec<MyPullRequest>, String> {
             let state = PullRequestState::read(&pr.state);
             let review_decision = pr.review_decision.filter(|d| !d.is_empty());
             let reviewers = reviewers_of(pr.latest_reviews, pr.review_requests);
-            let checks: Vec<Check> = pr
-                .status_check_rollup
-                .into_iter()
-                .map(Status::check)
-                .collect();
+            let checks = latest_checks(pr.status_check_rollup);
             let stage = stage_of(
                 state,
                 pr.is_draft,
@@ -844,9 +840,40 @@ struct Status {
     state: Option<String>,
     details_url: Option<String>,
     target_url: Option<String>,
+    /// When a check run started; a commit status, when it was set.
+    started_at: Option<String>,
+    created_at: Option<String>,
+}
+
+/// The checks of `statusCheckRollup`, each once: it lists every attempt of a check (a re-run job
+/// is listed again, its earlier attempt still there), and only the latest of a check's attempts
+/// (by workflow and name) says where it stands. Each is where its first attempt was listed.
+fn latest_checks(statuses: Vec<Status>) -> Vec<Check> {
+    let mut latest: Vec<Status> = Vec::new();
+    for status in statuses {
+        let key = |s: &Status| {
+            let name = s.name.clone().or(s.context.clone());
+            (s.typename.clone(), s.workflow_name.clone(), name)
+        };
+        match latest.iter_mut().find(|l| key(l) == key(&status)) {
+            Some(earlier) if status.since() >= earlier.since() => *earlier = status,
+            Some(_) => {}
+            None => latest.push(status),
+        }
+    }
+    latest.into_iter().map(Status::check).collect()
 }
 
 impl Status {
+    /// When this attempt started (None, for one queued and not started yet, sorts first, so the
+    /// listing's order decides between such).
+    fn since(&self) -> Option<&str> {
+        self.started_at
+            .as_deref()
+            .or(self.created_at.as_deref())
+            .filter(|at| !at.is_empty() && !at.starts_with("0001-"))
+    }
+
     fn check(self) -> Check {
         let outcome = if self.typename == "StatusContext" {
             match self.state.as_deref() {
@@ -1025,11 +1052,7 @@ fn viewed(stdout: &str) -> Result<PullRequestDetails, String> {
         .map_err(|e| format!("gh said something unexpected: {e}"))?;
     let state = PullRequestState::read(&pr.state);
     let reviewers = reviewers_of(pr.latest_reviews, pr.review_requests);
-    let checks = pr
-        .status_check_rollup
-        .into_iter()
-        .map(Status::check)
-        .collect();
+    let checks = latest_checks(pr.status_check_rollup);
 
     Ok(PullRequestDetails {
         number: pr.number,
@@ -1281,6 +1304,35 @@ mod tests {
         );
         assert_eq!(job("https://github.com/o/r/actions/runs/123"), None);
         assert_eq!(job("https://ci.example.com/build/9"), None);
+    }
+
+    #[test]
+    fn only_a_checks_latest_attempt_counts() {
+        let statuses: Vec<Status> = serde_json::from_str(
+            r#"[
+            {"__typename":"CheckRun","name":"ci_tests","workflowName":"CI","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-10-07T10:00:00Z"},
+            {"__typename":"CheckRun","name":"deploy","workflowName":"Deploy","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-07T10:00:00Z"},
+            {"__typename":"CheckRun","name":"ci_tests","workflowName":"CI","status":"IN_PROGRESS","conclusion":"","startedAt":"2026-10-07T11:00:00Z"},
+            {"__typename":"CheckRun","name":"deploy","workflowName":"Other","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-07T10:00:00Z"},
+            {"__typename":"CheckRun","name":"deploy","workflowName":"Deploy","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-10-07T09:00:00Z"},
+            {"__typename":"StatusContext","context":"ext","state":"SUCCESS","createdAt":"2026-10-07T10:00:00Z"}
+        ]"#,
+        )
+        .unwrap();
+        let checks = latest_checks(statuses);
+        let seen: Vec<_> = checks
+            .iter()
+            .map(|c| (c.workflow.as_deref(), c.name.as_str(), c.outcome))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (Some("CI"), "ci_tests", CheckOutcome::Pending),
+                (Some("Deploy"), "deploy", CheckOutcome::Success),
+                (Some("Other"), "deploy", CheckOutcome::Success),
+                (None, "ext", CheckOutcome::Success),
+            ]
+        );
     }
 
     #[test]
