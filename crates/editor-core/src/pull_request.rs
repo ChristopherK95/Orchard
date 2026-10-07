@@ -225,6 +225,690 @@ fn listed(stdout: &str) -> Result<Option<OpenPullRequest>, String> {
     }))
 }
 
+/// The PR of the Worktree's branch as "PR" shows it: where it stands, who's on it, and what's been
+/// said (the conversation and the comments on its code).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestDetails {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: PullRequestState,
+    pub draft: bool,
+    /// Markdown.
+    pub body: String,
+    pub author: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub merged_at: Option<String>,
+    pub merged_by: Option<String>,
+    pub closed_at: Option<String>,
+    /// The branch it comes from, and the one it goes into.
+    pub head: String,
+    pub base: String,
+    pub additions: u64,
+    pub deletions: u64,
+    pub changed_files: u64,
+    /// GitHub's word on its reviews: `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED`, or none.
+    pub review_decision: Option<String>,
+    /// `MERGEABLE`, `CONFLICTING` or `UNKNOWN`.
+    pub mergeable: String,
+    /// `CLEAN`, `BLOCKED`, `BEHIND`, `DIRTY`, `UNSTABLE`, `DRAFT`, `HAS_HOOKS` or `UNKNOWN`.
+    pub merge_state: String,
+    pub labels: Vec<PullRequestLabel>,
+    pub milestone: Option<String>,
+    pub assignees: Vec<String>,
+    /// Everyone asked to review it or who has, with where they stand.
+    pub reviewers: Vec<Reviewer>,
+    pub checks: Vec<Check>,
+    /// The conversation: comments on the PR itself, oldest first.
+    pub comments: Vec<PullRequestComment>,
+    /// Every review submitted, oldest first.
+    pub reviews: Vec<SubmittedReview>,
+    /// The comments on its code, by thread, oldest first.
+    pub threads: Vec<CodeThread>,
+    /// Why the comments on its code couldn't be read (the rest still could).
+    pub threads_error: Option<String>,
+    /// The repo's organisation's top-level teams, each with everyone in it or its sub-teams, to
+    /// filter comments by (none when the repo belongs to a user).
+    pub teams: Vec<Team>,
+    /// Why the teams couldn't be read (the rest still could).
+    pub teams_error: Option<String>,
+    pub commits: Vec<PullRequestCommit>,
+}
+
+/// A top-level team of the repo's organisation: its members and its sub-teams' members.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Team {
+    pub name: String,
+    pub slug: String,
+    pub members: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PullRequestState {
+    Open,
+    Closed,
+    Merged,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestLabel {
+    pub name: String,
+    /// Hex, without `#`.
+    pub color: String,
+}
+
+/// Someone (or a team) on the PR's review.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Reviewer {
+    pub name: String,
+    pub team: bool,
+    /// Their latest review, or `Requested` when they haven't reviewed yet.
+    pub state: ReviewerState,
+    /// Asked to review (again, when they already have: then their review is waited on anew).
+    pub requested: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReviewerState {
+    Requested,
+    Approved,
+    ChangesRequested,
+    Commented,
+    Dismissed,
+}
+
+/// One CI check or commit status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Check {
+    pub name: String,
+    pub workflow: Option<String>,
+    pub outcome: CheckOutcome,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CheckOutcome {
+    Pending,
+    Success,
+    Failure,
+    Skipped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestComment {
+    pub author: String,
+    pub body: String,
+    pub created_at: String,
+    pub url: Option<String>,
+    pub edited: bool,
+    /// Hidden on GitHub (as off-topic, outdated, …).
+    pub minimized: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmittedReview {
+    pub author: String,
+    /// `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED` or `DISMISSED`.
+    pub state: String,
+    pub body: String,
+    pub submitted_at: String,
+}
+
+/// A comment on the PR's code and its replies.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeThread {
+    pub path: String,
+    /// The line it's on now; None once the code it was on has changed (outdated).
+    pub line: Option<u64>,
+    /// The line it was made on.
+    pub original_line: Option<u64>,
+    pub url: String,
+    /// The few lines of diff it's about, ending at its line.
+    pub diff_hunk: String,
+    pub comments: Vec<PullRequestComment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestCommit {
+    pub short_id: String,
+    pub subject: String,
+    pub author: String,
+    pub date: String,
+}
+
+/// What `gh pr view` is asked for.
+const DETAIL_FIELDS: &str = "number,title,url,state,isDraft,body,author,createdAt,updatedAt,mergedAt,mergedBy,closedAt,headRefName,baseRefName,additions,deletions,changedFiles,reviewDecision,mergeable,mergeStateStatus,labels,milestone,assignees,reviewRequests,latestReviews,reviews,statusCheckRollup,comments,commits";
+
+/// The comments on the PR's code, one JSON object a line (`gh api --paginate` with this `--jq`).
+const THREAD_JQ: &str = ".[] | {id, in_reply_to_id, path, line, original_line, html_url, diff_hunk, body, created_at, user: .user.login}";
+
+/// The PR of `branch` (`gh pr view`: its open one, else its latest), if it has one, with the
+/// comments on its code (`gh api`).
+pub(crate) async fn details_for(
+    gh: &Path,
+    worktree: &Path,
+    branch: &str,
+) -> Result<Option<PullRequestDetails>, String> {
+    let out = run_gh(
+        gh,
+        worktree,
+        &["pr", "view", branch, "--json", DETAIL_FIELDS],
+        None,
+    )
+    .await?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if stderr.contains("no pull requests found") {
+            return Ok(None);
+        }
+        return Err(gh_failure(&stdout, &stderr));
+    }
+    let mut details = viewed(&stdout)?;
+    let comments_of = format!("repos/{{owner}}/{{repo}}/pulls/{}/comments", details.number);
+    let args = ["api", &comments_of, "--paginate", "--jq", THREAD_JQ];
+    let (threads_read, teams_read) =
+        tokio::join!(gh_text(gh, worktree, &args), teams_for(gh, worktree));
+    match threads_read.and_then(|out| threads(&out)) {
+        Ok(threads) => details.threads = threads,
+        Err(e) => details.threads_error = Some(e),
+    }
+    match teams_read {
+        Ok(teams) => details.teams = teams,
+        Err(e) => details.teams_error = Some(e),
+    }
+    Ok(Some(details))
+}
+
+/// What `gh` printed, or why it failed.
+async fn gh_text(gh: &Path, worktree: &Path, args: &[&str]) -> Result<String, String> {
+    let out = run_gh(gh, worktree, args, None).await?;
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    match out.status.success() {
+        true => Ok(stdout),
+        false => Err(gh_failure(&stdout, &String::from_utf8_lossy(&out.stderr))),
+    }
+}
+
+/// How long an organisation's teams are kept before they're read again.
+const TEAMS_FRESH: Duration = Duration::from_secs(15 * 60);
+
+/// The teams read lately, by organisation.
+type TeamCache =
+    std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Vec<Team>)>>;
+
+/// The top-level teams of the repo's organisation with their members (GitHub counts a sub-team's
+/// members as its parent's too), or none when a user owns the repo. Kept for `TEAMS_FRESH`.
+async fn teams_for(gh: &Path, worktree: &Path) -> Result<Vec<Team>, String> {
+    static CACHE: std::sync::OnceLock<TeamCache> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let owner_jq = r#"[.owner.type, .owner.login] | join(" ")"#;
+    let owner = gh_text(
+        gh,
+        worktree,
+        &["api", "repos/{owner}/{repo}", "--jq", owner_jq],
+    )
+    .await?;
+    let Some(org) = owner
+        .trim()
+        .strip_prefix("Organization ")
+        .map(str::to_owned)
+    else {
+        return Ok(Vec::new());
+    };
+    if let Some((at, teams)) = cache.lock().unwrap().get(&org) {
+        if at.elapsed() < TEAMS_FRESH {
+            return Ok(teams.clone());
+        }
+    }
+    let unreadable = |e: String| {
+        format!("Couldn't read {org}'s teams (`gh auth refresh -s read:org` gives gh access): {e}")
+    };
+    let listed = gh_text(
+        gh,
+        worktree,
+        &[
+            "api",
+            &format!("orgs/{org}/teams"),
+            "--paginate",
+            "--jq",
+            TEAM_JQ,
+        ],
+    )
+    .await
+    .map_err(unreadable)?;
+    // Every team's members at once (each is a request of its own).
+    let mut reads = tokio::task::JoinSet::new();
+    for (i, (name, slug)) in top_level(&listed)?.into_iter().enumerate() {
+        let (gh, worktree) = (gh.to_owned(), worktree.to_owned());
+        let members_of = format!("orgs/{org}/teams/{slug}/members");
+        reads.spawn(async move {
+            let args = ["api", &members_of, "--paginate", "--jq", ".[].login"];
+            let members = gh_text(&gh, &worktree, &args).await;
+            (i, name, slug, members)
+        });
+    }
+    let mut teams = Vec::new();
+    while let Some(read) = reads.join_next().await {
+        let (i, name, slug, members) = read.map_err(|e| e.to_string())?;
+        let mut members: Vec<String> = members
+            .map_err(unreadable)?
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_owned)
+            .collect();
+        members.sort();
+        members.dedup();
+        teams.push((
+            i,
+            Team {
+                name,
+                slug,
+                members,
+            },
+        ));
+    }
+    teams.sort_by_key(|(i, _)| *i);
+    let teams: Vec<Team> = teams.into_iter().map(|(_, t)| t).collect();
+    cache
+        .lock()
+        .unwrap()
+        .insert(org, (std::time::Instant::now(), teams.clone()));
+    Ok(teams)
+}
+
+/// The organisation's teams, one JSON object a line (`gh api --paginate` with this `--jq`).
+const TEAM_JQ: &str = ".[] | {name, slug, parent: .parent.slug}";
+
+/// The top-level teams (name and slug) among `TEAM_JQ`'s lines.
+fn top_level(stdout: &str) -> Result<Vec<(String, String)>, String> {
+    #[derive(Deserialize)]
+    struct Line {
+        name: String,
+        slug: String,
+        parent: Option<String>,
+    }
+    let mut teams = Vec::new();
+    for line in stdout.lines().filter(|l| !l.trim().is_empty()) {
+        let t: Line =
+            serde_json::from_str(line).map_err(|e| format!("gh said something unexpected: {e}"))?;
+        if t.parent.is_none() {
+            teams.push((t.name, t.slug));
+        }
+    }
+    teams.sort();
+    Ok(teams)
+}
+
+/// Reads `gh pr view --json DETAIL_FIELDS` (without the comments on its code).
+fn viewed(stdout: &str) -> Result<PullRequestDetails, String> {
+    #[derive(Deserialize, Default)]
+    #[serde(default)]
+    struct Actor {
+        login: Option<String>,
+        name: Option<String>,
+        slug: Option<String>,
+        #[serde(rename = "__typename")]
+        typename: Option<String>,
+    }
+    impl Actor {
+        fn login(self) -> String {
+            self.login
+                .or(self.slug)
+                .or(self.name)
+                .unwrap_or_else(|| "ghost".into())
+        }
+    }
+    #[derive(Deserialize)]
+    struct Label {
+        name: String,
+        #[serde(default)]
+        color: String,
+    }
+    #[derive(Deserialize)]
+    struct Milestone {
+        title: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Review {
+        #[serde(default)]
+        author: Actor,
+        state: String,
+        #[serde(default)]
+        body: String,
+        #[serde(default)]
+        submitted_at: Option<String>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Comment {
+        #[serde(default)]
+        author: Actor,
+        #[serde(default)]
+        body: String,
+        created_at: String,
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        includes_created_edit: bool,
+        #[serde(default)]
+        is_minimized: bool,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Status {
+        #[serde(rename = "__typename", default)]
+        typename: String,
+        name: Option<String>,
+        context: Option<String>,
+        workflow_name: Option<String>,
+        status: Option<String>,
+        conclusion: Option<String>,
+        state: Option<String>,
+        details_url: Option<String>,
+        target_url: Option<String>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CommitAuthor {
+        login: Option<String>,
+        name: Option<String>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Commit {
+        oid: String,
+        message_headline: String,
+        #[serde(default)]
+        authors: Vec<CommitAuthor>,
+        #[serde(default)]
+        committed_date: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Viewed {
+        number: u64,
+        title: String,
+        url: String,
+        state: String,
+        #[serde(default)]
+        is_draft: bool,
+        #[serde(default)]
+        body: String,
+        #[serde(default)]
+        author: Actor,
+        created_at: String,
+        updated_at: String,
+        merged_at: Option<String>,
+        merged_by: Option<Actor>,
+        closed_at: Option<String>,
+        head_ref_name: String,
+        base_ref_name: String,
+        #[serde(default)]
+        additions: u64,
+        #[serde(default)]
+        deletions: u64,
+        #[serde(default)]
+        changed_files: u64,
+        #[serde(default)]
+        review_decision: Option<String>,
+        #[serde(default)]
+        mergeable: String,
+        #[serde(default)]
+        merge_state_status: String,
+        #[serde(default)]
+        labels: Vec<Label>,
+        milestone: Option<Milestone>,
+        #[serde(default)]
+        assignees: Vec<Actor>,
+        #[serde(default)]
+        review_requests: Vec<Actor>,
+        #[serde(default)]
+        latest_reviews: Vec<Review>,
+        #[serde(default)]
+        reviews: Vec<Review>,
+        #[serde(default)]
+        status_check_rollup: Vec<Status>,
+        #[serde(default)]
+        comments: Vec<Comment>,
+        #[serde(default)]
+        commits: Vec<Commit>,
+    }
+
+    let pr: Viewed = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("gh said something unexpected: {e}"))?;
+    let state = match pr.state.as_str() {
+        "MERGED" => PullRequestState::Merged,
+        "CLOSED" => PullRequestState::Closed,
+        _ => PullRequestState::Open,
+    };
+
+    // Who reviewed (their latest review), then who's asked to and hasn't, or is asked again.
+    let mut reviewers: Vec<Reviewer> = Vec::new();
+    for review in pr.latest_reviews {
+        let state = match review.state.as_str() {
+            "APPROVED" => ReviewerState::Approved,
+            "CHANGES_REQUESTED" => ReviewerState::ChangesRequested,
+            "COMMENTED" => ReviewerState::Commented,
+            "DISMISSED" => ReviewerState::Dismissed,
+            _ => continue, // (PENDING: a review still being written)
+        };
+        let name = review.author.login();
+        if !reviewers.iter().any(|r| r.name == name) {
+            reviewers.push(Reviewer {
+                name,
+                team: false,
+                state,
+                requested: false,
+            });
+        }
+    }
+    for request in pr.review_requests {
+        let team = request.typename.as_deref() == Some("Team");
+        let name = request.login();
+        match reviewers.iter_mut().find(|r| r.name == name) {
+            Some(r) => r.requested = true,
+            None => reviewers.push(Reviewer {
+                name,
+                team,
+                state: ReviewerState::Requested,
+                requested: true,
+            }),
+        }
+    }
+
+    let checks = pr
+        .status_check_rollup
+        .into_iter()
+        .map(|s| {
+            let outcome = if s.typename == "StatusContext" {
+                match s.state.as_deref() {
+                    Some("SUCCESS") => CheckOutcome::Success,
+                    Some("FAILURE" | "ERROR") => CheckOutcome::Failure,
+                    _ => CheckOutcome::Pending,
+                }
+            } else if s.status.as_deref() != Some("COMPLETED") {
+                CheckOutcome::Pending
+            } else {
+                match s.conclusion.as_deref() {
+                    Some("SUCCESS") => CheckOutcome::Success,
+                    Some("SKIPPED" | "NEUTRAL" | "STALE") => CheckOutcome::Skipped,
+                    _ => CheckOutcome::Failure,
+                }
+            };
+            Check {
+                name: s.name.or(s.context).unwrap_or_default(),
+                workflow: s.workflow_name.filter(|w| !w.is_empty()),
+                outcome,
+                url: s.details_url.or(s.target_url).filter(|u| !u.is_empty()),
+            }
+        })
+        .collect();
+
+    Ok(PullRequestDetails {
+        number: pr.number,
+        title: pr.title,
+        url: pr.url,
+        state,
+        draft: pr.is_draft,
+        body: pr.body,
+        author: pr.author.login(),
+        created_at: pr.created_at,
+        updated_at: pr.updated_at,
+        merged_at: pr.merged_at.filter(|t| !t.is_empty()),
+        merged_by: pr.merged_by.map(Actor::login),
+        closed_at: pr.closed_at.filter(|t| !t.is_empty()),
+        head: pr.head_ref_name,
+        base: pr.base_ref_name,
+        additions: pr.additions,
+        deletions: pr.deletions,
+        changed_files: pr.changed_files,
+        review_decision: pr.review_decision.filter(|d| !d.is_empty()),
+        mergeable: pr.mergeable,
+        merge_state: pr.merge_state_status,
+        labels: pr
+            .labels
+            .into_iter()
+            .map(|l| PullRequestLabel {
+                name: l.name,
+                color: l.color,
+            })
+            .collect(),
+        milestone: pr.milestone.map(|m| m.title),
+        assignees: pr.assignees.into_iter().map(Actor::login).collect(),
+        reviewers,
+        checks,
+        comments: pr
+            .comments
+            .into_iter()
+            .map(|c| PullRequestComment {
+                author: c.author.login(),
+                body: c.body,
+                created_at: c.created_at,
+                url: c.url,
+                edited: c.includes_created_edit,
+                minimized: c.is_minimized,
+            })
+            .collect(),
+        reviews: pr
+            .reviews
+            .into_iter()
+            .filter(|r| r.state != "PENDING")
+            .map(|r| SubmittedReview {
+                author: r.author.login(),
+                state: r.state,
+                body: r.body,
+                submitted_at: r.submitted_at.unwrap_or_default(),
+            })
+            .collect(),
+        threads: Vec::new(),
+        threads_error: None,
+        teams: Vec::new(),
+        teams_error: None,
+        commits: pr
+            .commits
+            .into_iter()
+            .map(|c| PullRequestCommit {
+                short_id: c.oid.chars().take(7).collect(),
+                subject: c.message_headline,
+                author: c
+                    .authors
+                    .into_iter()
+                    .next()
+                    .and_then(|a| a.login.filter(|l| !l.is_empty()).or(a.name))
+                    .unwrap_or_default(),
+                date: c.committed_date,
+            })
+            .collect(),
+    })
+}
+
+/// Reads the comments on the PR's code (`THREAD_JQ`'s lines) into threads: each first comment
+/// with its replies, oldest first.
+fn threads(stdout: &str) -> Result<Vec<CodeThread>, String> {
+    #[derive(Deserialize)]
+    struct Line {
+        id: u64,
+        in_reply_to_id: Option<u64>,
+        path: String,
+        line: Option<u64>,
+        original_line: Option<u64>,
+        html_url: String,
+        #[serde(default)]
+        diff_hunk: String,
+        #[serde(default)]
+        body: String,
+        created_at: String,
+        user: Option<String>,
+    }
+    let mut threads: Vec<(u64, CodeThread)> = Vec::new();
+    let mut replies: Vec<Line> = Vec::new();
+    for line in stdout.lines().filter(|l| !l.trim().is_empty()) {
+        let c: Line =
+            serde_json::from_str(line).map_err(|e| format!("gh said something unexpected: {e}"))?;
+        if c.in_reply_to_id.is_some() {
+            replies.push(c);
+            continue;
+        }
+        let comment = PullRequestComment {
+            author: c.user.unwrap_or_else(|| "ghost".into()),
+            body: c.body,
+            created_at: c.created_at,
+            url: Some(c.html_url.clone()),
+            edited: false,
+            minimized: false,
+        };
+        threads.push((
+            c.id,
+            CodeThread {
+                path: c.path,
+                line: c.line,
+                original_line: c.original_line,
+                url: c.html_url,
+                diff_hunk: c.diff_hunk,
+                comments: vec![comment],
+            },
+        ));
+    }
+    for c in replies {
+        // (Replies all answer a thread's first comment.)
+        if let Some((_, thread)) = threads
+            .iter_mut()
+            .find(|(id, _)| Some(*id) == c.in_reply_to_id)
+        {
+            thread.comments.push(PullRequestComment {
+                author: c.user.unwrap_or_else(|| "ghost".into()),
+                body: c.body,
+                created_at: c.created_at,
+                url: Some(c.html_url),
+                edited: false,
+                minimized: false,
+            });
+        }
+    }
+    let mut threads: Vec<CodeThread> = threads.into_iter().map(|(_, t)| t).collect();
+    for t in &mut threads {
+        t.comments.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    }
+    threads.sort_by(|a, b| a.comments[0].created_at.cmp(&b.comments[0].created_at));
+    Ok(threads)
+}
+
 /// Runs `gh` with `args` in `worktree`, never prompting, its output going to `sink` as it comes.
 async fn run_gh(
     gh: &Path,
@@ -354,5 +1038,106 @@ mod tests {
         assert_eq!(on_remote("origin/feat/x", "origin"), Some("feat/x"));
         assert_eq!(on_remote("upstream/main", "origin"), None);
         assert_eq!(on_remote("originals/main", "origin"), None);
+    }
+    #[test]
+    fn reviewers_stand_by_their_latest_review_and_requests_wait() {
+        let out = r#"{"number":5,"title":"T","url":"u","state":"OPEN","isDraft":true,"body":"b",
+            "author":{"login":"me"},"createdAt":"c","updatedAt":"u","mergedAt":null,"mergedBy":null,
+            "closedAt":null,"headRefName":"feat","baseRefName":"main","additions":3,"deletions":1,
+            "changedFiles":2,"reviewDecision":"","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN",
+            "labels":[{"name":"bug","color":"d73a4a"}],"milestone":{"title":"v1"},
+            "assignees":[{"login":"me","name":"Me"}],
+            "reviewRequests":[{"__typename":"User","login":"ann"},{"__typename":"Team","name":"Core","slug":"o/core"}],
+            "latestReviews":[{"author":{"login":"ann"},"state":"CHANGES_REQUESTED","body":"","submittedAt":"t1"},
+                             {"author":{"login":"bob"},"state":"APPROVED","body":"","submittedAt":"t2"},
+                             {"author":{"login":"me"},"state":"PENDING","body":"","submittedAt":null}],
+            "reviews":[],"comments":[],"commits":[],
+            "statusCheckRollup":[{"__typename":"CheckRun","name":"build","workflowName":"CI","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"d"},
+                                 {"__typename":"CheckRun","name":"lint","workflowName":"","status":"IN_PROGRESS","conclusion":"","detailsUrl":""},
+                                 {"__typename":"StatusContext","context":"deploy","state":"ERROR","targetUrl":"t"}]}"#;
+        let pr = viewed(out).unwrap();
+        assert_eq!(pr.state, PullRequestState::Open);
+        assert!(pr.draft);
+        assert_eq!(pr.review_decision, None);
+        assert_eq!(pr.milestone.as_deref(), Some("v1"));
+        assert_eq!(
+            pr.reviewers,
+            vec![
+                Reviewer {
+                    name: "ann".into(),
+                    team: false,
+                    state: ReviewerState::ChangesRequested,
+                    requested: true
+                },
+                Reviewer {
+                    name: "bob".into(),
+                    team: false,
+                    state: ReviewerState::Approved,
+                    requested: false
+                },
+                Reviewer {
+                    name: "o/core".into(),
+                    team: true,
+                    state: ReviewerState::Requested,
+                    requested: true
+                },
+            ]
+        );
+        let outcomes: Vec<_> = pr
+            .checks
+            .iter()
+            .map(|c| (c.name.as_str(), c.outcome))
+            .collect();
+        assert_eq!(
+            outcomes,
+            vec![
+                ("build", CheckOutcome::Success),
+                ("lint", CheckOutcome::Pending),
+                ("deploy", CheckOutcome::Failure)
+            ]
+        );
+        assert_eq!(pr.checks[1].workflow, None);
+    }
+
+    #[test]
+    fn only_top_level_teams_are_groups() {
+        let out = concat!(
+            r#"{"name":"QA","slug":"qa","parent":null}"#,
+            "\n",
+            r#"{"name":"Manager","slug":"manager","parent":"developers"}"#,
+            "\n",
+            r#"{"name":"Developers","slug":"developers","parent":null}"#,
+            "\n",
+        );
+        assert_eq!(
+            top_level(out),
+            Ok(vec![
+                ("Developers".into(), "developers".into()),
+                ("QA".into(), "qa".into())
+            ])
+        );
+    }
+
+    #[test]
+    fn code_comments_gather_into_threads() {
+        let out = concat!(
+            r#"{"id":1,"in_reply_to_id":null,"path":"a.rs","line":4,"original_line":4,"html_url":"h1","diff_hunk":"@@","body":"why?","created_at":"2026-01-01T00:00:00Z","user":"ann"}"#,
+            "\n",
+            r#"{"id":3,"in_reply_to_id":null,"path":"b.rs","line":null,"original_line":9,"html_url":"h3","diff_hunk":"@@","body":"typo","created_at":"2026-01-03T00:00:00Z","user":"bob"}"#,
+            "\n",
+            r#"{"id":2,"in_reply_to_id":1,"path":"a.rs","line":4,"original_line":4,"html_url":"h2","diff_hunk":"@@","body":"because","created_at":"2026-01-02T00:00:00Z","user":"me"}"#,
+            "\n",
+        );
+        let threads = threads(out).unwrap();
+        assert_eq!(threads.len(), 2);
+        assert_eq!(threads[0].path, "a.rs");
+        let said: Vec<_> = threads[0]
+            .comments
+            .iter()
+            .map(|c| c.body.as_str())
+            .collect();
+        assert_eq!(said, ["why?", "because"]);
+        assert_eq!(threads[1].line, None);
+        assert_eq!(threads[1].original_line, Some(9));
     }
 }

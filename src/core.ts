@@ -467,6 +467,92 @@ export interface OpenPullRequest {
   target: string;
 }
 
+/** The PR of a Worktree's branch, as the PR overlay shows it. */
+export interface PullRequestDetails {
+  number: number;
+  title: string;
+  url: string;
+  state: "open" | "closed" | "merged";
+  draft: boolean;
+  /** Markdown. */
+  body: string;
+  author: string;
+  createdAt: string;
+  updatedAt: string;
+  mergedAt: string | null;
+  mergedBy: string | null;
+  closedAt: string | null;
+  /** The branch it comes from, and the one it goes into. */
+  head: string;
+  base: string;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
+  mergeable: string;
+  mergeState: string;
+  labels: { name: string; color: string }[];
+  milestone: string | null;
+  assignees: string[];
+  reviewers: Reviewer[];
+  checks: Check[];
+  /** The conversation, oldest first. */
+  comments: PullRequestComment[];
+  reviews: SubmittedReview[];
+  /** The comments on its code, by thread. */
+  threads: CodeThread[];
+  /** Why the comments on its code couldn't be read. */
+  threadsError: string | null;
+  /** The organisation's top-level teams, each with its sub-teams' members too (none for a user's repo). */
+  teams: { name: string; slug: string; members: string[] }[];
+  /** Why the teams couldn't be read. */
+  teamsError: string | null;
+  commits: { shortId: string; subject: string; author: string; date: string }[];
+}
+
+export type ReviewerState = "requested" | "approved" | "changesRequested" | "commented" | "dismissed";
+
+export interface Reviewer {
+  name: string;
+  team: boolean;
+  state: ReviewerState;
+  /** Asked to review (again, when they already have). */
+  requested: boolean;
+}
+
+export interface Check {
+  name: string;
+  workflow: string | null;
+  outcome: "pending" | "success" | "failure" | "skipped";
+  url: string | null;
+}
+
+export interface PullRequestComment {
+  author: string;
+  body: string;
+  createdAt: string;
+  url: string | null;
+  edited: boolean;
+  minimized: boolean;
+}
+
+export interface SubmittedReview {
+  author: string;
+  state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
+  body: string;
+  submittedAt: string;
+}
+
+export interface CodeThread {
+  path: string;
+  /** None once the code it was on has changed (outdated). */
+  line: number | null;
+  originalLine: number | null;
+  url: string;
+  diffHunk: string;
+  comments: PullRequestComment[];
+}
+
 export type PushToPullRequestOutcome =
   | { kind: "sessionsWorking"; sessions: string[] }
   | { kind: "pushed"; to: string; committed: string | null }
@@ -760,6 +846,8 @@ export const core = {
   },
   /** The PR open from the Worktree's branch, if it has one (asked of the GitHub CLI). */
   openPullRequest: (worktree: string) => invoke<OpenPullRequest | null>("open_pull_request", { worktree }),
+  /** The PR of the Worktree's branch (its open one, else its latest), with its reviews and comments. */
+  pullRequestDetails: (worktree: string) => invoke<PullRequestDetails | null>("pull_request_details", { worktree }),
   /** Push for a branch whose PR is open: commits what's left with `commitMessage`, then pushes. */
   pushToPullRequest: (worktree: string, commitMessage: string, evenIfWorking: boolean, onProgress: (progress: PullRequestProgress) => void) => {
     const channel = new Channel<PullRequestProgress>();

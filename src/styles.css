@@ -1116,3 +1116,136 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .review-push .git-notice, .review-push .git-ask { border: 1px solid var(--line); border-radius: var(--r-md); }
 .review-push .git-notice.warn { border-color: var(--needs-border); }
 .review-push .review-pr-error { flex: none; }
+
+/* The PR overlay: the branch's PR as GitHub has it, conversation beside who's on it. */
+.pr-button { --p: var(--fg-3); gap: 6px; }
+.pr-button .lucide { color: var(--p); }
+.pr-button.open { --p: var(--idle); }
+.pr-button.merged { --p: var(--hunk); }
+.pr-button.closed { --p: var(--exited); }
+.pr-button .label { font-variant-numeric: tabular-nums; }
+.column-head .pr-button { min-height: 28px; padding: 0 7px; font-size: 12px; font-weight: 500; color: var(--fg-2); }
+.board-card-top .pr-button { margin-left: auto; min-height: 20px; padding: 0 5px; gap: 4px; font: 500 11px var(--mono); color: var(--fg-3); }
+.board-card-top .pr-button .lucide { width: 12px; height: 12px; }
+.pr-backdrop { padding: 4vh 3vw; align-items: stretch; }
+.modal.pr-overlay { width: min(1280px, 100%); height: 100%; max-height: 100%; border-top: 3px solid var(--c); }
+.pr-head { padding: 14px 14px 12px 18px; border-bottom: 1px solid var(--line); }
+.pr-head > b { display: flex; flex-direction: column; gap: 4px; }
+.pr-mark { flex: none; width: 20px; height: 20px; align-self: flex-start; margin-top: 2px; color: var(--fg-2); }
+.pr-mark.open, .pr-state.open .lucide { color: var(--idle); }
+.pr-mark.draft, .pr-state.draft .lucide { color: var(--suspended-text); }
+.pr-mark.merged, .pr-state.merged .lucide { color: var(--hunk); }
+.pr-mark.closed, .pr-state.closed .lucide { color: var(--exited); }
+.pr-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-number { color: var(--fg-3); font-weight: 400; }
+.pr-branches { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: 12.5px; font-weight: 400; }
+.pr-branches .lucide { flex: none; width: 13px; height: 13px; }
+.pr-branches .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-state { --s: var(--idle); flex: none; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 999px; background: color-mix(in srgb, var(--s) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--s) 40%, transparent); font-size: 12.5px; font-weight: 500; }
+.pr-state .lucide { width: 14px; height: 14px; }
+.pr-state.draft { --s: var(--suspended); }
+.pr-state.merged { --s: var(--hunk); }
+.pr-state.closed { --s: var(--exited); }
+.pr-error { padding-top: 10px; }
+.pr-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 40px; text-align: center; }
+.pr-empty > .lucide { width: 24px; height: 24px; color: var(--fg-3); margin-bottom: 6px; }
+.pr-empty p { margin: 0; }
+.pr-summary { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--bg-2); font-size: 12.5px; color: var(--fg-2); }
+.pr-summary b { color: var(--fg-1); font-weight: 500; }
+.pr-size { font: 12px var(--mono); }
+.pr-size .add { color: var(--diff-add-sign); }
+.pr-size .del { color: var(--diff-del-sign); }
+.pr-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 300px); }
+.pr-main { min-height: 0; display: flex; flex-direction: column; }
+.pr-tabs { margin: 12px 18px 0; align-self: flex-start; }
+.pr-tabs button { gap: 6px; }
+.pr-tabs .lucide { width: 14px; height: 14px; }
+.pr-tabs .badge { height: 16px; min-width: 16px; padding: 0 5px; font-size: 10.5px; }
+/* Team filter and tags: each team keeps one hue (by its place among the organisation's teams). */
+.pr-filter { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 18px 0; font-size: 12px; }
+.pr-chip { --t: var(--fg-2); min-height: 24px; gap: 6px; padding: 0 9px; border-radius: 999px; background: color-mix(in srgb, var(--t) 14%, transparent); border: 1px solid transparent; color: color-mix(in srgb, var(--t) 70%, #fff); font-size: 12px; font-weight: 500; }
+.pr-chip:hover:not(:disabled) { background: color-mix(in srgb, var(--t) 22%, transparent); color: color-mix(in srgb, var(--t) 70%, #fff); }
+.pr-chip.on { border-color: var(--t); }
+.pr-chip .badge { height: 16px; min-width: 16px; padding: 0 5px; font-size: 10.5px; }
+.pr-filter-error { display: inline-flex; align-items: center; gap: 4px; color: var(--warn); cursor: help; }
+.pr-filter-error .lucide { width: 12px; height: 12px; }
+.pr-team { --t: var(--fg-3); flex: none; display: inline-flex; align-items: center; height: 16px; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--t) 14%, transparent); color: color-mix(in srgb, var(--t) 70%, #fff); font-size: 10.5px; font-weight: 500; }
+.team-0 { --t: #60a5fa; }
+.team-1 { --t: #f472b6; }
+.team-2 { --t: #34d399; }
+.team-3 { --t: #fbbf24; }
+.team-4 { --t: #a78bfa; }
+.team-5 { --t: #22d3ee; }
+.team-coderabbit { --t: #fb923c; }
+.team-actions { --t: #94a3b8; }
+.team-other { --t: var(--fg-3); }
+.pr-thread-comment .who { display: flex; align-items: center; gap: 6px; }
+.pr-thread-comment.faded { opacity: 0.45; }
+.pr-reviewer-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pr-assignee { display: flex; align-items: center; gap: 6px; }
+.pr-scroll { flex: 1; min-height: 0; overflow: auto; padding: 14px 18px 24px; }
+.pr-timeline { display: flex; flex-direction: column; gap: 12px; }
+.pr-post { border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--bg-1); overflow: hidden; }
+.pr-post > header { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 6px 0 12px; background: var(--bg-2); font-size: 12.5px; }
+.pr-post > header b { font-weight: 600; }
+.pr-post > header .icon { min-height: 24px; width: 24px; }
+.pr-post-mark { flex: none; width: 14px; height: 14px; color: var(--fg-3); }
+.pr-post-mark.approved { color: var(--ok); }
+.pr-post-mark.changes { color: var(--danger); }
+.pr-post.approved { border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); }
+.pr-post.changes_requested { border-color: var(--danger-border); }
+.pr-post-body { padding: 12px 14px; border-top: 1px solid var(--line); }
+.pr-post-body .markdown, .pr-thread-comment .markdown { font-size: 13.5px; }
+.pr-quiet { margin: 6px 2px; font-size: 13px; }
+.pr-threads { display: flex; flex-direction: column; gap: 18px; }
+.pr-file h4 { margin: 0 0 8px; font-size: 12.5px; color: var(--fg-1); }
+.pr-thread { margin-bottom: 10px; border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+.pr-thread.outdated { opacity: 0.8; }
+.pr-thread-head { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 6px 0 12px; background: var(--bg-2); }
+.pr-thread-head .icon { min-height: 24px; width: 24px; }
+.pr-outdated { padding: 1px 7px; border-radius: 999px; background: var(--bg-4); font-size: 11px; color: var(--fg-2); }
+.pr-hunk { margin: 0; padding: 6px 0; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--bg-2); font: 12px/1.55 var(--mono); overflow-x: auto; }
+.pr-hunk > span { padding: 0 12px; white-space: pre; }
+.pr-hunk > .add { background: var(--diff-add-bg); color: var(--diff-add-fg); }
+.pr-hunk > .del { background: var(--diff-del-bg); color: var(--diff-del-fg); }
+.pr-thread-comment { padding: 10px 14px; border-top: 1px solid var(--line); }
+.pr-thread-comment .who { margin-bottom: 4px; font-size: 12.5px; }
+.pr-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 1px; }
+.pr-list > li { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 10px; border-radius: var(--r-md); font-size: 13px; }
+.pr-list > li:hover { background: var(--bg-2); }
+.pr-commit .when { flex: none; min-width: 80px; text-align: right; font-size: 12px; }
+.pr-check button.link { display: inline-flex; align-items: center; gap: 4px; }
+.pr-check button.link .lucide { width: 12px; height: 12px; }
+.pr-check-mark { flex: none; width: 15px; height: 15px; }
+.pr-check-mark.ok, .pr-checks-summary .ok { color: var(--ok); }
+.pr-check-mark.bad { color: var(--danger); }
+.pr-check-mark.wait { color: var(--needs-text); }
+.pr-side { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 18px; padding: 14px 18px 24px; border-left: 1px solid var(--line); background: var(--bg-2); font-size: 13px; }
+.pr-side h4 { margin: 0 0 8px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-3); }
+.pr-side p { margin: 0; }
+.pr-status { display: flex; align-items: center; gap: 8px; margin-bottom: 4px !important; }
+.pr-status::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--fg-3); }
+.pr-status.ok::before { background: var(--ok); }
+.pr-status.bad::before { background: var(--danger); }
+.pr-status.wait::before { background: var(--needs-you); }
+.pr-status.merged::before { background: var(--hunk); }
+.pr-status.closed::before { background: var(--exited); }
+.pr-people { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.pr-reviewer { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pr-reviewer > .lucide { flex: none; width: 14px; height: 14px; }
+.pr-reviewer .approved { color: var(--ok); }
+.pr-reviewer .changes { color: var(--danger); }
+.pr-reviewer .requested { color: var(--needs-text); }
+.pr-reviewer .commented { color: var(--fg-3); }
+.pr-reviewer-state { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--fg-3); }
+.pr-reviewer-state .lucide { width: 11px; height: 11px; color: var(--needs-text); }
+.pr-reviewer-state.approved { color: var(--ok); }
+.pr-reviewer-state.changesRequested { color: var(--danger); }
+.pr-reviewer-state.requested { color: var(--needs-text); }
+.pr-checks-summary { min-height: 0; padding: 8px 10px; width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; background: var(--bg-1); font-weight: 400; font-size: 12.5px; }
+.pr-checks-summary > span { display: inline-flex; align-items: center; gap: 6px; }
+.pr-checks-summary .lucide { width: 13px; height: 13px; }
+.pr-checks-summary .bad { color: var(--danger); }
+.pr-checks-summary .wait { color: var(--needs-text); }
+.pr-labels { display: flex; flex-wrap: wrap; gap: 6px; }
+.pr-label { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; background: color-mix(in srgb, var(--l) 18%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--l) 50%, transparent); color: color-mix(in srgb, var(--l) 55%, #fff); font-size: 11.5px; font-weight: 500; }

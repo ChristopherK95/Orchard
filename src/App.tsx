@@ -25,6 +25,7 @@ import { CommandPalette, type PaletteCommand } from "./CommandPalette";
 import { FilesDrawer } from "./FilesDrawer";
 import { type BranchPopover, BranchSwitcher, popoverUnder } from "./BranchPicker";
 import { GitDrawer } from "./GitDrawer";
+import { PrButton, PrOverlay } from "./PrOverlay";
 import { ReviewOverlay } from "./ReviewOverlay";
 import type { OpenRequest } from "./ManualEditor";
 // CodeMirror loads with the first file opened, not at startup.
@@ -340,6 +341,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     setBoardOpen(false);
     if (!worktree()?.removed) setReviewing(activeWorktree());
   };
+  /** The Worktree whose branch's PR is shown, over everything else. */
+  const [prOf, setPrOf] = createSignal<string | null>(null);
   const [filesRevision, setFilesRevision] = createStore<Record<string, number>>({});
   const [revealed, setRevealed] = createSignal<{ path: string; n: number } | null>(null);
   /** The Worktree being looked at gets its files indexed and watched. */
@@ -662,20 +665,20 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       // (Ctrl+P is never the browser's print, even with a dialog open.)
       if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !switching() && !settingsAt() && !reviewing()) setPaletteOpen(true);
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !switching() && !settingsAt() && !reviewing() && !prOf()) setPaletteOpen(true);
         return;
       }
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "o") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !settingsAt() && !reviewing()) setSwitching(true);
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !settingsAt() && !reviewing() && !prOf()) setSwitching(true);
         return;
       }
       if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ",") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !switching() && !reviewing()) openSettingsPage();
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !switching() && !reviewing() && !prOf()) openSettingsPage();
         return;
       }
-      if (removing() || overviewOpen() || creatingWorktree() || paletteOpen() || switching() || settingsAt() || reviewing()) return; // a dialog is open over the Tab
+      if (removing() || overviewOpen() || creatingWorktree() || paletteOpen() || switching() || settingsAt() || reviewing() || prOf()) return; // a dialog is open over the Tab
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
         return void toggleDrawer("files");
@@ -948,6 +951,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           <GitPullRequest />
           <span class="label">Review</span>
         </button>
+        <Show when={view() === "tabs" && worktree() && !worktree()!.removed}>
+          <PrButton worktree={activeWorktree()} class="outline" onOpen={() => setPrOf(activeWorktree())} />
+        </Show>
         <button class="ghost icon" classList={{ on: filesOpen() }} onClick={() => toggleDrawer("files")} title="This Worktree's files (Ctrl+Shift+E)" aria-label="Files drawer">
           <PanelRight />
         </button>
@@ -959,6 +965,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           worktrees={rowWorktrees()}
           only={boardOnly()}
           onOnly={setBoardOnly}
+          onOpenPr={setPrOf}
           top={titlebar.offsetHeight}
           banners={
             <>
@@ -1141,6 +1148,23 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           );
         }}
       </Show>
+      <Show when={prOf()}>
+        {(path) => {
+          const w = rowWorktrees().find((w) => w.path === path());
+          return (
+            <PrOverlay
+              worktree={path()}
+              label={w ? worktreeLabel(w) : path()}
+              colour={worktreeColour(path())}
+              onOpenSnippet={(code, label) => {
+                setBoardOpen(false);
+                openInEditor({ kind: "snippet", code, label });
+              }}
+              onClose={() => setPrOf(null)}
+            />
+          );
+        }}
+      </Show>
       <Show when={branchPopover()}>
         {(at) => (
           <BranchSwitcher at={at()} onGoToWorktree={selectWorktree} onNewWorktreeFrom={newWorktreeFrom} onClose={() => setBranchPopover(null)} />
@@ -1213,6 +1237,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onResume={(s) => core.resumeSession(s.id).catch((err) => setError(String(err)))}
           onRemove={setRemoving}
           onSwitchBranch={toggleBranches}
+          onOpenPr={setPrOf}
           onOpenSettings={() => openSettingsPage("repo")}
           onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })}
           onOpenProposal={(sessionId, request) => openInEditor({ kind: "proposal", sessionId, request })}

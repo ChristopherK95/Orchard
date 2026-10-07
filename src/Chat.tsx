@@ -51,7 +51,7 @@ export function RecentList(props: { sessions: RecentSession[]; onReopen: (sessio
 }
 
 /** Roughly how long ago `iso` was ("just now", "5 min ago", "3 days ago"). */
-function ago(iso: string | null): string {
+export function ago(iso: string | null): string {
   const then = iso ? Date.parse(iso) : NaN;
   if (Number.isNaN(then)) return "";
   const min = Math.round((Date.now() - then) / 60_000);

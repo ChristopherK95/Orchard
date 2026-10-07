@@ -973,6 +973,17 @@ async fn open_pull_request(
         .map_err(|e| e.to_string())
 }
 
+/// The PR of the Worktree's branch, with its reviews and comments, if it has one.
+#[tauri::command]
+async fn pull_request_details(
+    core: State<'_, Core>,
+    worktree: String,
+) -> CommandResult<Option<editor_core::PullRequestDetails>> {
+    core.pull_request_details(worktree.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// "Push" to a branch whose PR is open: commits what's left and pushes, its output to `on_progress`.
 #[tauri::command]
 async fn push_to_pull_request(
@@ -1431,6 +1442,7 @@ fn main() {
             commit_diff,
             create_pull_request,
             open_pull_request,
+            pull_request_details,
             push_to_pull_request,
             set_permission_mode,
             transcript_page_before,

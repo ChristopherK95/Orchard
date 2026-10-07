@@ -6,6 +6,7 @@ import { createMemo, createResource, createSignal, For, type JSX, Show } from "s
 import { core, type SessionInfo, type SessionState } from "./core";
 import { CirclePause, CirclePlay, GitBranch, Sparkles } from "./icons";
 import { noOption, yesOption } from "./PermissionCard";
+import { PrButton } from "./PrOverlay";
 import { settleProposal } from "./proposals";
 import { StateDot } from "./StateDot";
 import { worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
@@ -30,6 +31,8 @@ export function Board(props: {
   /** The Worktree shown (null: all of them); kept by the Workspace, so it lasts between visits. */
   only: string | null;
   onOnly: (worktree: string | null) => void;
+  /** The PR of a Worktree's branch, in the PR overlay. */
+  onOpenPr: (worktree: string) => void;
   /** Where the Board sits: under the title bar. */
   top: number;
   /** The Workspace's error and notice banners, shown here too. */
@@ -87,7 +90,7 @@ export function Board(props: {
                   </span>
                 </div>
                 <For each={cards()} fallback={<p class="board-empty">None</p>}>
-                  {(session) => <Card session={session} worktree={label(session.worktree) ?? ""} onOpen={() => props.onOpen(session.id)} />}
+                  {(session) => <Card session={session} worktree={label(session.worktree) ?? ""} onOpen={() => props.onOpen(session.id)} onOpenPr={() => props.onOpenPr(session.worktree)} />}
                 </For>
               </div>
             );
@@ -98,7 +101,7 @@ export function Board(props: {
   );
 }
 
-function Card(props: { session: SessionInfo; worktree: string; onOpen: () => void }) {
+function Card(props: { session: SessionInfo; worktree: string; onOpen: () => void; onOpenPr: () => void }) {
   // The question it's waiting on, read again whenever it comes to need you (or is answered).
   const [pending, { refetch }] = createResource(
     () => (props.session.state === "needsYou" ? props.session.id : null),
@@ -127,6 +130,7 @@ function Card(props: { session: SessionInfo; worktree: string; onOpen: () => voi
       <div class="board-card-top">
         <GitBranch />
         <span class="wt">{props.worktree}</span>
+        <PrButton worktree={props.session.worktree} class="ghost" compact onOpen={props.onOpenPr} />
       </div>
       <div class="board-card-head">
         <Sparkles />

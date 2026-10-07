@@ -8,6 +8,7 @@ import { createEffect, createSignal, For, lazy, Match, onCleanup, Show, Switch }
 import { Banner, Composer, FindOtherConversations, RecentList, reportHeight } from "./Chat";
 import type { OtherConversation, PermissionRequest, RecentSession, SessionId, SessionInfo } from "./core";
 import { ArrowUp, ChevronDown, CirclePause, CirclePlay, Ellipsis, GitBranch, Pin, Plus, Sparkles, SquareTerminal, Trash2, X } from "./icons";
+import { PrButton } from "./PrOverlay";
 import { Setup, type SetupView } from "./Setup";
 import { shellRunning } from "./shells";
 import { StateBadge } from "./StateDot";
@@ -53,6 +54,8 @@ export interface ColumnsProps {
   onRemove: (worktree: WorktreeTab) => void;
   /** The branch name was clicked: the branch picker, under `anchor`. */
   onSwitchBranch: (worktree: string, anchor: Element) => void;
+  /** The PR of the Worktree's branch, in the PR overlay. */
+  onOpenPr: (worktree: string) => void;
   onOpenSettings: () => void;
   onOpenSnippet: (code: string, label: string) => void;
   /** "Open in editor" on a permission card: the column takes focus too. */
@@ -376,6 +379,9 @@ function ColumnHeader(props: ColumnsProps & { worktree: WorktreeTab; isFocused: 
         <span class="changed">{props.worktree.changed} changed</span>
       </Show>
       <span class="grow" />
+      <Show when={!props.worktree.removed}>
+        <PrButton worktree={path} class="ghost" onOpen={() => props.onOpenPr(path)} />
+      </Show>
       <Show when={state()}>{(s) => <StateBadge state={s()} label={needYou() > 1 ? `${needYou()} need you` : undefined} />}</Show>
       <button
         class="ghost icon column-menu-button"
