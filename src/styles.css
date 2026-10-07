@@ -165,7 +165,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .state-badge.needsYou { --s: var(--needs-you); --t: var(--needs-text); }
 .state-badge.idle { --s: var(--idle); --t: var(--idle-text); }
 .state-badge.exited { --s: var(--exited); --t: var(--exited-text); }
-.sub-item .state-badge { height: 16px; padding: 0 6px; font-size: 11px; }
+.sub-item .state-badge, .sidebar-item .state-badge { height: 16px; padding: 0 6px; font-size: 11px; }
 @keyframes breathe-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 /* "Needs you", where only a dot fits. */
 .needs-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--needs-you); }

@@ -47,9 +47,10 @@ export function worktreeLabel(w: WorktreeTab): string {
 
 /** Where a Worktree's sessions stand, most urgent first, at the end of its sidebar row. */
 function worktreeSignal(sessions: SessionInfo[], settingUp: boolean): JSX.Element {
-  if (sessions.some((s) => s.state === "needsYou")) return <span class="needs-dot" title="A session here needs you" />;
+  if (sessions.some((s) => s.state === "needsYou")) return <span class="state-badge needsYou" title="A session here needs you">Needs you</span>;
   if (settingUp) return <Loader class="spin setting-up" aria-label="Setting up" />;
-  if (sessions.some((s) => s.state === "working")) return <Loader class="spin working" aria-label="Working" />;
+  if (sessions.some((s) => s.state === "working")) return <span class="state-badge working"><span class="dot" />Working</span>;
+  if (sessions.some((s) => s.state === "idle" || s.state === "suspended")) return <span class="state-badge idle">Idle</span>;
   if (sessions.some((s) => s.state === "exited")) return <StateDot state="exited" title="An Agent exited" />;
   return null;
 }
