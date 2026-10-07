@@ -341,8 +341,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     setBoardOpen(false);
     if (!worktree()?.removed) setReviewing(activeWorktree());
   };
-  /** The Worktree whose branch's PR is shown, over everything else. */
-  const [prOf, setPrOf] = createSignal<string | null>(null);
+  /** The PR shown over everything else: the Worktree's branch's, or PR `number` of its repo. */
+  const [prOf, setPrOf] = createSignal<{ worktree: string; number?: number } | null>(null);
+  const openPrOf = (worktree: string) => setPrOf({ worktree });
   const [filesRevision, setFilesRevision] = createStore<Record<string, number>>({});
   const [revealed, setRevealed] = createSignal<{ path: string; n: number } | null>(null);
   /** The Worktree being looked at gets its files indexed and watched. */
@@ -827,6 +828,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         onSwitchWorkspace={() => setSwitching(true)}
         onSearch={() => !removing() && !creatingWorktree() && setPaletteOpen(true)}
         onSettings={() => openSettingsPage()}
+        prsFrom={rowWorktrees().find((w) => w.isMain)?.path ?? props.workspace.root}
+        onOpenMyPr={(pr) => {
+          // A Worktree on its branch shows it as its own; any other is shown from the main one.
+          const w = rowWorktrees().find((w) => !w.removed && w.branch === pr.head);
+          setPrOf(w ? { worktree: w.path } : { worktree: rowWorktrees().find((w) => w.isMain)?.path ?? props.workspace.root, number: pr.number });
+        }}
       />
       <Show when={recentOpen() && mainView() === "tabs"}>
         <div class="menu scroll" style={{ left: `${recentAt().left}px`, top: `${recentAt().top}px` }}>
@@ -952,7 +959,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           <span class="label">Review</span>
         </button>
         <Show when={view() === "tabs" && worktree() && !worktree()!.removed}>
-          <PrButton worktree={activeWorktree()} class="outline" onOpen={() => setPrOf(activeWorktree())} />
+          <PrButton worktree={activeWorktree()} class="outline" onOpen={() => openPrOf(activeWorktree())} />
         </Show>
         <button class="ghost icon" classList={{ on: filesOpen() }} onClick={() => toggleDrawer("files")} title="This Worktree's files (Ctrl+Shift+E)" aria-label="Files drawer">
           <PanelRight />
@@ -965,7 +972,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           worktrees={rowWorktrees()}
           only={boardOnly()}
           onOnly={setBoardOnly}
-          onOpenPr={setPrOf}
+          onOpenPr={openPrOf}
           top={titlebar.offsetHeight}
           banners={
             <>
@@ -1149,13 +1156,14 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         }}
       </Show>
       <Show when={prOf()}>
-        {(path) => {
-          const w = rowWorktrees().find((w) => w.path === path());
+        {(of) => {
+          const w = rowWorktrees().find((w) => w.path === of().worktree);
           return (
             <PrOverlay
-              worktree={path()}
-              label={w ? worktreeLabel(w) : path()}
-              colour={worktreeColour(path())}
+              worktree={of().worktree}
+              number={of().number}
+              label={w ? worktreeLabel(w) : of().worktree}
+              colour={worktreeColour(of().worktree)}
               onOpenSnippet={(code, label) => {
                 setBoardOpen(false);
                 openInEditor({ kind: "snippet", code, label });
@@ -1237,7 +1245,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onResume={(s) => core.resumeSession(s.id).catch((err) => setError(String(err)))}
           onRemove={setRemoving}
           onSwitchBranch={toggleBranches}
-          onOpenPr={setPrOf}
+          onOpenPr={openPrOf}
           onOpenSettings={() => openSettingsPage("repo")}
           onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })}
           onOpenProposal={(sessionId, request) => openInEditor({ kind: "proposal", sessionId, request })}

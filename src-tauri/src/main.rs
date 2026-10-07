@@ -973,13 +973,25 @@ async fn open_pull_request(
         .map_err(|e| e.to_string())
 }
 
-/// The PR of the Worktree's branch, with its reviews and comments, if it has one.
+/// The PR of the Worktree's branch (or PR `number`), with its reviews and comments, if it has one.
 #[tauri::command]
 async fn pull_request_details(
     core: State<'_, Core>,
     worktree: String,
+    number: Option<u64>,
 ) -> CommandResult<Option<editor_core::PullRequestDetails>> {
-    core.pull_request_details(worktree.as_ref())
+    core.pull_request_details(worktree.as_ref(), number)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The user's open PRs in the Worktree's repo.
+#[tauri::command]
+async fn my_pull_requests(
+    core: State<'_, Core>,
+    worktree: String,
+) -> CommandResult<Vec<editor_core::MyPullRequest>> {
+    core.my_pull_requests(worktree.as_ref())
         .await
         .map_err(|e| e.to_string())
 }
@@ -1443,6 +1455,7 @@ fn main() {
             create_pull_request,
             open_pull_request,
             pull_request_details,
+            my_pull_requests,
             push_to_pull_request,
             set_permission_mode,
             transcript_page_before,

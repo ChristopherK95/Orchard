@@ -2,8 +2,9 @@
 // read through the GitHub CLI. Where it stands (open, draft, merged, closed; whether it can be
 // merged; its checks), who's on it (author, assignees, reviewers and where each stands), and what's
 // been said: the description and conversation, the comments on its code by thread, its commits.
-// Opened from the title bar in the Tabs view, a column's header, or a Board card. Comments can be
-// narrowed to the people in some of the organisation's teams (a sub-team counts as its top team).
+// Opened from the title bar in the Tabs view, a column's header, a Board card, or the sidebar's list
+// of the user's PRs (any of the repo's, by number). Comments can be narrowed to the people in some
+// of the organisation's teams (a sub-team counts as its top team).
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { createContext, createMemo, createSignal, For, type JSX, Match, onCleanup, onMount, Show, Switch, useContext } from "solid-js";
 import { createStore } from "solid-js/store";
@@ -164,6 +165,8 @@ function TeamTags(props: { login: string }) {
 
 export function PrOverlay(props: {
   worktree: string;
+  /** A PR of the Worktree's repo to show instead of its branch's. */
+  number?: number;
   label: string;
   colour: string;
   /** "Open in editor" on a code block. */
@@ -179,9 +182,9 @@ export function PrOverlay(props: {
     setLoading(true);
     setError("");
     try {
-      const next = await core.pullRequestDetails(props.worktree);
+      const next = await core.pullRequestDetails(props.worktree, props.number);
       setPr(next);
-      setKnown(props.worktree, next ? { number: next.number, state: next.state } : null);
+      if (props.number === undefined) setKnown(props.worktree, next ? { number: next.number, state: next.state } : null);
     } catch (err) {
       setError(String(err));
     } finally {

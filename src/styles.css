@@ -315,6 +315,14 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .sidebar-item.dimmed:not(:hover) { color: var(--fg-3); }
 .sidebar-item.removed .label { text-decoration: line-through; color: var(--fg-3); }
 .sidebar-item .lucide.spin { width: 13px; height: 13px; }
+.sidebar-list.my-prs { flex: 0 1 auto; max-height: 40%; }
+.my-pr { min-height: 30px; }
+.my-pr .wt-glyph { width: 14px; height: 14px; }
+.my-pr .state-badge.approved { --s: var(--idle); --t: var(--idle-text); }
+.my-pr .state-badge.changes { --s: var(--needs-you); --t: var(--needs-text); }
+.my-pr-number { flex: none; font-size: 11px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
+.my-prs-note { padding: 4px 8px; font-size: 12px; color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.my-prs-note.error { color: var(--needs-text); }
 /* The active Worktree's sessions: a sub-menu on a rail. */
 .sub-menu { flex: none; display: flex; flex-direction: column; gap: 2px; margin: 0 0 4px 15px; padding: 2px 0 2px 10px; border-left: 1px solid var(--line); }
 .sub-item-wrap { display: flex; align-items: center; border-radius: var(--r-md); }

@@ -225,6 +225,74 @@ fn listed(stdout: &str) -> Result<Option<OpenPullRequest>, String> {
     }))
 }
 
+/// One of the user's open PRs in the repo, as the sidebar lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MyPullRequest {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    /// The branch it comes from, and the one it goes into.
+    pub head: String,
+    pub base: String,
+    pub draft: bool,
+    /// `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`; None when no review is needed.
+    pub review_decision: Option<String>,
+    pub updated_at: String,
+}
+
+/// The open PRs whoever `gh` is logged in as opened in the repo (`gh pr list --author @me`),
+/// most recently updated first.
+pub(crate) async fn mine(gh: &Path, worktree: &Path) -> Result<Vec<MyPullRequest>, String> {
+    let args = [
+        "pr",
+        "list",
+        "--author",
+        "@me",
+        "--state",
+        "open",
+        "--json",
+        "number,title,url,headRefName,baseRefName,isDraft,reviewDecision,updatedAt",
+        "--limit",
+        "100",
+    ];
+    mine_listed(&gh_text(gh, worktree, &args).await?)
+}
+
+/// Reads `gh pr list --json number,title,url,headRefName,baseRefName,isDraft,reviewDecision,updatedAt`.
+fn mine_listed(stdout: &str) -> Result<Vec<MyPullRequest>, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Listed {
+        number: u64,
+        title: String,
+        url: String,
+        head_ref_name: String,
+        base_ref_name: String,
+        is_draft: bool,
+        #[serde(default)]
+        review_decision: Option<String>,
+        updated_at: String,
+    }
+    let listed: Vec<Listed> = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("gh said something unexpected: {e}"))?;
+    let mut prs: Vec<MyPullRequest> = listed
+        .into_iter()
+        .map(|pr| MyPullRequest {
+            number: pr.number,
+            title: pr.title,
+            url: pr.url,
+            head: pr.head_ref_name,
+            base: pr.base_ref_name,
+            draft: pr.is_draft,
+            review_decision: pr.review_decision.filter(|d| !d.is_empty()),
+            updated_at: pr.updated_at,
+        })
+        .collect();
+    prs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    Ok(prs)
+}
+
 /// The PR of the Worktree's branch as "PR" shows it: where it stands, who's on it, and what's been
 /// said (the conversation and the comments on its code).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -395,17 +463,17 @@ const DETAIL_FIELDS: &str = "number,title,url,state,isDraft,body,author,createdA
 /// The comments on the PR's code, one JSON object a line (`gh api --paginate` with this `--jq`).
 const THREAD_JQ: &str = ".[] | {id, in_reply_to_id, path, line, original_line, html_url, diff_hunk, body, created_at, user: .user.login}";
 
-/// The PR of `branch` (`gh pr view`: its open one, else its latest), if it has one, with the
-/// comments on its code (`gh api`).
+/// The PR `which` names (`gh pr view`: a number, or a branch's open PR, else its latest), if there
+/// is one, with the comments on its code (`gh api`).
 pub(crate) async fn details_for(
     gh: &Path,
     worktree: &Path,
-    branch: &str,
+    which: &str,
 ) -> Result<Option<PullRequestDetails>, String> {
     let out = run_gh(
         gh,
         worktree,
-        &["pr", "view", branch, "--json", DETAIL_FIELDS],
+        &["pr", "view", which, "--json", DETAIL_FIELDS],
         None,
     )
     .await?;
@@ -992,6 +1060,20 @@ pub(crate) fn gh_program(configured: Option<&PathBuf>) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn my_prs_are_listed_most_recently_updated_first() {
+        let out = r#"[
+            {"number":3,"title":"Old","url":"https://github.com/o/r/pull/3","headRefName":"a","baseRefName":"main","isDraft":false,"reviewDecision":"","updatedAt":"2026-01-01T00:00:00Z"},
+            {"number":9,"title":"New","url":"https://github.com/o/r/pull/9","headRefName":"b","baseRefName":"dev","isDraft":true,"reviewDecision":"APPROVED","updatedAt":"2026-02-01T00:00:00Z"}
+        ]"#;
+        let prs = mine_listed(out).unwrap();
+        assert_eq!(prs.iter().map(|p| p.number).collect::<Vec<_>>(), [9, 3]);
+        assert_eq!(prs[0].review_decision.as_deref(), Some("APPROVED"));
+        assert!(prs[0].draft);
+        assert_eq!(prs[1].review_decision, None);
+        assert_eq!((prs[1].head.as_str(), prs[1].base.as_str()), ("a", "main"));
+    }
 
     #[test]
     fn the_new_prs_url_is_its_last_line() {

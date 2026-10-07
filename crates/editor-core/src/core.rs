@@ -33,8 +33,9 @@ use crate::git_status::{
 use crate::merged::{self, WorktreeMerge};
 use crate::permissions;
 use crate::pull_request::{
-    CommitChanges, OpenPullRequest, PullRequestDetails, PullRequestOutcome, PullRequestProgress,
-    PullRequestRequest, PushToPullRequestOutcome, Review, ReviewCommit, ReviewFile,
+    CommitChanges, MyPullRequest, OpenPullRequest, PullRequestDetails, PullRequestOutcome,
+    PullRequestProgress, PullRequestRequest, PushToPullRequestOutcome, Review, ReviewCommit,
+    ReviewFile,
 };
 use crate::remove_worktree::{self, RemovalCheck, RemoveWorktree, RemovedWorktree};
 use crate::session::{
@@ -2787,18 +2788,33 @@ impl Core {
             .map_err(CoreError::Git)
     }
 
-    /// The PR of the Worktree's branch (its open one, else its latest), with its reviews and
-    /// comments, if it has one (asked of the GitHub CLI).
+    /// The PR of the Worktree's branch (its open one, else its latest), or PR `number` of its repo,
+    /// with its reviews and comments, if it has one (asked of the GitHub CLI).
     pub async fn pull_request_details(
         &self,
         worktree: &Path,
+        number: Option<u64>,
     ) -> Result<Option<PullRequestDetails>, CoreError> {
         let worktree = self.known_worktree(worktree)?;
-        let Some(branch) = git::current_branch(&worktree).await else {
-            return Ok(None);
+        let which = match number {
+            Some(number) => number.to_string(),
+            None => match git::current_branch(&worktree).await {
+                Some(branch) => branch,
+                None => return Ok(None),
+            },
         };
         let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
-        crate::pull_request::details_for(&gh, &worktree, &branch)
+        crate::pull_request::details_for(&gh, &worktree, &which)
+            .await
+            .map_err(CoreError::Git)
+    }
+
+    /// The open PRs the user (whoever the GitHub CLI is logged in as) opened in the Worktree's
+    /// repo, most recently updated first.
+    pub async fn my_pull_requests(&self, worktree: &Path) -> Result<Vec<MyPullRequest>, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        crate::pull_request::mine(&gh, &worktree)
             .await
             .map_err(CoreError::Git)
     }

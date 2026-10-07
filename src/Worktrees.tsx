@@ -1,8 +1,9 @@
 // The sidebar and context strip (ticket 06, redone in the shadcn style): the Workspace's Worktrees
 // down the left with the active one's Agent sessions under it, folding to an icon rail, and a strip
 // saying exactly where your next prompt goes.
-import { For, type JSX, Match, Show, Switch } from "solid-js";
-import type { SessionId, SessionInfo, WorktreeInfo } from "./core";
+import { createEffect, createSignal, For, type JSX, Match, on, onCleanup, Show, Switch } from "solid-js";
+import { ago } from "./Chat";
+import { core, type MyPullRequest, type SessionId, type SessionInfo, type WorktreeInfo } from "./core";
 import {
   ArrowDownUp,
   ChevronsUpDown,
@@ -11,10 +12,13 @@ import {
   FileDiff,
   Folder,
   GitBranch,
+  GitPullRequestArrow,
+  GitPullRequestDraft,
   History,
   ListTree,
   Loader,
   Plus,
+  RefreshCw,
   Search,
   Settings,
   Trash2,
@@ -85,6 +89,9 @@ export interface SidebarProps {
   onSwitchWorkspace: () => void;
   onSearch: () => void;
   onSettings: () => void;
+  /** The Worktree the user's PRs are asked for in (the main one). */
+  prsFrom: string;
+  onOpenMyPr: (pr: MyPullRequest) => void;
 }
 
 export function Sidebar(props: SidebarProps) {
@@ -189,6 +196,7 @@ export function Sidebar(props: SidebarProps) {
             }}
           </For>
         </nav>
+        <MyPullRequests from={props.prsFrom} worktrees={props.worktrees} onOpen={props.onOpenMyPr} />
         <button class="sidebar-footer" onClick={() => props.onSettings()} title="Settings (Ctrl+,)">
           <Settings />
           <span class="grow">Settings</span>
@@ -196,6 +204,78 @@ export function Sidebar(props: SidebarProps) {
         </button>
       </aside>
     </Show>
+  );
+}
+
+/** How often the user's PRs are asked for again while the sidebar shows them. */
+const MY_PRS_EVERY_MS = 5 * 60_000;
+
+/** Under the Worktrees: the open PRs the user opened in the repo (as the GitHub CLI is logged in). */
+function MyPullRequests(props: { from: string; worktrees: WorktreeTab[]; onOpen: (pr: MyPullRequest) => void }) {
+  const [prs, setPrs] = createSignal<MyPullRequest[]>([]);
+  const [error, setError] = createSignal("");
+  const [loading, setLoading] = createSignal(false);
+  let asked = 0;
+  const load = async () => {
+    const n = ++asked;
+    setLoading(true);
+    try {
+      const next = await core.myPullRequests(props.from);
+      if (n !== asked) return;
+      setPrs(next);
+      setError("");
+    } catch (err) {
+      if (n === asked) setError(String(err));
+    } finally {
+      if (n === asked) setLoading(false);
+    }
+  };
+  createEffect(on(() => props.from, () => void load()));
+  const timer = setInterval(() => void load(), MY_PRS_EVERY_MS);
+  onCleanup(() => clearInterval(timer));
+  /** The Worktree on the PR's branch, if there is one. */
+  const worktreeOf = (pr: MyPullRequest) => props.worktrees.find((w) => !w.removed && w.branch === pr.head);
+  const review = { APPROVED: ["approved", "Approved"], CHANGES_REQUESTED: ["changes", "Changes"], REVIEW_REQUIRED: null } as const;
+  return (
+    <>
+      <div class="group-label">
+        <span class="grow">Pull requests</span>
+        <button class="ghost icon" onClick={() => void load()} disabled={loading()} title="Ask GitHub again" aria-label="Refresh pull requests">
+          <RefreshCw classList={{ spin: loading() }} />
+        </button>
+      </div>
+      <nav class="sidebar-list my-prs">
+        <Show when={error()}>
+          <span class="my-prs-note error" title={error()}>
+            Couldn't list your PRs: {error()}
+          </span>
+        </Show>
+        <Show when={!error() && !loading() && !prs().length}>
+          <span class="my-prs-note">You have no open PRs here.</span>
+        </Show>
+        <For each={prs()}>
+          {(pr) => {
+            const w = () => worktreeOf(pr);
+            const decision = () => (pr.reviewDecision ? review[pr.reviewDecision] : null);
+            return (
+              <button
+                class="sidebar-item my-pr"
+                style={{ "--c": w() ? worktreeColour(w()!.path) : "var(--fg-3)" }}
+                title={`#${pr.number} ${pr.title}\n${pr.head} → ${pr.base}${pr.draft ? " (draft)" : ""}\nUpdated ${ago(pr.updatedAt)}${w() ? "\nChecked out in a Worktree" : ""}`}
+                onClick={() => props.onOpen(pr)}
+              >
+                <Show when={pr.draft} fallback={<GitPullRequestArrow class="wt-glyph" />}>
+                  <GitPullRequestDraft class="wt-glyph" />
+                </Show>
+                <span class="label">{pr.title}</span>
+                <Show when={decision()}>{(d) => <span class={`state-badge ${d()[0]}`}>{d()[1]}</span>}</Show>
+                <span class="my-pr-number">#{pr.number}</span>
+              </button>
+            );
+          }}
+        </For>
+      </nav>
+    </>
   );
 }
 
