@@ -1,9 +1,10 @@
 // The sidebar and context strip (ticket 06, redone in the shadcn style): the Workspace's Worktrees
 // down the left with the active one's Agent sessions under it, folding to an icon rail, and a strip
 // saying exactly where your next prompt goes.
-import { createEffect, createSignal, For, type JSX, Match, on, onCleanup, Show, Switch } from "solid-js";
+import { For, type JSX, Match, Show, Switch } from "solid-js";
 import { ago } from "./Chat";
-import { core, type MyPullRequest, type SessionId, type SessionInfo, type WorktreeInfo } from "./core";
+import type { MyPullRequest, SessionId, SessionInfo, WorktreeInfo } from "./core";
+import { myPrs } from "./PrBoard";
 import {
   ArrowDownUp,
   ChevronsUpDown,
@@ -15,6 +16,7 @@ import {
   GitPullRequestArrow,
   GitPullRequestDraft,
   History,
+  LayoutGrid,
   ListTree,
   Loader,
   Plus,
@@ -89,9 +91,8 @@ export interface SidebarProps {
   onSwitchWorkspace: () => void;
   onSearch: () => void;
   onSettings: () => void;
-  /** The Worktree the user's PRs are asked for in (the main one). */
-  prsFrom: string;
   onOpenMyPr: (pr: MyPullRequest) => void;
+  onPrBoard: () => void;
 }
 
 export function Sidebar(props: SidebarProps) {
@@ -196,7 +197,7 @@ export function Sidebar(props: SidebarProps) {
             }}
           </For>
         </nav>
-        <MyPullRequests from={props.prsFrom} worktrees={props.worktrees} onOpen={props.onOpenMyPr} />
+        <MyPullRequests worktrees={props.worktrees} onOpen={props.onOpenMyPr} onBoard={props.onPrBoard} />
         <button class="sidebar-footer" onClick={() => props.onSettings()} title="Settings (Ctrl+,)">
           <Settings />
           <span class="grow">Settings</span>
@@ -207,32 +208,10 @@ export function Sidebar(props: SidebarProps) {
   );
 }
 
-/** How often the user's PRs are asked for again while the sidebar shows them. */
-const MY_PRS_EVERY_MS = 5 * 60_000;
-
 /** Under the Worktrees: the open PRs the user opened in the repo (as the GitHub CLI is logged in). */
-function MyPullRequests(props: { from: string; worktrees: WorktreeTab[]; onOpen: (pr: MyPullRequest) => void }) {
-  const [prs, setPrs] = createSignal<MyPullRequest[]>([]);
-  const [error, setError] = createSignal("");
-  const [loading, setLoading] = createSignal(false);
-  let asked = 0;
-  const load = async () => {
-    const n = ++asked;
-    setLoading(true);
-    try {
-      const next = await core.myPullRequests(props.from);
-      if (n !== asked) return;
-      setPrs(next);
-      setError("");
-    } catch (err) {
-      if (n === asked) setError(String(err));
-    } finally {
-      if (n === asked) setLoading(false);
-    }
-  };
-  createEffect(on(() => props.from, () => void load()));
-  const timer = setInterval(() => void load(), MY_PRS_EVERY_MS);
-  onCleanup(() => clearInterval(timer));
+function MyPullRequests(props: { worktrees: WorktreeTab[]; onOpen: (pr: MyPullRequest) => void; onBoard: () => void }) {
+  const prs = () => myPrs.prs().filter((p) => p.state === "open");
+  const { error, loading } = myPrs;
   /** The Worktree on the PR's branch, if there is one. */
   const worktreeOf = (pr: MyPullRequest) => props.worktrees.find((w) => !w.removed && w.branch === pr.head);
   const review = { APPROVED: ["approved", "Approved"], CHANGES_REQUESTED: ["changes", "Changes"], REVIEW_REQUIRED: null } as const;
@@ -240,7 +219,10 @@ function MyPullRequests(props: { from: string; worktrees: WorktreeTab[]; onOpen:
     <>
       <div class="group-label">
         <span class="grow">Pull requests</span>
-        <button class="ghost icon" onClick={() => void load()} disabled={loading()} title="Ask GitHub again" aria-label="Refresh pull requests">
+        <button class="ghost icon" onClick={() => props.onBoard()} title="Your PRs on a board, by where each stands" aria-label="Pull request board">
+          <LayoutGrid />
+        </button>
+        <button class="ghost icon" onClick={() => myPrs.refresh()} disabled={loading()} title="Ask GitHub again" aria-label="Refresh pull requests">
           <RefreshCw classList={{ spin: loading() }} />
         </button>
       </div>

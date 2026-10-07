@@ -6,6 +6,7 @@ import {
   core,
   type LoadedSettings,
   type MissingPrerequisite,
+  type MyPullRequest,
   type OpenDocument,
   type AutoSuspendReason,
   type RecentSession,
@@ -25,6 +26,7 @@ import { CommandPalette, type PaletteCommand } from "./CommandPalette";
 import { FilesDrawer } from "./FilesDrawer";
 import { type BranchPopover, BranchSwitcher, popoverUnder } from "./BranchPicker";
 import { GitDrawer } from "./GitDrawer";
+import { PrBoard, watchMyPrs } from "./PrBoard";
 import { PrButton, PrOverlay } from "./PrOverlay";
 import { ReviewOverlay } from "./ReviewOverlay";
 import type { OpenRequest } from "./ManualEditor";
@@ -212,6 +214,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
    *  underneath). */
   const [mainView, setMainView] = createSignal<"tabs" | "columns">("tabs");
   const [boardOpen, setBoardOpen] = createSignal(false);
+  /** Which board: every session by state, or the user's PRs by where each stands. */
+  const [boardOf, setBoardOf] = createSignal<"sessions" | "prs">("sessions");
+  const openBoard = (of: "sessions" | "prs") => {
+    setBoardOf(of);
+    setBoardOpen(true);
+  };
   const view = () => (boardOpen() ? "board" : mainView());
   /** The Worktrees pinned as columns, and those in sidebar order. */
   const [pinned, setPinnedList] = createSignal<string[]>([]);
@@ -344,6 +352,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   /** The PR shown over everything else: the Worktree's branch's, or PR `number` of its repo. */
   const [prOf, setPrOf] = createSignal<{ worktree: string; number?: number } | null>(null);
   const openPrOf = (worktree: string) => setPrOf({ worktree });
+  /** The Worktree the user's PRs are read in: the main one. */
+  const mainWorktree = () => rowWorktrees().find((w) => w.isMain)?.path ?? props.workspace.root;
+  /** One of the user's PRs: a Worktree on its branch shows it as its own; any other is shown from the main one. */
+  const openMyPr = (pr: MyPullRequest) => {
+    const w = rowWorktrees().find((w) => !w.removed && w.branch === pr.head);
+    setPrOf(w ? { worktree: w.path } : { worktree: mainWorktree(), number: pr.number });
+  };
   const [filesRevision, setFilesRevision] = createStore<Record<string, number>>({});
   const [revealed, setRevealed] = createSignal<{ path: string; n: number } | null>(null);
   /** The Worktree being looked at gets its files indexed and watched. */
@@ -464,6 +479,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     return [...listed, ...vanished.map(removedWorktree)];
   };
   const worktree = () => rowWorktrees().find((w) => w.path === activeWorktree());
+  watchMyPrs(mainWorktree);
 
   /** Shows a session: in its column if the Columns view is up and its Worktree is pinned, else as
    *  the Tabs view's visible Tab (a notification, a reopened Tab, the palette, the Board). */
@@ -703,7 +719,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       // (Ctrl+B is the editor's own when it takes it.)
       if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "b" && !e.defaultPrevented) {
         e.preventDefault();
-        if (!e.repeat) setBoardOpen((open) => !open);
+        if (!e.repeat) boardOpen() && boardOf() === "sessions" ? setBoardOpen(false) : openBoard("sessions");
         return;
       }
       if (boardOpen()) {
@@ -797,6 +813,22 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     return s ? order().filter((id) => sessions[id].worktree === s.worktree).length : 0;
   };
 
+  /** The Workspace's error and notice banners, for over the Board. */
+  const banners = () => (
+    <>
+      <Show when={error()}>
+        <Banner tone="error" onDismiss={() => setError("")}>
+          {error()}
+        </Banner>
+      </Show>
+      <Show when={notice()}>
+        <Banner tone="info" onDismiss={() => setNotice("")}>
+          {notice()}
+        </Banner>
+      </Show>
+    </>
+  );
+
   return (
     <div class="workspace" classList={{ "board-open": view() === "board" }}>
       <Sidebar
@@ -828,12 +860,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         onSwitchWorkspace={() => setSwitching(true)}
         onSearch={() => !removing() && !creatingWorktree() && setPaletteOpen(true)}
         onSettings={() => openSettingsPage()}
-        prsFrom={rowWorktrees().find((w) => w.isMain)?.path ?? props.workspace.root}
-        onOpenMyPr={(pr) => {
-          // A Worktree on its branch shows it as its own; any other is shown from the main one.
-          const w = rowWorktrees().find((w) => !w.removed && w.branch === pr.head);
-          setPrOf(w ? { worktree: w.path } : { worktree: rowWorktrees().find((w) => w.isMain)?.path ?? props.workspace.root, number: pr.number });
-        }}
+        onOpenMyPr={openMyPr}
+        onPrBoard={() => openBoard("prs")}
       />
       <Show when={recentOpen() && mainView() === "tabs"}>
         <div class="menu scroll" style={{ left: `${recentAt().left}px`, top: `${recentAt().top}px` }}>
@@ -914,12 +942,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           >
             Columns
           </button>
-          <button classList={{ on: view() === "board" }} onClick={() => setBoardOpen(true)} title="Every session by state (Ctrl+B)">
+          <button classList={{ on: view() === "board" && boardOf() === "sessions" }} onClick={() => openBoard("sessions")} title="Every session by state (Ctrl+B)">
             Board
           </button>
         </div>
         <Show when={needYou() > 0}>
-          <button class="outline needs-you-button" onClick={() => setBoardOpen(true)} title="See them on the Board">
+          <button class="outline needs-you-button" onClick={() => openBoard("sessions")} title="See them on the Board">
             <Bell />
             {needYou()} need{needYou() === 1 ? "s" : ""} you
           </button>
@@ -966,7 +994,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         </button>
         <WindowControls />
       </header>
-      <Show when={view() === "board"}>
+      <Show when={view() === "board" && boardOf() === "sessions"}>
         <Board
           sessions={order().map((id) => sessions[id])}
           worktrees={rowWorktrees()}
@@ -974,25 +1002,15 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onOnly={setBoardOnly}
           onOpenPr={openPrOf}
           top={titlebar.offsetHeight}
-          banners={
-            <>
-              <Show when={error()}>
-                <Banner tone="error" onDismiss={() => setError("")}>
-                  {error()}
-                </Banner>
-              </Show>
-              <Show when={notice()}>
-                <Banner tone="info" onDismiss={() => setNotice("")}>
-                  {notice()}
-                </Banner>
-              </Show>
-            </>
-          }
+          banners={banners()}
           onOpen={(id) => {
             setBoardOpen(false);
             if (mainView() === "columns" || id !== activeId()) void show(id);
           }}
         />
+      </Show>
+      <Show when={view() === "board" && boardOf() === "prs"}>
+        <PrBoard worktrees={rowWorktrees()} top={titlebar.offsetHeight} banners={banners()} onOpen={openMyPr} />
       </Show>
       <Show when={creatingWorktree()}>
         <NewWorktreeDialog

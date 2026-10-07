@@ -225,7 +225,7 @@ fn listed(stdout: &str) -> Result<Option<OpenPullRequest>, String> {
     }))
 }
 
-/// One of the user's open PRs in the repo, as the sidebar lists it.
+/// One of the user's PRs in the repo, as the sidebar and the PR board show it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MyPullRequest {
@@ -235,31 +235,68 @@ pub struct MyPullRequest {
     /// The branch it comes from, and the one it goes into.
     pub head: String,
     pub base: String,
+    pub state: PullRequestState,
     pub draft: bool,
+    /// Where it stands: its column on the PR board.
+    pub stage: PullRequestStage,
     /// `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`; None when no review is needed.
     pub review_decision: Option<String>,
+    pub reviewers: Vec<Reviewer>,
+    pub checks: Vec<Check>,
+    /// It can't be merged as it is: it conflicts with the branch it goes into.
+    pub conflicts: bool,
     pub updated_at: String,
+    pub merged_at: Option<String>,
+    pub closed_at: Option<String>,
 }
 
-/// The open PRs whoever `gh` is logged in as opened in the repo (`gh pr list --author @me`),
-/// most recently updated first.
+/// Where one of the user's PRs stands, as the PR board sorts them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PullRequestStage {
+    Draft,
+    /// Open, and no one has approved it or asked for changes yet.
+    WaitingForReview,
+    ChangesRequested,
+    /// A check failed (and no one asked for changes).
+    ChecksFailing,
+    /// Approved, with no check failing.
+    Approved,
+    Merged,
+    Closed,
+}
+
+/// The `gh pr list` fields `MyPullRequest` is read from.
+const MINE_FIELDS: &str = "number,title,url,state,isDraft,headRefName,baseRefName,reviewDecision,latestReviews,reviewRequests,statusCheckRollup,mergeable,updatedAt,mergedAt,closedAt";
+
+/// How many of the user's merged or closed PRs are listed (the latest).
+const MINE_DONE: &str = "20";
+
+/// The PRs whoever `gh` is logged in as opened in the repo (`gh pr list --author @me`): every open
+/// one, then the latest merged or closed ones; each lot most recently updated first.
 pub(crate) async fn mine(gh: &Path, worktree: &Path) -> Result<Vec<MyPullRequest>, String> {
-    let args = [
-        "pr",
-        "list",
-        "--author",
-        "@me",
-        "--state",
-        "open",
-        "--json",
-        "number,title,url,headRefName,baseRefName,isDraft,reviewDecision,updatedAt",
-        "--limit",
-        "100",
-    ];
-    mine_listed(&gh_text(gh, worktree, &args).await?)
+    let list = |state, limit| {
+        [
+            "pr",
+            "list",
+            "--author",
+            "@me",
+            "--state",
+            state,
+            "--json",
+            MINE_FIELDS,
+            "--limit",
+            limit,
+        ]
+    };
+    let (open, done) = (list("open", "100"), list("closed", MINE_DONE));
+    let (open, done) = tokio::join!(gh_text(gh, worktree, &open), gh_text(gh, worktree, &done));
+    let mut prs = mine_listed(&open?)?;
+    prs.extend(mine_listed(&done?)?);
+    Ok(prs)
 }
 
-/// Reads `gh pr list --json number,title,url,headRefName,baseRefName,isDraft,reviewDecision,updatedAt`.
+/// Reads `gh pr list --json MINE_FIELDS`, most recently updated first.
 fn mine_listed(stdout: &str) -> Result<Vec<MyPullRequest>, String> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -267,30 +304,100 @@ fn mine_listed(stdout: &str) -> Result<Vec<MyPullRequest>, String> {
         number: u64,
         title: String,
         url: String,
+        state: String,
+        #[serde(default)]
+        is_draft: bool,
         head_ref_name: String,
         base_ref_name: String,
-        is_draft: bool,
         #[serde(default)]
         review_decision: Option<String>,
+        #[serde(default)]
+        latest_reviews: Vec<GhReview>,
+        #[serde(default)]
+        review_requests: Vec<Actor>,
+        #[serde(default)]
+        status_check_rollup: Vec<Status>,
+        #[serde(default)]
+        mergeable: String,
         updated_at: String,
+        merged_at: Option<String>,
+        closed_at: Option<String>,
     }
     let listed: Vec<Listed> = serde_json::from_str(stdout.trim())
         .map_err(|e| format!("gh said something unexpected: {e}"))?;
     let mut prs: Vec<MyPullRequest> = listed
         .into_iter()
-        .map(|pr| MyPullRequest {
-            number: pr.number,
-            title: pr.title,
-            url: pr.url,
-            head: pr.head_ref_name,
-            base: pr.base_ref_name,
-            draft: pr.is_draft,
-            review_decision: pr.review_decision.filter(|d| !d.is_empty()),
-            updated_at: pr.updated_at,
+        .map(|pr| {
+            let state = PullRequestState::read(&pr.state);
+            let review_decision = pr.review_decision.filter(|d| !d.is_empty());
+            let reviewers = reviewers_of(pr.latest_reviews, pr.review_requests);
+            let checks: Vec<Check> = pr
+                .status_check_rollup
+                .into_iter()
+                .map(Status::check)
+                .collect();
+            let stage = stage_of(
+                state,
+                pr.is_draft,
+                review_decision.as_deref(),
+                &reviewers,
+                &checks,
+            );
+            MyPullRequest {
+                number: pr.number,
+                title: pr.title,
+                url: pr.url,
+                head: pr.head_ref_name,
+                base: pr.base_ref_name,
+                state,
+                draft: pr.is_draft,
+                stage,
+                review_decision,
+                reviewers,
+                checks,
+                conflicts: pr.mergeable == "CONFLICTING",
+                updated_at: pr.updated_at,
+                merged_at: pr.merged_at.filter(|at| !at.is_empty()),
+                closed_at: pr.closed_at.filter(|at| !at.is_empty()),
+            }
         })
         .collect();
     prs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     Ok(prs)
+}
+
+/// Where a PR stands. Asked-for changes come before failing checks (someone's waiting on them);
+/// without a review decision (no review required), the reviews it has decide.
+fn stage_of(
+    state: PullRequestState,
+    draft: bool,
+    decision: Option<&str>,
+    reviewers: &[Reviewer],
+    checks: &[Check],
+) -> PullRequestStage {
+    match state {
+        PullRequestState::Merged => return PullRequestStage::Merged,
+        PullRequestState::Closed => return PullRequestStage::Closed,
+        PullRequestState::Open if draft => return PullRequestStage::Draft,
+        PullRequestState::Open => {}
+    }
+    let reviewed = |s| reviewers.iter().any(|r| r.state == s);
+    let (changes, approved) = match decision {
+        Some(decision) => (decision == "CHANGES_REQUESTED", decision == "APPROVED"),
+        None => (
+            reviewed(ReviewerState::ChangesRequested),
+            reviewed(ReviewerState::Approved),
+        ),
+    };
+    if changes {
+        PullRequestStage::ChangesRequested
+    } else if checks.iter().any(|c| c.outcome == CheckOutcome::Failure) {
+        PullRequestStage::ChecksFailing
+    } else if approved {
+        PullRequestStage::Approved
+    } else {
+        PullRequestStage::WaitingForReview
+    }
 }
 
 /// The PR of the Worktree's branch as "PR" shows it: where it stands, who's on it, and what's been
@@ -622,25 +729,132 @@ fn top_level(stdout: &str) -> Result<Vec<(String, String)>, String> {
     Ok(teams)
 }
 
-/// Reads `gh pr view --json DETAIL_FIELDS` (without the comments on its code).
-fn viewed(stdout: &str) -> Result<PullRequestDetails, String> {
-    #[derive(Deserialize, Default)]
-    #[serde(default)]
-    struct Actor {
-        login: Option<String>,
-        name: Option<String>,
-        slug: Option<String>,
-        #[serde(rename = "__typename")]
-        typename: Option<String>,
+/// Someone (or a team, or an app) as `gh --json` gives them.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct Actor {
+    login: Option<String>,
+    name: Option<String>,
+    slug: Option<String>,
+    #[serde(rename = "__typename")]
+    typename: Option<String>,
+}
+impl Actor {
+    fn login(self) -> String {
+        self.login
+            .or(self.slug)
+            .or(self.name)
+            .unwrap_or_else(|| "ghost".into())
     }
-    impl Actor {
-        fn login(self) -> String {
-            self.login
-                .or(self.slug)
-                .or(self.name)
-                .unwrap_or_else(|| "ghost".into())
+}
+
+/// A submitted review, as `gh --json latestReviews,reviews` gives it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhReview {
+    #[serde(default)]
+    author: Actor,
+    state: String,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    submitted_at: Option<String>,
+}
+
+/// A check run or commit status, as `gh --json statusCheckRollup` gives it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Status {
+    #[serde(rename = "__typename", default)]
+    typename: String,
+    name: Option<String>,
+    context: Option<String>,
+    workflow_name: Option<String>,
+    status: Option<String>,
+    conclusion: Option<String>,
+    state: Option<String>,
+    details_url: Option<String>,
+    target_url: Option<String>,
+}
+
+impl Status {
+    fn check(self) -> Check {
+        let outcome = if self.typename == "StatusContext" {
+            match self.state.as_deref() {
+                Some("SUCCESS") => CheckOutcome::Success,
+                Some("FAILURE" | "ERROR") => CheckOutcome::Failure,
+                _ => CheckOutcome::Pending,
+            }
+        } else if self.status.as_deref() != Some("COMPLETED") {
+            CheckOutcome::Pending
+        } else {
+            match self.conclusion.as_deref() {
+                Some("SUCCESS") => CheckOutcome::Success,
+                Some("SKIPPED" | "NEUTRAL" | "STALE") => CheckOutcome::Skipped,
+                _ => CheckOutcome::Failure,
+            }
+        };
+        Check {
+            name: self.name.or(self.context).unwrap_or_default(),
+            workflow: self.workflow_name.filter(|w| !w.is_empty()),
+            outcome,
+            url: self
+                .details_url
+                .or(self.target_url)
+                .filter(|u| !u.is_empty()),
         }
     }
+}
+
+impl PullRequestState {
+    fn read(state: &str) -> Self {
+        match state {
+            "MERGED" => PullRequestState::Merged,
+            "CLOSED" => PullRequestState::Closed,
+            _ => PullRequestState::Open,
+        }
+    }
+}
+
+/// Who reviewed (their latest review), then who's asked to and hasn't, or is asked again.
+fn reviewers_of(latest_reviews: Vec<GhReview>, review_requests: Vec<Actor>) -> Vec<Reviewer> {
+    let mut reviewers: Vec<Reviewer> = Vec::new();
+    for review in latest_reviews {
+        let state = match review.state.as_str() {
+            "APPROVED" => ReviewerState::Approved,
+            "CHANGES_REQUESTED" => ReviewerState::ChangesRequested,
+            "COMMENTED" => ReviewerState::Commented,
+            "DISMISSED" => ReviewerState::Dismissed,
+            _ => continue, // (PENDING: a review still being written)
+        };
+        let name = review.author.login();
+        if !reviewers.iter().any(|r| r.name == name) {
+            reviewers.push(Reviewer {
+                name,
+                team: false,
+                state,
+                requested: false,
+            });
+        }
+    }
+    for request in review_requests {
+        let team = request.typename.as_deref() == Some("Team");
+        let name = request.login();
+        match reviewers.iter_mut().find(|r| r.name == name) {
+            Some(r) => r.requested = true,
+            None => reviewers.push(Reviewer {
+                name,
+                team,
+                state: ReviewerState::Requested,
+                requested: true,
+            }),
+        }
+    }
+    reviewers
+}
+
+/// Reads `gh pr view --json DETAIL_FIELDS` (without the comments on its code).
+fn viewed(stdout: &str) -> Result<PullRequestDetails, String> {
     #[derive(Deserialize)]
     struct Label {
         name: String,
@@ -650,17 +864,6 @@ fn viewed(stdout: &str) -> Result<PullRequestDetails, String> {
     #[derive(Deserialize)]
     struct Milestone {
         title: String,
-    }
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Review {
-        #[serde(default)]
-        author: Actor,
-        state: String,
-        #[serde(default)]
-        body: String,
-        #[serde(default)]
-        submitted_at: Option<String>,
     }
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -676,20 +879,6 @@ fn viewed(stdout: &str) -> Result<PullRequestDetails, String> {
         includes_created_edit: bool,
         #[serde(default)]
         is_minimized: bool,
-    }
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Status {
-        #[serde(rename = "__typename", default)]
-        typename: String,
-        name: Option<String>,
-        context: Option<String>,
-        workflow_name: Option<String>,
-        status: Option<String>,
-        conclusion: Option<String>,
-        state: Option<String>,
-        details_url: Option<String>,
-        target_url: Option<String>,
     }
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -747,9 +936,9 @@ fn viewed(stdout: &str) -> Result<PullRequestDetails, String> {
         #[serde(default)]
         review_requests: Vec<Actor>,
         #[serde(default)]
-        latest_reviews: Vec<Review>,
+        latest_reviews: Vec<GhReview>,
         #[serde(default)]
-        reviews: Vec<Review>,
+        reviews: Vec<GhReview>,
         #[serde(default)]
         status_check_rollup: Vec<Status>,
         #[serde(default)]
@@ -760,72 +949,12 @@ fn viewed(stdout: &str) -> Result<PullRequestDetails, String> {
 
     let pr: Viewed = serde_json::from_str(stdout.trim())
         .map_err(|e| format!("gh said something unexpected: {e}"))?;
-    let state = match pr.state.as_str() {
-        "MERGED" => PullRequestState::Merged,
-        "CLOSED" => PullRequestState::Closed,
-        _ => PullRequestState::Open,
-    };
-
-    // Who reviewed (their latest review), then who's asked to and hasn't, or is asked again.
-    let mut reviewers: Vec<Reviewer> = Vec::new();
-    for review in pr.latest_reviews {
-        let state = match review.state.as_str() {
-            "APPROVED" => ReviewerState::Approved,
-            "CHANGES_REQUESTED" => ReviewerState::ChangesRequested,
-            "COMMENTED" => ReviewerState::Commented,
-            "DISMISSED" => ReviewerState::Dismissed,
-            _ => continue, // (PENDING: a review still being written)
-        };
-        let name = review.author.login();
-        if !reviewers.iter().any(|r| r.name == name) {
-            reviewers.push(Reviewer {
-                name,
-                team: false,
-                state,
-                requested: false,
-            });
-        }
-    }
-    for request in pr.review_requests {
-        let team = request.typename.as_deref() == Some("Team");
-        let name = request.login();
-        match reviewers.iter_mut().find(|r| r.name == name) {
-            Some(r) => r.requested = true,
-            None => reviewers.push(Reviewer {
-                name,
-                team,
-                state: ReviewerState::Requested,
-                requested: true,
-            }),
-        }
-    }
-
+    let state = PullRequestState::read(&pr.state);
+    let reviewers = reviewers_of(pr.latest_reviews, pr.review_requests);
     let checks = pr
         .status_check_rollup
         .into_iter()
-        .map(|s| {
-            let outcome = if s.typename == "StatusContext" {
-                match s.state.as_deref() {
-                    Some("SUCCESS") => CheckOutcome::Success,
-                    Some("FAILURE" | "ERROR") => CheckOutcome::Failure,
-                    _ => CheckOutcome::Pending,
-                }
-            } else if s.status.as_deref() != Some("COMPLETED") {
-                CheckOutcome::Pending
-            } else {
-                match s.conclusion.as_deref() {
-                    Some("SUCCESS") => CheckOutcome::Success,
-                    Some("SKIPPED" | "NEUTRAL" | "STALE") => CheckOutcome::Skipped,
-                    _ => CheckOutcome::Failure,
-                }
-            };
-            Check {
-                name: s.name.or(s.context).unwrap_or_default(),
-                workflow: s.workflow_name.filter(|w| !w.is_empty()),
-                outcome,
-                url: s.details_url.or(s.target_url).filter(|u| !u.is_empty()),
-            }
-        })
+        .map(Status::check)
         .collect();
 
     Ok(PullRequestDetails {
@@ -1064,15 +1193,72 @@ mod tests {
     #[test]
     fn my_prs_are_listed_most_recently_updated_first() {
         let out = r#"[
-            {"number":3,"title":"Old","url":"https://github.com/o/r/pull/3","headRefName":"a","baseRefName":"main","isDraft":false,"reviewDecision":"","updatedAt":"2026-01-01T00:00:00Z"},
-            {"number":9,"title":"New","url":"https://github.com/o/r/pull/9","headRefName":"b","baseRefName":"dev","isDraft":true,"reviewDecision":"APPROVED","updatedAt":"2026-02-01T00:00:00Z"}
+            {"number":3,"title":"Old","url":"u3","state":"OPEN","isDraft":false,"headRefName":"a","baseRefName":"main","reviewDecision":"","latestReviews":[],"reviewRequests":[{"__typename":"User","login":"bo"}],"statusCheckRollup":[],"mergeable":"CONFLICTING","updatedAt":"2026-01-01T00:00:00Z","mergedAt":null,"closedAt":null},
+            {"number":9,"title":"New","url":"u9","state":"MERGED","isDraft":false,"headRefName":"b","baseRefName":"dev","reviewDecision":"APPROVED","latestReviews":[],"reviewRequests":[],"statusCheckRollup":[],"mergeable":"UNKNOWN","updatedAt":"2026-02-01T00:00:00Z","mergedAt":"2026-02-01T00:00:00Z","closedAt":"2026-02-01T00:00:00Z"}
         ]"#;
         let prs = mine_listed(out).unwrap();
         assert_eq!(prs.iter().map(|p| p.number).collect::<Vec<_>>(), [9, 3]);
-        assert_eq!(prs[0].review_decision.as_deref(), Some("APPROVED"));
-        assert!(prs[0].draft);
+        assert_eq!(prs[0].stage, PullRequestStage::Merged);
+        assert_eq!(prs[1].stage, PullRequestStage::WaitingForReview);
         assert_eq!(prs[1].review_decision, None);
+        assert!(prs[1].conflicts && !prs[0].conflicts);
+        assert_eq!(prs[1].reviewers[0].name, "bo");
         assert_eq!((prs[1].head.as_str(), prs[1].base.as_str()), ("a", "main"));
+    }
+
+    #[test]
+    fn a_prs_stage_puts_asked_for_changes_before_failing_checks() {
+        use PullRequestStage::*;
+        let open = PullRequestState::Open;
+        let check = |outcome| Check {
+            name: "ci".into(),
+            workflow: None,
+            outcome,
+            url: None,
+        };
+        let failing = [check(CheckOutcome::Failure)];
+        let passing = [check(CheckOutcome::Success), check(CheckOutcome::Pending)];
+        let by = |state| Reviewer {
+            name: "bo".into(),
+            team: false,
+            state,
+            requested: false,
+        };
+        let stage = |decision, reviewers: &[Reviewer], checks: &[Check]| {
+            stage_of(open, false, decision, reviewers, checks)
+        };
+        assert_eq!(
+            stage(Some("CHANGES_REQUESTED"), &[], &failing),
+            ChangesRequested
+        );
+        assert_eq!(stage(Some("APPROVED"), &[], &failing), ChecksFailing);
+        assert_eq!(stage(Some("APPROVED"), &[], &passing), Approved);
+        assert_eq!(
+            stage(
+                Some("REVIEW_REQUIRED"),
+                &[by(ReviewerState::Approved)],
+                &passing
+            ),
+            WaitingForReview
+        );
+        // No review required: the reviews it has decide.
+        assert_eq!(
+            stage(None, &[by(ReviewerState::Approved)], &passing),
+            Approved
+        );
+        assert_eq!(
+            stage(None, &[by(ReviewerState::ChangesRequested)], &[]),
+            ChangesRequested
+        );
+        assert_eq!(
+            stage(None, &[by(ReviewerState::Commented)], &[]),
+            WaitingForReview
+        );
+        assert_eq!(stage_of(open, true, Some("APPROVED"), &[], &failing), Draft);
+        assert_eq!(
+            stage_of(PullRequestState::Closed, false, None, &[], &[]),
+            Closed
+        );
     }
 
     #[test]

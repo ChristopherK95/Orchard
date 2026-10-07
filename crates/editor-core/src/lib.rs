@@ -48,9 +48,9 @@ pub use crate::process::host_env;
 pub use crate::pull_request::{
     Check, CheckOutcome, CodeThread, CommitChanges, MyPullRequest, OpenPullRequest,
     PullRequestComment, PullRequestCommit, PullRequestDetails, PullRequestLabel,
-    PullRequestOutcome, PullRequestProgress, PullRequestRequest, PullRequestState,
-    PushToPullRequestOutcome, Review, ReviewCommit, ReviewFile, Reviewer, ReviewerState,
-    SubmittedReview, Team,
+    PullRequestOutcome, PullRequestProgress, PullRequestRequest, PullRequestStage,
+    PullRequestState, PushToPullRequestOutcome, Review, ReviewCommit, ReviewFile, Reviewer,
+    ReviewerState, SubmittedReview, Team,
 };
 pub use crate::remove_worktree::{CommitSummary, RemovalCheck, RemoveWorktree, RemovedWorktree};
 pub use crate::session::{

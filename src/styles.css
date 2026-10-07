@@ -863,6 +863,36 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .board-card .summary { color: var(--fg-3); }
 .board-card .card-actions { display: flex; }
 .board-card .card-actions button { min-height: 24px; font-size: 12.5px; font-weight: 400; gap: 6px; background: transparent; }
+.pr-board-title { font-size: 13px; font-weight: 600; color: var(--fg-1); }
+.pr-board-error { margin: 12px 24px 0; }
+.pr-board-columns { grid-template-columns: repeat(6, minmax(220px, 1fr)); }
+.pr-board .board-column-head .lucide { width: 14px; height: 14px; color: var(--fg-3); }
+.pr-board .board-column-head.pr-stage-changesRequested, .pr-board .board-column-head.pr-stage-changesRequested .lucide { color: var(--needs-text); }
+.pr-board .board-column-head.pr-stage-checksFailing, .pr-board .board-column-head.pr-stage-checksFailing .lucide { color: var(--danger); }
+.pr-board .board-column-head.pr-stage-approved .lucide { color: var(--ok); }
+.pr-board .board-column-head.pr-stage-merged .lucide { color: var(--hunk); }
+.pr-card.changesRequested { border-color: var(--needs-border); }
+.pr-card.checksFailing { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.pr-card.merged, .pr-card.closed { opacity: 0.75; }
+.pr-card .board-card-head > .lucide.merged { color: var(--hunk); }
+.pr-card .board-card-head > .lucide.closed { color: var(--exited); }
+.pr-card .pr-number { font: 11.5px var(--mono); color: var(--fg-3); }
+.pr-card .pr-card-link { margin-left: auto; min-height: 20px; width: 20px; padding: 0; color: var(--fg-3); }
+.pr-card .pr-card-link .lucide { width: 12px; height: 12px; color: inherit; }
+.pr-card-line { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--fg-2); }
+.pr-card-line > span, .pr-card-line.bad { display: inline-flex; align-items: center; gap: 4px; }
+.pr-card-line .lucide { width: 13px; height: 13px; }
+.pr-card-line .ok { color: var(--ok); }
+.pr-card-line .bad, .pr-card-line.bad { color: var(--danger); }
+.pr-card-line .wait { color: var(--needs-text); }
+.pr-card-failing { font: 11.5px var(--mono); color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-card-reviewers { display: flex; flex-wrap: wrap; gap: 4px; }
+.pr-card-reviewer { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 999px; background: var(--bg-3); color: var(--fg-2); font-size: 11.5px; }
+.pr-card-reviewer .lucide { width: 11px; height: 11px; }
+.pr-card-reviewer.approved .lucide { color: var(--ok); }
+.pr-card-reviewer.changesRequested .lucide { color: var(--danger); }
+.pr-card-reviewer.requested .lucide { color: var(--needs-text); }
+.pr-card-reviewer.commented .lucide, .pr-card-reviewer.dismissed .lucide { color: var(--fg-3); }
 
 /* Terminal panel: a Worktree's shell, beside the transcript (Tabs view) or filling a column (its
    Terminal tab). */
