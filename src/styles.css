@@ -1109,3 +1109,10 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .review-pr-link { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; }
 .review-pr-link .lucide { width: 12px; height: 12px; }
 .review-foot .hidden, .modal-foot .hidden { display: none; }
+/* Push uses the whole overlay: what's asked first, then the log filling the height. */
+.review-push { flex: 1; min-height: 0; padding: 16px 20px; }
+.review-push > label, .review-push > .hint { width: min(720px, 100%); }
+.review-push .pr-log { flex: 1; min-height: 120px; max-height: none; }
+.review-push .git-notice, .review-push .git-ask { border: 1px solid var(--line); border-radius: var(--r-md); }
+.review-push .git-notice.warn { border-color: var(--needs-border); }
+.review-push .review-pr-error { flex: none; }

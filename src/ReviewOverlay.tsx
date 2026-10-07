@@ -720,7 +720,7 @@ export function ReviewOverlay(props: {
             </div>
           </Match>
           <Match when={step() === "push"}>
-            <div class="modal-body review-pr">
+            <div class="modal-body review-push">
               <Show when={needsMessage()}>
                 <label>
                   Commit message for the {review()!.uncommitted ? plural(review()!.uncommitted, "uncommitted file") : "uncommitted changes"}
