@@ -1,7 +1,11 @@
 //! Worktree setup (ticket 08): the repo's setup commands, run one at a time in a new Worktree before
 //! its first Agent session. `bash` on Linux; on Windows `pwsh` (else Windows PowerShell), or Git
 //! Bash if the repo's settings ask for it. Output (stdout and stderr together) streams as it comes.
+//! On Linux the commands get the environment of the user's login shell (`shell_env`), as a command
+//! typed in the Terminal panel would.
 
+#[cfg(unix)]
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::process::Stdio;
@@ -75,6 +79,8 @@ pub(crate) async fn run(
 ) -> Result<(), String> {
     let (program, args) = shell_command(shell, command).await?;
     let mut cmd = crate::process::command(&program);
+    #[cfg(unix)]
+    cmd.envs(shell_env().await.iter().map(|(key, value)| (key, value)));
     cmd.args(&args)
         .current_dir(cwd)
         .stdin(Stdio::null())
@@ -205,6 +211,78 @@ async fn shell_command(
     })
 }
 
+/// How long the login shell gets to report its environment before setup goes on without it.
+#[cfg(unix)]
+const SHELL_ENV_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The environment the user's `$SHELL` sets up when started as an interactive login shell, read
+/// once. Started from the desktop, Orchard lacks what the shell's profile adds: a version manager's
+/// `node` first on `PATH` (nvm, fnm, mise), say. Empty if the shell couldn't report it.
+#[cfg(unix)]
+async fn shell_env() -> &'static [(OsString, OsString)] {
+    static ENV: tokio::sync::OnceCell<Vec<(OsString, OsString)>> =
+        tokio::sync::OnceCell::const_new();
+    ENV.get_or_init(|| async {
+        let Some(shell) = std::env::var_os("SHELL").filter(|shell| !shell.is_empty()) else {
+            return vec![];
+        };
+        load_shell_env(&shell).await.unwrap_or_default()
+    })
+    .await
+}
+
+/// Runs `shell` as an interactive login shell and reads its environment.
+#[cfg(unix)]
+async fn load_shell_env(shell: &OsStr) -> Option<Vec<(OsString, OsString)>> {
+    // Between markers, as the profile may print things of its own.
+    const MARK: &str = "__ORCHARD_SHELL_ENV__";
+    let mut cmd = crate::process::command(shell);
+    cmd.args(["-i", "-l", "-c"])
+        .arg(format!(
+            "printf '%s' {MARK}; command env -0; printf '%s' {MARK}"
+        ))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    ProcessTree::own_group(&mut cmd);
+    let child = cmd.spawn().ok()?;
+    let _tree = ProcessTree::attach(&child);
+    let output = tokio::time::timeout(SHELL_ENV_TIMEOUT, child.wait_with_output())
+        .await
+        .ok()?
+        .ok()?;
+    parse_env(&output.stdout, MARK.as_bytes())
+}
+
+/// The variables in `env -0` output found between two `mark`s, less the ones that describe the
+/// shell that printed them rather than the user's setup.
+#[cfg(unix)]
+fn parse_env(output: &[u8], mark: &[u8]) -> Option<Vec<(OsString, OsString)>> {
+    use std::os::unix::ffi::OsStrExt;
+    let start = output.windows(mark.len()).position(|w| w == mark)? + mark.len();
+    let end = start
+        + output[start..]
+            .windows(mark.len())
+            .position(|w| w == mark)?;
+    const SKIP: &[&[u8]] = &[b"PWD", b"OLDPWD", b"SHLVL", b"_"];
+    Some(
+        output[start..end]
+            .split(|&byte| byte == 0)
+            .filter_map(|entry| {
+                let at = entry.iter().position(|&byte| byte == b'=')?;
+                let (key, value) = (&entry[..at], &entry[at + 1..]);
+                (!key.is_empty() && !SKIP.contains(&key)).then(|| {
+                    (
+                        OsStr::from_bytes(key).to_owned(),
+                        OsStr::from_bytes(value).to_owned(),
+                    )
+                })
+            })
+            .collect(),
+    )
+}
+
 /// Git for Windows' `bash.exe`, found from git's own install. Never a bare `bash`: on Windows that
 /// finds WSL's first.
 pub(crate) async fn git_bash() -> Result<PathBuf, String> {
@@ -227,6 +305,41 @@ pub(crate) fn on_path(program: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_shell_env_is_read_between_the_marks_without_the_shells_own_variables() {
+        let output = b"profile noise MARKPATH=/nvm/bin:/usr/bin\0PWD=/x\0MULTI=a\nb\0MARK more";
+        let env = parse_env(output, b"MARK").unwrap();
+        assert_eq!(
+            env,
+            [
+                ("PATH".into(), "/nvm/bin:/usr/bin".into()),
+                ("MULTI".into(), "a\nb".into()),
+            ]
+        );
+        assert_eq!(parse_env(b"no marks here", b"MARK"), None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn what_the_shells_profile_sets_reaches_the_environment() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        // Stands in for a login shell whose profile prints a greeting and exports a variable.
+        let shell = dir.path().join("shell");
+        std::fs::write(
+            &shell,
+            "#!/bin/bash\necho welcome\nexport ORCHARD_TEST_VAR=from-profile\neval \"$4\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let env = load_shell_env(shell.as_os_str()).await.unwrap();
+        assert!(env
+            .iter()
+            .any(|(key, value)| key == "ORCHARD_TEST_VAR" && value == "from-profile"));
+        assert!(!env.iter().any(|(key, _)| key == "PWD"));
+    }
 
     #[test]
     fn kept_output_drops_the_oldest_text_on_a_character_boundary() {
