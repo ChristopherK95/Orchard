@@ -1094,7 +1094,10 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .review-done { flex: 1; align-items: center; justify-content: center; text-align: center; }
 .review-done p { margin: 0; max-width: 520px; }
 .done-mark { width: 40px; height: 40px; color: var(--ok); }
-.review-url { color: var(--fg-2); user-select: text; }
+.review-url { min-height: 26px; gap: 6px; padding: 0 8px; border: 0; background: transparent; color: var(--fg-2); font-weight: 400; }
+.review-url:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-1); }
+.review-url .lucide { width: 13px; height: 13px; color: var(--fg-3); }
+.review-url .lucide.copied { color: var(--ok); }
 
 /* Create PR's live log: each step, then what it printed (hooks, git's progress, gh). */
 .pr-log { max-height: 300px; overflow: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--code-bg); }

@@ -11,7 +11,7 @@ import { createStore, reconcile } from "solid-js/store";
 import { core, type OpenPullRequest, type PushToPullRequestOutcome, type PullRequestProgress, type SessionId, type SessionInfo, type CommitChanges, type DiffLine, type PullRequestOutcome, type Review, type ReviewCommit, type ReviewFile } from "./core";
 import { DiffView } from "./DiffView";
 import { languageOfPath } from "./highlight";
-import { ArrowUp, Send, Check, ChevronLeft, ChevronRight, CircleCheck, ExternalLink, GitBranch, GitPullRequest, Loader, RefreshCw, TriangleAlert, X } from "./icons";
+import { ArrowUp, Send, Check, ChevronLeft, ChevronRight, CircleCheck, Copy, ExternalLink, GitBranch, GitPullRequest, Loader, RefreshCw, TriangleAlert, X } from "./icons";
 
 const LETTER = { added: "A", modified: "M", deleted: "D", renamed: "R" } as const;
 const plural = (n: number, thing: string) => `${n} ${thing}${n === 1 ? "" : "s"}`;
@@ -310,6 +310,20 @@ export function ReviewOverlay(props: {
   };
 
   // Push (the branch's PR is open already).
+  /** The PR link was just copied (from the done step). */
+  const [copied, setCopied] = createSignal(false);
+  let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+  const copyUrl = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      clearTimeout(copiedTimer);
+      copiedTimer = setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      setPrError(String(err));
+    }
+  };
+  onCleanup(() => clearTimeout(copiedTimer));
   const [pushed, setPushed] = createSignal<Exclude<PushToPullRequestOutcome, { kind: "sessionsWorking" }> | null>(null);
   /** Uncommitted changes wait for a commit message before the push starts. */
   const [askMessage, setAskMessage] = createSignal(false);
@@ -824,7 +838,17 @@ export function ReviewOverlay(props: {
                     <Show when={o().committed}> The uncommitted changes went in as {o().committed}.</Show>
                   </p>
                   <Show when={"url" in o() && (o() as { url: string }).url}>
-                    {(url) => <p class="mono small review-url">{url()}</p>}
+                    {(url) => (
+                      <button class="mono small review-url" onClick={() => void copyUrl(url())} title="Copy the link">
+                        {url()}
+                        <Show when={copied()} fallback={<Copy />}>
+                          <Check class="copied" />
+                        </Show>
+                      </button>
+                    )}
+                  </Show>
+                  <Show when={prError()}>
+                    <p class="error small">{prError()}</p>
                   </Show>
                   <Show when={log.length > 0}>
                     <details class="pr-log-details">
