@@ -4,7 +4,7 @@
 // which checks failed, whether it conflicts. Clicking one opens it in the PR overlay. Opened from
 // the sidebar's Pull requests; the same list feeds both, read again every few minutes.
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { createEffect, createMemo, createSignal, For, type JSX, on, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, type JSX, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { ago } from "./Chat";
 import { core, type MyPullRequest, type PullRequestStage, type Reviewer } from "./core";
 import {
@@ -236,12 +236,27 @@ const REVIEWED: Record<Reviewer["state"], string> = {
 
 function ReviewerChip(props: { reviewer: Reviewer }) {
   const r = () => props.reviewer;
+  /** Asked to review again since their last review: waited on, whatever that review said. */
   const again = () => r().requested && r().state !== "requested";
   return (
-    <span class={`pr-card-reviewer ${r().state}`} title={`${r().name}${r().team ? " (team)" : ""}: ${REVIEWED[r().state]}${again() ? ", asked again" : ""}`}>
-      <Show when={r().state === "approved"} fallback={r().state === "changesRequested" ? <CircleX /> : r().state === "requested" ? <CircleDot /> : <MessageSquare />}>
-        <CheckIcon />
-      </Show>
+    <span
+      class={`pr-card-reviewer ${again() ? "requested" : r().state}`}
+      title={`${r().name}${r().team ? " (team)" : ""}: ${REVIEWED[r().state]}${again() ? ", asked to review again" : ""}`}
+    >
+      <Switch fallback={<MessageSquare />}>
+        <Match when={again()}>
+          <Clock />
+        </Match>
+        <Match when={r().state === "approved"}>
+          <CheckIcon />
+        </Match>
+        <Match when={r().state === "changesRequested"}>
+          <CircleX />
+        </Match>
+        <Match when={r().state === "requested"}>
+          <CircleDot />
+        </Match>
+      </Switch>
       {r().name}
     </span>
   );

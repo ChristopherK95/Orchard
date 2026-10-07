@@ -366,8 +366,11 @@ fn mine_listed(stdout: &str) -> Result<Vec<MyPullRequest>, String> {
     Ok(prs)
 }
 
-/// Where a PR stands. Asked-for changes come before failing checks (someone's waiting on them);
-/// without a review decision (no review required), the reviews it has decide.
+/// Where a PR stands. Changes are asked for while a reviewer's latest review asks for them and
+/// they haven't been asked to review again (GitHub's decision stays "changes requested" until that
+/// reviewer approves, however they've been answered). Asked-for changes come before failing checks
+/// (someone's waiting on them). Approved is GitHub's decision; without one (no review required),
+/// someone's approval.
 fn stage_of(
     state: PullRequestState,
     draft: bool,
@@ -381,13 +384,12 @@ fn stage_of(
         PullRequestState::Open if draft => return PullRequestStage::Draft,
         PullRequestState::Open => {}
     }
-    let reviewed = |s| reviewers.iter().any(|r| r.state == s);
-    let (changes, approved) = match decision {
-        Some(decision) => (decision == "CHANGES_REQUESTED", decision == "APPROVED"),
-        None => (
-            reviewed(ReviewerState::ChangesRequested),
-            reviewed(ReviewerState::Approved),
-        ),
+    let changes = reviewers
+        .iter()
+        .any(|r| r.state == ReviewerState::ChangesRequested && !r.requested);
+    let approved = match decision {
+        Some(decision) => decision == "APPROVED",
+        None => reviewers.iter().any(|r| r.state == ReviewerState::Approved),
     };
     if changes {
         PullRequestStage::ChangesRequested
@@ -1207,7 +1209,7 @@ mod tests {
     }
 
     #[test]
-    fn a_prs_stage_puts_asked_for_changes_before_failing_checks() {
+    fn a_prs_stage_goes_by_its_reviewers_and_asked_for_changes_come_first() {
         use PullRequestStage::*;
         let open = PullRequestState::Open;
         let check = |outcome| Check {
@@ -1224,12 +1226,28 @@ mod tests {
             state,
             requested: false,
         };
+        let again = |state| Reviewer {
+            requested: true,
+            ..by(state)
+        };
         let stage = |decision, reviewers: &[Reviewer], checks: &[Check]| {
             stage_of(open, false, decision, reviewers, checks)
         };
+        let changes = [by(ReviewerState::ChangesRequested)];
         assert_eq!(
-            stage(Some("CHANGES_REQUESTED"), &[], &failing),
+            stage(Some("CHANGES_REQUESTED"), &changes, &failing),
             ChangesRequested
+        );
+        assert_eq!(stage(None, &changes, &[]), ChangesRequested);
+        // Asked to review again: the changes are answered, whatever GitHub's decision still says.
+        let answered = [again(ReviewerState::ChangesRequested)];
+        assert_eq!(
+            stage(Some("CHANGES_REQUESTED"), &answered, &passing),
+            WaitingForReview
+        );
+        assert_eq!(
+            stage(Some("CHANGES_REQUESTED"), &answered, &failing),
+            ChecksFailing
         );
         assert_eq!(stage(Some("APPROVED"), &[], &failing), ChecksFailing);
         assert_eq!(stage(Some("APPROVED"), &[], &passing), Approved);
@@ -1241,14 +1259,21 @@ mod tests {
             ),
             WaitingForReview
         );
-        // No review required: the reviews it has decide.
+        // No review required: someone's approval is enough.
         assert_eq!(
             stage(None, &[by(ReviewerState::Approved)], &passing),
             Approved
         );
         assert_eq!(
-            stage(None, &[by(ReviewerState::ChangesRequested)], &[]),
-            ChangesRequested
+            stage(
+                None,
+                &[
+                    by(ReviewerState::Approved),
+                    again(ReviewerState::ChangesRequested)
+                ],
+                &passing
+            ),
+            Approved
         );
         assert_eq!(
             stage(None, &[by(ReviewerState::Commented)], &[]),
