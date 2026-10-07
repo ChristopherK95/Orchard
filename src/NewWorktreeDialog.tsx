@@ -1,5 +1,5 @@
 // "＋ worktree" (ticket 07): a new branch (prefilled agent/task-N, starting from origin/<default>
-// after a fetch, or from any other branch: the default first, then every local and remote one) or
+// after a fetch, or from any other of origin's branches: the default first) or
 // an existing branch, created next to the repo. Enter accepts the
 // defaults. The dialog hands the new Worktree back as soon as it exists; the caller starts the
 // Agent session (so a failure there doesn't leave the dialog stuck on an already-created branch).
@@ -53,27 +53,24 @@ export function NewWorktreeDialog(props: {
       .catch((err) => setError(String(err)));
   });
 
-  /** Every branch but the default, its local twin (`master` for `origin/master`) first. */
+  /** origin's branches but the default (which is listed first on its own). */
   const startBranches = createMemo(() => {
     const def = defaultStart();
-    const twin = def?.replace(/^origin\//, "");
     // (A listing that failed leaves just the default and "a tag or commit".)
     const listed = branchList.state === "ready" ? branchList().branches : [];
-    const names = listed.map((b) => b.name).filter((n) => n !== def);
-    return [...names.filter((n) => n === twin), ...names.filter((n) => n !== twin)];
+    return listed.filter((b) => b.remote && b.name.startsWith("origin/") && b.name !== def).map((b) => b.name);
   });
 
   /** The default, then the branches, filtered by what's typed; something typed that isn't a branch
    *  can be started from as a tag or commit. */
   const startOptions = createMemo((): StartOption[] => {
     const words = startQuery().trim();
-    const lower = words.toLowerCase();
     const def = defaultStart() ?? "origin/<default>";
     const all: StartOption[] = [
       { value: "", label: def, note: def.startsWith("origin/") ? "default, fetched first" : "default" },
       ...startBranches().map((b) => ({ value: b, label: b })),
     ];
-    const matching = all.filter((o) => o.label.toLowerCase().includes(lower));
+    const matching = all.filter((o) => o.label.includes(words)); // (case-sensitive, as git's names are)
     if (words && !all.some((o) => o.label === words)) matching.push({ value: words, label: words, note: "tag or commit" });
     return matching;
   });
