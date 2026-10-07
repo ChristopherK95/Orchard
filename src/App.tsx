@@ -25,6 +25,7 @@ import { CommandPalette, type PaletteCommand } from "./CommandPalette";
 import { FilesDrawer } from "./FilesDrawer";
 import { type BranchPopover, BranchSwitcher, popoverUnder } from "./BranchPicker";
 import { GitDrawer } from "./GitDrawer";
+import { ReviewOverlay } from "./ReviewOverlay";
 import type { OpenRequest } from "./ManualEditor";
 // CodeMirror loads with the first file opened, not at startup.
 const ManualEditor = lazy(() => import("./ManualEditor").then((m) => ({ default: m.ManualEditor })));
@@ -47,7 +48,7 @@ import { applyAppearance } from "./appearance";
 // The compact cut of the mark: the one for 32 px and below. Inline, not an <img>: its outer fruit
 // overhang its box, and an <img> would clip them.
 import orchardMark from "./assets/orchard-mark-small.svg?raw";
-import { Bell, ChevronDown, ChevronRight, GitBranch, GitCompareArrows, Loader, PanelLeft, PanelRight, Search, Sparkles, SquareTerminal, X } from "./icons";
+import { Bell, ChevronDown, ChevronRight, GitBranch, GitCompareArrows, GitPullRequest, Loader, PanelLeft, PanelRight, Search, Sparkles, SquareTerminal, X } from "./icons";
 
 export function App() {
   const [problems, setProblems] = createSignal<MissingPrerequisite[] | null>(null);
@@ -333,6 +334,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     setDrawer((now) => (now === which ? null : which));
   };
   const [paletteOpen, setPaletteOpen] = createSignal(false);
+  /** The Worktree being reviewed for a PR (ticket 42), over everything else. */
+  const [reviewing, setReviewing] = createSignal<string | null>(null);
+  const review = () => {
+    setBoardOpen(false);
+    if (!worktree()?.removed) setReviewing(activeWorktree());
+  };
   const [filesRevision, setFilesRevision] = createStore<Record<string, number>>({});
   const [revealed, setRevealed] = createSignal<{ path: string; n: number } | null>(null);
   /** The Worktree being looked at gets its files indexed and watched. */
@@ -365,7 +372,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   const runCommand = (command: PaletteCommand) =>
     command.kind === "runAction"
       ? runAction(command.name)
-      : command.kind === "newSessionHere"
+      : command.kind === "review"
+        ? review()
+        : command.kind === "newSessionHere"
         ? void newSession()
         : command.kind === "switchWorkspace"
           ? setSwitching(true)
@@ -653,20 +662,20 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       // (Ctrl+P is never the browser's print, even with a dialog open.)
       if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !switching() && !settingsAt()) setPaletteOpen(true);
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !switching() && !settingsAt() && !reviewing()) setPaletteOpen(true);
         return;
       }
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "o") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !settingsAt()) setSwitching(true);
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !settingsAt() && !reviewing()) setSwitching(true);
         return;
       }
       if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ",") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !switching()) openSettingsPage();
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !switching() && !reviewing()) openSettingsPage();
         return;
       }
-      if (removing() || overviewOpen() || creatingWorktree() || paletteOpen() || switching() || settingsAt()) return; // a dialog is open over the Tab
+      if (removing() || overviewOpen() || creatingWorktree() || paletteOpen() || switching() || settingsAt() || reviewing()) return; // a dialog is open over the Tab
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
         return void toggleDrawer("files");
@@ -929,6 +938,16 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           <GitCompareArrows />
           <span class="label">Changes</span>
         </button>
+        <button
+          class="outline review-button"
+          classList={{ on: !!reviewing() }}
+          onClick={review}
+          disabled={!worktree() || worktree()!.removed}
+          title="Done with this Worktree? Review its changes file by file, then open a PR"
+        >
+          <GitPullRequest />
+          <span class="label">Review</span>
+        </button>
         <button class="ghost icon" classList={{ on: filesOpen() }} onClick={() => toggleDrawer("files")} title="This Worktree's files (Ctrl+Shift+E)" aria-label="Files drawer">
           <PanelRight />
         </button>
@@ -1100,6 +1119,14 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           }}
           onClose={() => setOverviewOpen(false)}
         />
+      </Show>
+      <Show when={reviewing()}>
+        {(path) => {
+          const w = rowWorktrees().find((w) => w.path === path());
+          return (
+            <ReviewOverlay worktree={path()} label={w ? worktreeLabel(w) : path()} colour={worktreeColour(path())} onClose={() => setReviewing(null)} />
+          );
+        }}
       </Show>
       <Show when={branchPopover()}>
         {(at) => (

@@ -411,6 +411,49 @@ export interface BaseChange {
 }
 
 /** What a push did. */
+/** "Review": every file the Worktree's PR would change, committed or not. */
+export interface Review {
+  /** null when HEAD is detached. */
+  branch: string | null;
+  base: string;
+  /** Where the branch split from its Base: what each file's diff runs from. */
+  split: string;
+  files: ReviewFile[];
+  /** The branch's commits since the split, oldest first. */
+  commits: string[];
+  /** Files with changes not committed yet (committed on Create PR). */
+  uncommitted: number;
+  operationInProgress: boolean;
+  /** The remote the branch is pushed to, and its branches (without `<remote>/`). */
+  remote: string;
+  targets: string[];
+  /** The branch the PR goes into unless another is chosen ("" if none could be told). */
+  target: string;
+}
+
+export interface ReviewFile {
+  path: string;
+  change: BaseChange["change"];
+  renamedFrom: string | null;
+  uncommitted: boolean;
+}
+
+export interface PullRequestRequest {
+  target: string;
+  title: string;
+  body: string;
+  commitMessage: string;
+  draft: boolean;
+  evenIfWorking?: boolean;
+}
+
+export type PullRequestOutcome =
+  | { kind: "sessionsWorking"; sessions: string[] }
+  | { kind: "created"; url: string; committed: string | null }
+  /** The branch already had an open PR: the push updated it. */
+  | { kind: "alreadyOpen"; url: string; committed: string | null }
+  | { kind: "pushRejected"; committed: string | null };
+
 export type PushOutcome =
   | { kind: "pushed"; to: string }
   /** The remote has commits this branch hasn't. */
@@ -671,6 +714,14 @@ export const core = {
   /** One file's working change: staged (HEAD to the index) or not (the index to the file on disk). */
   diffWorking: (worktree: string, file: BaseChange, staged: boolean) =>
     invoke<DiffLine[]>("diff_working", { worktree, path: file.path, renamedFrom: file.renamedFrom, change: file.change, staged }),
+  /** Everything the Worktree's PR would change (committed or not), its commits and targets. */
+  review: (worktree: string) => invoke<Review>("review", { worktree }),
+  /** One file's change in the review: from the split to the file on disk. */
+  reviewDiff: (worktree: string, split: string, file: ReviewFile) =>
+    invoke<DiffLine[]>("review_diff", { worktree, split, path: file.path, renamedFrom: file.renamedFrom, change: file.change }),
+  /** Commits what's left, pushes, and opens the PR with the GitHub CLI (assigned to the user). */
+  createPullRequest: (worktree: string, request: PullRequestRequest) =>
+    invoke<PullRequestOutcome>("create_pull_request", { worktree, request }),
   /** Aborts the merge, rebase, cherry-pick or revert in progress. */
   abortOperation: (worktree: string) => invoke<void>("abort_operation", { worktree }),
   /** Throws away every change to the file (ask first). */

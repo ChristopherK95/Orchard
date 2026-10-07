@@ -81,6 +81,10 @@ _Avoid_: Console, integrated terminal
 A named list of commands in the repo's settings, run on demand in a Worktree (from Ctrl+P): each command is typed into a new shell of the Terminal panel, named after the Action (or after the command, when it has several), so its output stays in view and it can be stopped or rerun there. Running the Action again restarts its shells in that Worktree; one of them can be restarted alone from the panel.
 _Avoid_: Task, script, run configuration
 
+**Review**:
+Going through everything a Worktree's pull request would bring, file by file (committed or not, new files too, from where its branch split from its Base), marking each viewed, and then opening the PR: what isn't committed yet is committed, the branch is pushed, and the PR is opened into the chosen branch with the user as assignee.
+_Avoid_: Code review (that's what happens on the PR afterwards), diff view
+
 **Agent**:
 The coding-agent program driving an Agent session. Claude Code first; others may be supported later behind the same boundary.
 

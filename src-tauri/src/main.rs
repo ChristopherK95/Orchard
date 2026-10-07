@@ -897,6 +897,48 @@ async fn diff_vs_base(
     .map_err(|e| e.to_string())
 }
 
+/// "Review": every file the Worktree's PR would change (committed or not), its commits, and the
+/// branches it could go into.
+#[tauri::command]
+async fn review(core: State<'_, Core>, worktree: String) -> CommandResult<editor_core::Review> {
+    core.review(worktree.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// One file's change in the review: from the split (as the review gave it) to the file on disk.
+#[tauri::command]
+async fn review_diff(
+    core: State<'_, Core>,
+    worktree: String,
+    split: String,
+    path: String,
+    renamed_from: Option<String>,
+    change: editor_core::ChangeKind,
+) -> CommandResult<Vec<editor_core::DiffLine>> {
+    core.review_diff(
+        worktree.as_ref(),
+        &split,
+        &path,
+        renamed_from.as_deref(),
+        change,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// "Create PR": commits what's left, pushes, and opens the PR with the GitHub CLI.
+#[tauri::command]
+async fn create_pull_request(
+    core: State<'_, Core>,
+    worktree: String,
+    request: editor_core::PullRequestRequest,
+) -> CommandResult<editor_core::PullRequestOutcome> {
+    core.create_pull_request(worktree.as_ref(), request)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// One file's working change: staged (HEAD to the index) or not (the index to the file on disk).
 #[tauri::command]
 async fn diff_working(
@@ -1313,6 +1355,9 @@ fn main() {
             set_base,
             diff_vs_base,
             diff_working,
+            review,
+            review_diff,
+            create_pull_request,
             set_permission_mode,
             transcript_page_before,
             notify_session,

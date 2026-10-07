@@ -219,7 +219,7 @@ const SHELL_ENV_TIMEOUT: Duration = Duration::from_secs(10);
 /// once. Started from the desktop, Orchard lacks what the shell's profile adds: a version manager's
 /// `node` first on `PATH` (nvm, fnm, mise), say. Empty if the shell couldn't report it.
 #[cfg(unix)]
-async fn shell_env() -> &'static [(OsString, OsString)] {
+pub(crate) async fn shell_env() -> &'static [(OsString, OsString)] {
     static ENV: tokio::sync::OnceCell<Vec<(OsString, OsString)>> =
         tokio::sync::OnceCell::const_new();
     ENV.get_or_init(|| async {

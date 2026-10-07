@@ -32,6 +32,7 @@ use crate::git_status::{
 };
 use crate::merged::{self, WorktreeMerge};
 use crate::permissions;
+use crate::pull_request::{PullRequestOutcome, PullRequestRequest, Review, ReviewFile};
 use crate::remove_worktree::{self, RemovalCheck, RemoveWorktree, RemovedWorktree};
 use crate::session::{
     PermissionMode, PermissionOutcome, SessionId, SessionInfo, SessionState, Transcript,
@@ -197,6 +198,8 @@ pub struct CoreConfig {
     pub clock: Option<Arc<dyn Clock>>,
     /// How Worktrees' files are watched (ticket 13).
     pub file_watch: FileWatchConfig,
+    /// The GitHub CLI that opens pull requests; `None` runs `gh` from `PATH`.
+    pub gh: Option<PathBuf>,
 }
 
 impl CoreConfig {
@@ -209,6 +212,7 @@ impl CoreConfig {
             memory_probe: None,
             clock: None,
             file_watch: FileWatchConfig::default(),
+            gh: None,
         }
     }
 }
@@ -2536,6 +2540,188 @@ impl Core {
             Ok(workspace) => (git::default_start_point(&workspace.root).await, true),
             Err(_) => ("HEAD".into(), true),
         }
+    }
+
+    /// "Review" (ticket 42): every file the Worktree's PR would change, from where its branch split
+    /// from its Base to the files on disk (uncommitted and untracked ones too), with its commits
+    /// and the branches the PR could go into.
+    pub async fn review(&self, worktree: &Path) -> Result<Review, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let (base, _) = self.base_of(&worktree).await;
+        if !git::is_commit(&worktree, &base).await {
+            return Err(CoreError::UnknownBase(base));
+        }
+        let split = git::merge_base(&worktree, &base)
+            .await
+            .map_err(CoreError::Git)?;
+        let status = git::status(&worktree).await.map_err(CoreError::Git)?;
+        let files = git::changes_to_disk(&worktree, &split)
+            .await
+            .map_err(CoreError::Git)?
+            .into_iter()
+            .map(|(letter, path, renamed_from)| ReviewFile {
+                uncommitted: status
+                    .files
+                    .iter()
+                    .any(|f| f.path == path || renamed_from.as_deref() == Some(f.path.as_str())),
+                change: ChangeKind::from_letter(letter),
+                path,
+                renamed_from,
+            })
+            .collect();
+        let remote = match &status.branch {
+            Some(branch) => git::push_remote(&worktree, branch).await,
+            None => "origin".to_owned(),
+        };
+        let branches = git::branches(&worktree).await.map_err(CoreError::Git)?;
+        let targets: Vec<String> = branches
+            .iter()
+            .filter(|b| b.remote)
+            .filter_map(|b| crate::pull_request::on_remote(&b.name, &remote))
+            .filter(|b| status.branch.as_deref() != Some(*b))
+            .map(str::to_owned)
+            .collect();
+        // The Base's branch on the remote, else the remote's default branch.
+        let default = match self.workspace() {
+            Ok(workspace) => git::default_start_point(&workspace.root).await,
+            Err(_) => String::new(),
+        };
+        let target = [base.as_str(), default.as_str()]
+            .into_iter()
+            .find_map(|b| {
+                let name = crate::pull_request::on_remote(b, &remote).unwrap_or(b);
+                targets.iter().find(|t| *t == name).cloned()
+            })
+            .or_else(|| {
+                targets
+                    .iter()
+                    .find(|t| *t == "main" || *t == "master")
+                    .cloned()
+            })
+            .unwrap_or_default();
+        Ok(Review {
+            commits: git::subjects_since(&worktree, &split).await,
+            uncommitted: status.files.len() as u32,
+            operation_in_progress: status.operation.is_some(),
+            branch: status.branch,
+            base,
+            split,
+            files,
+            remote,
+            targets,
+            target,
+        })
+    }
+
+    /// One file's change in the review: from its text at `split` (under `renamed_from`, for a
+    /// rename) to the file on disk. `change` says which side has no file.
+    pub async fn review_diff(
+        &self,
+        worktree: &Path,
+        split: &str,
+        path: &str,
+        renamed_from: Option<&str>,
+        change: ChangeKind,
+    ) -> Result<Vec<crate::session::DiffLine>, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let relative = Path::new(path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(CoreError::File(format!("{path} isn't in the Worktree")));
+        }
+        let before = git::file_at(&worktree, split, renamed_from.unwrap_or(path)).await;
+        let on_disk = worktree.join(relative);
+        let after = tokio::task::spawn_blocking(move || std::fs::read(on_disk))
+            .await
+            .ok()
+            .and_then(Result::ok);
+        text_diff(path, before, after, change)
+    }
+
+    /// "Create PR": commits whatever isn't committed yet (all of it, untracked files too) with the
+    /// request's commit message, pushes the branch, and opens a PR from it into `target` with the
+    /// GitHub CLI, assigned to whoever it's logged in as. Asks first (doing nothing) while a session
+    /// in the Worktree is Working, unless told to go ahead.
+    pub async fn create_pull_request(
+        &self,
+        worktree: &Path,
+        request: PullRequestRequest,
+    ) -> Result<PullRequestOutcome, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let target = request.target.trim();
+        let title = request.title.trim();
+        if target.is_empty() {
+            return Err(CoreError::Git("Choose the branch the PR goes into.".into()));
+        }
+        if title.is_empty() {
+            return Err(CoreError::Git("A PR needs a title.".into()));
+        }
+        let Some(branch) = git::current_branch(&worktree).await else {
+            return Err(CoreError::Git(
+                "HEAD is detached: check out a branch to make a PR from.".into(),
+            ));
+        };
+        if branch == target {
+            return Err(CoreError::Git(format!(
+                "This Worktree is on {target} itself: a PR needs a branch of its own."
+            )));
+        }
+        if !request.even_if_working {
+            let working = self.mid_turn(&worktree);
+            if !working.is_empty() {
+                return Ok(PullRequestOutcome::SessionsWorking { sessions: working });
+            }
+        }
+        let status = git::status(&worktree).await.map_err(CoreError::Git)?;
+        if status.operation.is_some() || status.files.iter().any(|f| f.conflicted) {
+            return Err(CoreError::Git(
+                "A merge or rebase is in progress here: finish or abort it first.".into(),
+            ));
+        }
+        let committed = if status.files.is_empty() {
+            None
+        } else {
+            let message = match request.commit_message.trim() {
+                "" => title,
+                message => message,
+            };
+            let made = async {
+                git::stage_all(&worktree).await?;
+                git::commit(&worktree, message, false).await
+            }
+            .await;
+            self.inner.status_due(worktree.clone());
+            Some(made.map_err(CoreError::Git)?)
+        };
+        let _one_at_a_time = self.inner.remote_op.lock().await;
+        let pushed = git::push(&worktree).await;
+        self.inner.git_changed(worktree.clone());
+        if pushed.map_err(CoreError::Git)? == PushOutcome::Rejected {
+            return Ok(PullRequestOutcome::PushRejected { committed });
+        }
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let opened = crate::pull_request::create(
+            &gh,
+            &worktree,
+            &branch,
+            target,
+            title,
+            &request.body,
+            request.draft,
+        )
+        .await
+        .map_err(CoreError::Git)?;
+        Ok(match opened {
+            crate::pull_request::Opened::Created(url) => {
+                PullRequestOutcome::Created { url, committed }
+            }
+            crate::pull_request::Opened::AlreadyOpen(url) => {
+                PullRequestOutcome::AlreadyOpen { url, committed }
+            }
+        })
     }
 
     /// Aborts the merge, rebase, cherry-pick or revert in progress in the Worktree.

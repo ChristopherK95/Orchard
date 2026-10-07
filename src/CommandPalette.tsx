@@ -10,6 +10,7 @@ export type PaletteCommand =
   | { kind: "newSessionHere" }
   | { kind: "newSessionInFreshWorktree" }
   | { kind: "switchWorkspace" }
+  | { kind: "review" }
   | { kind: "runAction"; name: string };
 
 type Item = { kind: "command"; command: PaletteCommand; label: string } | { kind: "file"; file: FileMatch };
@@ -17,6 +18,7 @@ type Item = { kind: "command"; command: PaletteCommand; label: string } | { kind
 const COMMANDS: { command: PaletteCommand; label: string }[] = [
   { command: { kind: "newSessionInFreshWorktree" }, label: "New Agent session in a fresh worktree" },
   { command: { kind: "newSessionHere" }, label: "New Agent session in this worktree" },
+  { command: { kind: "review" }, label: "Review changes and create PR" },
   { command: { kind: "switchWorkspace" }, label: "Switch repository… (Ctrl+Shift+O)" },
 ];
 

@@ -1067,7 +1067,7 @@ pub(crate) async fn fetch(worktree: &Path) -> Result<(), String> {
 }
 
 /// The checked-out branch, if HEAD isn't detached.
-async fn current_branch(worktree: &Path) -> Option<String> {
+pub(crate) async fn current_branch(worktree: &Path) -> Option<String> {
     let out = output(worktree, &["symbolic-ref", "--quiet", "--short", "HEAD"]).await?;
     Some(out.trim().to_owned()).filter(|b| !b.is_empty())
 }
@@ -1079,7 +1079,7 @@ async fn config(worktree: &Path, key: &str) -> Option<String> {
 
 /// The remote a branch pushes to: its `pushRemote`, the repo's `pushDefault`, the remote it tracks,
 /// the only remote there is, or `origin`.
-async fn push_remote(worktree: &Path, branch: &str) -> String {
+pub(crate) async fn push_remote(worktree: &Path, branch: &str) -> String {
     for key in [
         format!("branch.{branch}.pushRemote"),
         "remote.pushDefault".to_owned(),
@@ -1195,19 +1195,44 @@ pub(crate) async fn changes_since(
     worktree: &Path,
     split: &str,
 ) -> Result<Vec<(char, String, Option<String>)>, String> {
-    let out = run(
+    name_status(worktree, &[split, "HEAD"]).await
+}
+
+/// What the branch and its uncommitted work change since `split`: to the files on disk, untracked
+/// ones (that git doesn't ignore) included, as `changes_since` gives them.
+pub(crate) async fn changes_to_disk(
+    worktree: &Path,
+    split: &str,
+) -> Result<Vec<(char, String, Option<String>)>, String> {
+    let mut changes = name_status(worktree, &[split]).await?;
+    let untracked = run(
         worktree,
-        &[
-            "diff",
-            "--name-status",
-            "-z",
-            "--find-renames",
-            "--no-ext-diff",
-            split,
-            "HEAD",
-        ],
+        &["ls-files", "--others", "--exclude-standard", "-z"],
     )
     .await?;
+    changes.extend(
+        untracked
+            .split('\0')
+            .filter(|p| !p.is_empty())
+            .map(|p| ('A', p.to_owned(), None)),
+    );
+    Ok(changes)
+}
+
+/// `git diff --name-status` between `revs` (one: to the files on disk), renames found.
+async fn name_status(
+    worktree: &Path,
+    revs: &[&str],
+) -> Result<Vec<(char, String, Option<String>)>, String> {
+    let mut args = vec![
+        "diff",
+        "--name-status",
+        "-z",
+        "--find-renames",
+        "--no-ext-diff",
+    ];
+    args.extend(revs);
+    let out = run(worktree, &args).await?;
     let mut entries = out.split('\0').filter(|e| !e.is_empty());
     let mut changes = vec![];
     while let Some(status) = entries.next() {
@@ -1222,6 +1247,17 @@ pub(crate) async fn changes_since(
         changes.push((letter, path, from));
     }
     Ok(changes)
+}
+
+/// The subjects of the commits HEAD has since `split`, oldest first.
+pub(crate) async fn subjects_since(worktree: &Path, split: &str) -> Vec<String> {
+    let range = format!("{split}..HEAD");
+    output(worktree, &["log", "--reverse", "--format=%s", &range])
+        .await
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
 }
 
 /// A file's bytes at `rev` (None if it isn't there).
