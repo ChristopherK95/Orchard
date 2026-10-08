@@ -14,7 +14,26 @@ use crate::create_worktree::BranchInfo;
 use crate::remove_worktree::CommitSummary;
 
 fn git(cwd: &Path) -> Command {
+    configure(crate::process::command("git"), cwd)
+}
+
+/// `git` for a command that runs the repository's hooks or a credential helper (commit, push,
+/// fetch): on Unix with the login shell's environment (`setup::shell_env`). Started from the
+/// desktop, Orchard's own `PATH` may lead to another `node` than the user's version manager's,
+/// and a `pre-push` running `pnpm lint` then fails on the project's `engines`.
+async fn git_with_profile(cwd: &Path) -> Command {
     let mut cmd = crate::process::command("git");
+    #[cfg(unix)]
+    cmd.envs(
+        crate::setup::shell_env()
+            .await
+            .iter()
+            .map(|(key, value)| (key, value)),
+    );
+    configure(cmd, cwd)
+}
+
+fn configure(mut cmd: Command, cwd: &Path) -> Command {
     cmd.current_dir(cwd)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -935,7 +954,7 @@ pub(crate) async fn commit(
         args.extend(["-m", message]);
     }
     // (A hook or a signing prompt that never finishes: given up on, and the drawer is usable again.)
-    let mut cmd = git(worktree);
+    let mut cmd = git_with_profile(worktree).await;
     cmd.args(&args)
         .kill_on_drop(true)
         .stdout(std::process::Stdio::piped())
@@ -1042,7 +1061,7 @@ async fn run_remote(
     args: &[&str],
     sink: Option<crate::process::Sink<'_>>,
 ) -> Result<String, String> {
-    let mut cmd = git(worktree);
+    let mut cmd = git_with_profile(worktree).await;
     // (Nobody's askpass either: a terminal's, VS Code's, inherited from wherever the editor started.)
     cmd.args(["-c", "core.askPass="])
         .args(args)
@@ -1051,7 +1070,11 @@ async fn run_remote(
         .env("GCM_INTERACTIVE", "never")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    let own_ssh = std::env::var_os("GIT_SSH_COMMAND").is_some()
+    let own_ssh = ["GIT_SSH_COMMAND", "GIT_SSH"].iter().any(|key| {
+        cmd.as_std()
+            .get_envs()
+            .any(|(k, v)| k == *key && v.is_some())
+    }) || std::env::var_os("GIT_SSH_COMMAND").is_some()
         || std::env::var_os("GIT_SSH").is_some()
         || output(worktree, &["config", "core.sshCommand"])
             .await
