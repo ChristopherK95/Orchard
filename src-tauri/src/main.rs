@@ -462,6 +462,55 @@ async fn attach_data(
         .map_err(|e| e.to_string())
 }
 
+/// The image on the clipboard, attached to the next prompt; `None` if there's no image. For a paste
+/// whose image the webview didn't hand the page (WebKitGTK doesn't, for one copied from another app).
+#[tauri::command]
+async fn attach_clipboard_image(
+    app: AppHandle,
+    core: State<'_, Core>,
+    session_id: SessionId,
+) -> CommandResult<Option<Attachment>> {
+    let Some((mime_type, bytes)) = clipboard_image(&app).await else {
+        return Ok(None);
+    };
+    core.attach_bytes(session_id, "pasted image", Some(mime_type), bytes)
+        .await
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+/// The image on the clipboard and its type: as copied, if it's a type the Agent takes, else
+/// converted to PNG.
+#[cfg(target_os = "linux")]
+async fn clipboard_image(app: &AppHandle) -> Option<(&'static str, Vec<u8>)> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    // GTK is only used on its main thread.
+    app.run_on_main_thread(move || {
+        let clipboard = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
+        let targets = clipboard.wait_for_targets().unwrap_or_default();
+        let as_copied = ["image/png", "image/jpeg", "image/gif", "image/webp"]
+            .into_iter()
+            .find(|mime| targets.iter().any(|t| t.name() == *mime))
+            .and_then(|mime| {
+                let data = clipboard.wait_for_contents(&gtk::gdk::Atom::intern(mime))?.data();
+                (!data.is_empty()).then_some((mime, data))
+            });
+        let image = as_copied.or_else(|| {
+            let png = clipboard.wait_for_image()?.save_to_bufferv("png", &[]).ok()?;
+            Some(("image/png", png))
+        });
+        let _ = tx.send(image);
+    })
+    .ok()?;
+    rx.await.ok().flatten()
+}
+
+/// Elsewhere the webview hands the page a pasted image itself.
+#[cfg(not(target_os = "linux"))]
+async fn clipboard_image(_app: &AppHandle) -> Option<(&'static str, Vec<u8>)> {
+    None
+}
+
 /// A Manual editor in the calling window opened a file.
 #[tauri::command]
 async fn document_opened(
@@ -1429,6 +1478,7 @@ fn main() {
             cancel_turn,
             attach_file,
             attach_data,
+            attach_clipboard_image,
             sessions,
             show_worktree,
             find_files,

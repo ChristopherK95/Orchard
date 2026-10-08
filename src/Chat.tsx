@@ -281,9 +281,19 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
   const onPaste = (e: ClipboardEvent) => {
     const files = [...(e.clipboardData?.files ?? [])];
     // (Text that comes with a picture of itself, from an office app say, is pasted as text.)
-    if (!files.length || e.clipboardData?.getData("text/plain")) return;
+    if (e.clipboardData?.getData("text/plain")) return;
     e.preventDefault();
-    void attach(files.map((file) => async () => core.attachData(props.session.id, file.name || "pasted image", file.type || null, await base64(file))));
+    if (files.length) {
+      void attach(files.map((file) => async () => core.attachData(props.session.id, file.name || "pasted image", file.type || null, await base64(file))));
+      return;
+    }
+    // Nothing the page can read (WebKitGTK doesn't hand it an image copied from another app): the
+    // image, if there is one, is read off the clipboard natively.
+    setError("");
+    void core
+      .attachClipboardImage(props.session.id)
+      .then((image) => image && setAttachments([...attachments(), image]))
+      .catch((err) => setError(String(err)));
   };
   // Files dropped on the composer (the webview reports drops itself, with their paths).
   const [dropping, setDropping] = createSignal(false);

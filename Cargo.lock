@@ -2589,6 +2589,7 @@ name = "orchard"
 version = "0.2.5"
 dependencies = [
  "editor-core",
+ "gtk",
  "notify-rust",
  "serde",
  "serde_json",

@@ -826,6 +826,8 @@ export const core = {
   /** Something pasted (base64), to attach to the next prompt. */
   attachData: (sessionId: SessionId, name: string, mimeType: string | null, data: string) =>
     invoke<Attachment>("attach_data", { sessionId, name, mimeType, data }),
+  /** The image on the clipboard, to attach to the next prompt (`null` if there's none): for a paste the webview didn't hand the page. */
+  attachClipboardImage: (sessionId: SessionId) => invoke<Attachment | null>("attach_clipboard_image", { sessionId }),
   /** Stops an Idle session's Agent process to free memory; the conversation stays. */
   suspendSession: (sessionId: SessionId) => invoke<void>("suspend_session", { sessionId }),
   /** Brings a Suspended or Exited session back. */

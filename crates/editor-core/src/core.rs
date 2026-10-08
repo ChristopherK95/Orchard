@@ -3683,6 +3683,17 @@ impl Core {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(data)
             .map_err(|_| CoreError::Attachment(format!("{name}: couldn't read it")))?;
+        self.attach_bytes(id, name, mime_type, bytes).await
+    }
+
+    /// `attach_data` for contents already at hand (an image the shell read off the clipboard).
+    pub async fn attach_bytes(
+        &self,
+        id: SessionId,
+        name: &str,
+        mime_type: Option<&str>,
+        bytes: Vec<u8>,
+    ) -> Result<Attachment, CoreError> {
         self.attachment(id, name, None, mime_type, bytes).await
     }
 
