@@ -108,7 +108,8 @@ export function Dashboard(props: {
   };
   const needYou = () => props.sessions.filter((s) => s.state === "needsYou");
   const openPrs = () => myPrs.prs().filter((p) => p.state === "open");
-  const count = (state: SessionInfo["state"]) => props.sessions.filter((s) => s.state === state).length;
+  // A suspended session counts as Idle, as in the sidebar: it's only been put to sleep while idle.
+  const count = (...states: SessionInfo["state"][]) => props.sessions.filter((s) => states.includes(s.state)).length;
 
   return (
     <section class="board dashboard" style={{ top: `${props.top}px` }}>
@@ -224,7 +225,7 @@ export function Dashboard(props: {
             </span>
             <span class="dashboard-count">
               <StateDot state="idle" />
-              {count("idle")} Idle
+              {count("idle", "suspended")} Idle
             </span>
           </p>
         </Section>
