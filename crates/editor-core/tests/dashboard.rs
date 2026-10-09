@@ -185,3 +185,37 @@ esac"#,
         ["run", "view", "55", "--job", "777", "--log-failed"]
     );
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn review_threads_are_asked_of_gh_with_their_resolved_state() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let gh = FakeGh::new(
+        r#"case "$1 $2" in
+"pr view") cat <<'JSON'
+{"title":"Fix the parser","reviews":[
+  {"author":{"login":"ann"},"state":"CHANGES_REQUESTED","body":"Split it up.","submittedAt":"2026-10-08T12:00:00Z"}]}
+JSON
+;;
+"api graphql") cat <<'JSON'
+{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
+  {"isResolved":false,"path":"src/parse.rs","line":7,"originalLine":7,
+   "comments":{"nodes":[{"author":{"login":"ann"},"body":"Why a loop here?"}]}}]}}}}}
+JSON
+;;
+esac"#,
+    );
+    let core = core_with_gh(&fake, &gh);
+    let root = core.open_workspace(&setup.repo()).await.unwrap().root;
+
+    let prompt = core.review_feedback_prompt(&root, 12).await.unwrap();
+    assert!(prompt.contains("Split it up."), "{prompt}");
+    assert!(prompt.contains("src/parse.rs:7"), "{prompt}");
+    assert!(prompt.contains("Why a loop here?"), "{prompt}");
+    // (The fake keeps the last call's arguments: the threads'.)
+    let args = gh.args();
+    assert_eq!(&args[..2], ["api", "graphql"], "{args:?}");
+    assert!(args.iter().any(|a| a == "number=12"), "{args:?}");
+    assert!(args.iter().any(|a| a.contains("isResolved")), "{args:?}");
+}

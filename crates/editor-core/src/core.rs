@@ -2923,6 +2923,49 @@ impl Core {
             .map_err(|e: String| CoreError::Git(not_about_creating(e)))
     }
 
+    /// The prompt that starts an Agent session on PR `number`'s review feedback: the reviews that
+    /// request changes (`gh pr view --json reviews`) and the review threads on its code that aren't
+    /// resolved (`gh api graphql`), with file and line.
+    pub async fn review_feedback_prompt(
+        &self,
+        worktree: &Path,
+        number: u64,
+    ) -> Result<String, CoreError> {
+        use crate::pull_request::{gh_text, not_about_creating};
+        let worktree = self.known_worktree(worktree)?;
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let read = async {
+            let pr = number.to_string();
+            let viewed = gh_text(
+                &gh,
+                &worktree,
+                &["pr", "view", &pr, "--json", "title,reviews"],
+            )
+            .await?;
+            let (title, reviews) = dashboard::titled_reviews(&viewed)?;
+            let number_field = format!("number={number}");
+            let query = format!("query={}", dashboard::THREAD_QUERY);
+            let args = [
+                "api",
+                "graphql",
+                "-F",
+                "owner={owner}",
+                "-F",
+                "name={repo}",
+                "-F",
+                &number_field,
+                "-f",
+                &query,
+            ];
+            let threads = dashboard::unresolved_threads(&gh_text(&gh, &worktree, &args).await?)?;
+            Ok(dashboard::review_feedback_text(
+                number, &title, &reviews, &threads,
+            ))
+        };
+        read.await
+            .map_err(|e: String| CoreError::Git(not_about_creating(e)))
+    }
+
     /// "Push", for a branch whose PR is already open: commits whatever isn't committed yet with
     /// `commit_message` and pushes, telling `progress` as it goes. Asks first (doing nothing) while
     /// a session in the Worktree is Working, unless `even_if_working`.

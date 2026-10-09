@@ -176,7 +176,7 @@ Checkpoint:
 - Commit: `Dashboard: a prompt for a PR's failing checks`
 
 ## Task 5: Prompt for review feedback
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 4
 Files:

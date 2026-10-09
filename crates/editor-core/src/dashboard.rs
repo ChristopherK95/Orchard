@@ -1,12 +1,13 @@
 //! The Dashboard (issue 43): what it shows that the core works out — the Worktrees that need
-//! attention, and why, and the reviews requested from the user.
+//! attention, and why, and the reviews requested from the user — and the prompts that start an
+//! Agent session on a PR with failing checks or review feedback.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::git_status::{GitOperation, GitStatus};
-use crate::pull_request::{latest_checks, Check, Status};
+use crate::pull_request::{latest_checks, Check, Status, SubmittedReview};
 
 /// A Worktree of the Workspace (the main checkout too) that needs attention, with every reason.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -280,6 +281,180 @@ pub(crate) fn failing_check_text(
     text
 }
 
+/// A review thread on a PR's code that isn't resolved: where it is, and what's been said, in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReviewThread {
+    pub(crate) path: String,
+    /// The line it's on now, else (outdated) the one it was made on.
+    pub(crate) line: Option<u64>,
+    /// Who said what.
+    pub(crate) comments: Vec<(String, String)>,
+}
+
+/// What `gh api graphql` is asked for a PR's review threads (`$owner`, `$name`, `$number`).
+pub(crate) const THREAD_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100) {
+        nodes { isResolved path line originalLine comments(first: 50) { nodes { author { login } body } } }
+      }
+    }
+  }
+}";
+
+/// Reads `THREAD_QUERY`'s answer: the threads not resolved.
+pub(crate) fn unresolved_threads(stdout: &str) -> Result<Vec<ReviewThread>, String> {
+    #[derive(Deserialize)]
+    struct Answer {
+        data: Data,
+    }
+    #[derive(Deserialize)]
+    struct Data {
+        repository: Repository,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Repository {
+        pull_request: PullRequest,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PullRequest {
+        review_threads: Nodes<Thread>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Thread {
+        is_resolved: bool,
+        path: String,
+        line: Option<u64>,
+        original_line: Option<u64>,
+        #[serde(default)]
+        comments: Nodes<Comment>,
+    }
+    #[derive(Deserialize)]
+    struct Comment {
+        author: Option<Login>,
+        #[serde(default)]
+        body: String,
+    }
+    let answer: Answer = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("gh said something unexpected: {e}"))?;
+    Ok(answer
+        .data
+        .repository
+        .pull_request
+        .review_threads
+        .nodes
+        .into_iter()
+        .filter(|t| !t.is_resolved)
+        .map(|t| ReviewThread {
+            path: t.path,
+            line: t.line.or(t.original_line),
+            comments: t
+                .comments
+                .nodes
+                .into_iter()
+                .map(|c| {
+                    let author = c.author.and_then(|a| a.login);
+                    (author.unwrap_or_else(|| "ghost".into()), c.body)
+                })
+                .collect(),
+        })
+        .collect())
+}
+
+/// Reads `gh pr view --json title,reviews`: the PR's title and every review submitted.
+pub(crate) fn titled_reviews(stdout: &str) -> Result<(String, Vec<SubmittedReview>), String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Viewed {
+        #[serde(default)]
+        title: String,
+        #[serde(default)]
+        reviews: Vec<Reviewed>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Reviewed {
+        author: Option<Login>,
+        state: String,
+        #[serde(default)]
+        body: String,
+        #[serde(default)]
+        submitted_at: Option<String>,
+    }
+    let pr: Viewed = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("gh said something unexpected: {e}"))?;
+    let reviews = pr
+        .reviews
+        .into_iter()
+        .map(|r| SubmittedReview {
+            author: r
+                .author
+                .and_then(|a| a.login)
+                .unwrap_or_else(|| "ghost".into()),
+            state: r.state,
+            body: r.body,
+            submitted_at: r.submitted_at.unwrap_or_default(),
+        })
+        .collect();
+    Ok((pr.title, reviews))
+}
+
+/// The prompt that starts an Agent session on a PR's review feedback: the body of each reviewer's
+/// latest review that requests changes (a later approval or dismissal answers it; a comment
+/// doesn't), then each unresolved thread on its code with its file and line.
+pub(crate) fn review_feedback_text(
+    number: u64,
+    title: &str,
+    reviews: &[SubmittedReview],
+    threads: &[ReviewThread],
+) -> String {
+    let mut latest: Vec<&SubmittedReview> = vec![];
+    let mut in_order: Vec<&SubmittedReview> = reviews
+        .iter()
+        .filter(|r| {
+            matches!(
+                r.state.as_str(),
+                "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"
+            )
+        })
+        .collect();
+    in_order.sort_by(|a, b| a.submitted_at.cmp(&b.submitted_at));
+    for review in in_order {
+        match latest.iter_mut().find(|r| r.author == review.author) {
+            Some(earlier) => *earlier = review,
+            None => latest.push(review),
+        }
+    }
+    let mut text = format!(
+        "PR #{number} ({title}) has review feedback. Address each point below: make the change \
+         asked for, or say why not.\n"
+    );
+    for review in latest {
+        if review.state != "CHANGES_REQUESTED" || review.body.trim().is_empty() {
+            continue;
+        }
+        text.push_str(&format!(
+            "\n## {} requested changes\n\n{}\n",
+            review.author,
+            review.body.trim()
+        ));
+    }
+    for thread in threads {
+        let place = match thread.line {
+            Some(line) => format!("{}:{line}", thread.path),
+            None => thread.path.clone(),
+        };
+        text.push_str(&format!("\n## {place}\n"));
+        for (author, body) in &thread.comments {
+            text.push_str(&format!("\n{author}:\n{}\n", body.trim()));
+        }
+    }
+    text
+}
+
 /// `body` in a fenced block, its fence longer than any run of backticks in it.
 fn fenced(text: &mut String, body: &str) {
     let longest = body.split(|c| c != '`').map(str::len).max().unwrap_or(0);
@@ -438,5 +613,68 @@ mod tests {
         assert!(!prompt.contains("line 50\n"), "{prompt}");
         assert!(prompt.contains("CI / external"), "{prompt}");
         assert!(prompt.contains("https://example.com/external"), "{prompt}");
+    }
+
+    #[test]
+    fn feedback_prompt_has_change_requests_and_unresolved_threads_only() {
+        let review = |author: &str, state: &str, body: &str, at: &str| SubmittedReview {
+            author: author.into(),
+            state: state.into(),
+            body: body.into(),
+            submitted_at: at.into(),
+        };
+        let reviews = [
+            review(
+                "ann",
+                "CHANGES_REQUESTED",
+                "Split the parser up.",
+                "2026-10-01T00:00:00Z",
+            ),
+            review(
+                "bob",
+                "APPROVED",
+                "Looks fine to me.",
+                "2026-10-02T00:00:00Z",
+            ),
+            review(
+                "cy",
+                "CHANGES_REQUESTED",
+                "Rename everything.",
+                "2026-10-03T00:00:00Z",
+            ),
+            review(
+                "ann",
+                "COMMENTED",
+                "One more thing.",
+                "2026-10-04T00:00:00Z",
+            ),
+            review("cy", "APPROVED", "Fine now.", "2026-10-05T00:00:00Z"),
+        ];
+        let threads = unresolved_threads(
+            r#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
+                {"isResolved":true,"path":"src/old.rs","line":3,"originalLine":3,
+                 "comments":{"nodes":[{"author":{"login":"bob"},"body":"Done with this."}]}},
+                {"isResolved":false,"path":"src/parse.rs","line":null,"originalLine":42,
+                 "comments":{"nodes":[{"author":{"login":"ann"},"body":"Why a loop here?"},
+                                      {"author":{"login":"me"},"body":"It was quicker."}]}}
+            ]}}}}}"#,
+        )
+        .unwrap();
+        let prompt = review_feedback_text(12, "Fix the parser", &reviews, &threads);
+        assert!(prompt.contains("#12"), "{prompt}");
+        assert!(
+            prompt.contains("ann") && prompt.contains("Split the parser up."),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("Looks fine"), "{prompt}");
+        assert!(!prompt.contains("Rename everything"), "{prompt}");
+        assert!(!prompt.contains("Done with this"), "{prompt}");
+        assert!(!prompt.contains("src/old.rs"), "{prompt}");
+        assert!(prompt.contains("src/parse.rs:42"), "{prompt}");
+        let asked = prompt
+            .find("Why a loop here?")
+            .expect("the thread's first comment");
+        let answered = prompt.find("It was quicker.").expect("its reply");
+        assert!(asked < answered, "{prompt}");
     }
 }
