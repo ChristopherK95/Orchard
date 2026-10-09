@@ -5,7 +5,7 @@ Spec: `.scratch/agent-editor-build/issues/43-dashboard.md`. Glossary: `CONTEXT.m
 The core works out everything the Dashboard shows that isn't already in the frontend (ADR 0003): Worktree attention reasons, review requests, and the text of the "Start an Agent session" prompts. The frontend renders it and wires the view. Core tasks are test-first; the frontend has no test framework, so its tasks are verified by `pnpm typecheck` and a run of the app.
 
 ## Task 1: The `dashboard.openOnStart` setting
-Status: pending
+Status: completed
 Risk: low
 Dependencies: none
 Files:

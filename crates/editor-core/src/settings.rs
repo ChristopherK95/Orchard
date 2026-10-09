@@ -18,6 +18,7 @@ pub struct Settings {
     pub appearance: Appearance,
     pub editor: EditorSettings,
     pub notifications: Notifications,
+    pub dashboard: DashboardSettings,
     pub agents: AgentSettings,
     /// Per-repo settings, keyed by the repo's `origin` URL or its main checkout's path.
     pub repos: BTreeMap<String, RepoSettings>,
@@ -28,6 +29,22 @@ pub struct Settings {
 pub struct Notifications {
     /// Notify when a Tab you're not looking at finishes its turn (off by default).
     pub turn_finished: bool,
+}
+
+/// The Dashboard (issue 43).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
+pub struct DashboardSettings {
+    /// Show the Dashboard each time a Workspace opens in the window (on by default).
+    pub open_on_start: bool,
+}
+
+impl Default for DashboardSettings {
+    fn default() -> Self {
+        Self {
+            open_on_start: true,
+        }
+    }
 }
 
 /// Fonts (ticket 32).
@@ -182,6 +199,9 @@ pub enum SettingChange {
     TurnFinished {
         on: bool,
     },
+    DashboardOpenOnStart {
+        on: bool,
+    },
     MemoryLimitMb {
         mb: u64,
     },
@@ -248,6 +268,9 @@ impl SettingChange {
             Self::Ligatures { on } => (app("appearance"), "ligatures", Some(value(*on))),
             Self::Vim { on } => (app("editor"), "vim", Some(value(*on))),
             Self::TurnFinished { on } => (app("notifications"), "turn_finished", Some(value(*on))),
+            Self::DashboardOpenOnStart { on } => {
+                (app("dashboard"), "open_on_start", Some(value(*on)))
+            }
             Self::MemoryLimitMb { mb } => {
                 (app("agents"), "memory_limit_mb", Some(value(*mb as i64)))
             }
@@ -502,6 +525,10 @@ vim = false
 # Notify when a Tab you're not looking at finishes its turn.
 turn_finished = false
 
+[dashboard]
+# Show the Dashboard each time a repository opens.
+open_on_start = true
+
 [agents]
 # When the claude processes together use more than this (in MB; 0 = no limit), the
 # longest-Idle sessions are Suspended until they're under it.
@@ -645,6 +672,38 @@ mod tests {
             panic!()
         };
         assert_eq!(settings.appearance.code_font, None);
+    }
+
+    #[test]
+    fn dashboard_opens_on_start_unless_turned_off() {
+        let settings: Settings = toml::from_str("").unwrap();
+        assert!(settings.dashboard.open_on_start, "on by default");
+        let settings: Settings = toml::from_str("[dashboard]\nopen_on_start = false\n").unwrap();
+        assert!(!settings.dashboard.open_on_start);
+        assert!(toml::from_str::<Settings>("[dashboard]\nopen_on_strat = true").is_err());
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        std::fs::write(&path, "# mine\n[editor]\nvim = false\n").unwrap();
+        change(
+            &path,
+            None,
+            &SettingChange::DashboardOpenOnStart { on: false },
+        )
+        .unwrap();
+        let now = std::fs::read_to_string(&path).unwrap();
+        assert!(now.starts_with("# mine\n[editor]\nvim = false\n"), "{now}");
+        assert!(now.contains("[dashboard]\nopen_on_start = false"), "{now}");
+        let Read::Parsed(settings) = read(&path) else {
+            panic!("{now}")
+        };
+        assert!(!settings.dashboard.open_on_start);
+
+        let Ok(defaults) = toml::from_str::<Settings>(FILE_HEADER) else {
+            panic!("the default text doesn't parse")
+        };
+        assert!(defaults.dashboard.open_on_start);
+        assert!(FILE_HEADER.contains("[dashboard]\n"), "{FILE_HEADER}");
     }
 
     #[test]
