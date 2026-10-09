@@ -273,6 +273,7 @@ export interface Settings {
   appearance: Appearance;
   editor: { vim: boolean };
   notifications: { turnFinished: boolean };
+  dashboard: { openOnStart: boolean };
   agents: { memoryLimitMb: number; idleSuspend: boolean; idleSuspendMinutes: number };
 }
 
@@ -304,6 +305,7 @@ export type SettingChange =
   | { kind: "ligatures"; on: boolean }
   | { kind: "vim"; on: boolean }
   | { kind: "turnFinished"; on: boolean }
+  | { kind: "dashboardOpenOnStart"; on: boolean }
   | { kind: "memoryLimitMb"; mb: number }
   | { kind: "idleSuspend"; on: boolean }
   | { kind: "idleSuspendMinutes"; minutes: number }
@@ -530,6 +532,37 @@ export interface MyPullRequest {
   updatedAt: string;
   mergedAt: string | null;
   closedAt: string | null;
+}
+
+/** A Worktree (the main checkout too) that needs attention, with every reason, for the Dashboard. */
+export interface WorktreeAttention {
+  path: string;
+  /** null when HEAD is detached. */
+  branch: string | null;
+  reasons: AttentionReason[];
+}
+
+export type AttentionReason =
+  | { kind: "uncommitted"; files: number }
+  | { kind: "unpushed"; commits: number }
+  | { kind: "behind"; commits: number }
+  /** A branch with no upstream, and commits since its Base. */
+  | { kind: "noUpstream"; commits: number }
+  | { kind: "operation"; operation: "merge" | "rebase" | "cherryPick" | "revert" | "am" };
+
+/** An open, non-draft PR asking the user (not a team of theirs) for a review. */
+export interface ReviewRequest {
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  /** The branch it comes from. */
+  head: string;
+  checks: Check[];
+  /** When the user was last asked (null if GitHub doesn't say). */
+  requestedAt: string | null;
+  /** They've reviewed it before and are asked again. */
+  reRequested: boolean;
 }
 
 export type PullRequestStage = "draft" | "waitingForReview" | "changesRequested" | "checksFailing" | "approved" | "merged" | "closed";
@@ -883,6 +916,14 @@ export const core = {
     invoke<void>("rerun_checks", { worktree, run, job: job?.id ?? null, name: job?.name ?? null }),
   /** The user's PRs in the Worktree's repo: every open one, then the latest merged or closed. */
   myPullRequests: (worktree: string) => invoke<MyPullRequest[]>("my_pull_requests", { worktree }),
+  /** The Dashboard's Worktrees that need attention, main checkout first, each with every reason. */
+  worktreeAttention: () => invoke<WorktreeAttention[]>("worktree_attention"),
+  /** The open, non-draft PRs in the Worktree's repo asking the user for a review, most recently asked first. */
+  reviewRequests: (worktree: string) => invoke<ReviewRequest[]>("review_requests", { worktree }),
+  /** The prompt that starts an Agent session on PR `number`'s failing checks (with their logs' last lines). */
+  failingCheckPrompt: (worktree: string, number: number) => invoke<string>("failing_check_prompt", { worktree, number }),
+  /** The prompt that starts an Agent session on PR `number`'s requested changes and unresolved threads. */
+  reviewFeedbackPrompt: (worktree: string, number: number) => invoke<string>("review_feedback_prompt", { worktree, number }),
   /** Push for a branch whose PR is open: commits what's left with `commitMessage`, then pushes. */
   pushToPullRequest: (worktree: string, commitMessage: string, evenIfWorking: boolean, onProgress: (progress: PullRequestProgress) => void) => {
     const channel = new Channel<PullRequestProgress>();

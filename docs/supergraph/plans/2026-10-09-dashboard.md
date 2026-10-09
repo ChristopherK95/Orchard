@@ -216,7 +216,7 @@ Checkpoint:
 - Commit: `Dashboard: a prompt for a PR's review feedback`
 
 ## Task 6: Tauri commands and TypeScript bindings
-Status: pending
+Status: completed
 Risk: low
 Dependencies: Task 1, Task 2, Task 3, Task 4, Task 5
 Files:

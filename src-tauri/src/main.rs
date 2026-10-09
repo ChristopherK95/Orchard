@@ -492,11 +492,16 @@ async fn clipboard_image(app: &AppHandle) -> Option<(&'static str, Vec<u8>)> {
             .into_iter()
             .find(|mime| targets.iter().any(|t| t.name() == *mime))
             .and_then(|mime| {
-                let data = clipboard.wait_for_contents(&gtk::gdk::Atom::intern(mime))?.data();
+                let data = clipboard
+                    .wait_for_contents(&gtk::gdk::Atom::intern(mime))?
+                    .data();
                 (!data.is_empty()).then_some((mime, data))
             });
         let image = as_copied.or_else(|| {
-            let png = clipboard.wait_for_image()?.save_to_bufferv("png", &[]).ok()?;
+            let png = clipboard
+                .wait_for_image()?
+                .save_to_bufferv("png", &[])
+                .ok()?;
             Some(("image/png", png))
         });
         let _ = tx.send(image);
@@ -1060,6 +1065,49 @@ async fn my_pull_requests(
         .map_err(|e| e.to_string())
 }
 
+/// The Dashboard's Worktrees that need attention, each with why.
+#[tauri::command]
+async fn worktree_attention(
+    core: State<'_, Core>,
+) -> CommandResult<Vec<editor_core::WorktreeAttention>> {
+    core.worktree_attention().await.map_err(|e| e.to_string())
+}
+
+/// The open PRs in the Worktree's repo asking the user for a review.
+#[tauri::command]
+async fn review_requests(
+    core: State<'_, Core>,
+    worktree: String,
+) -> CommandResult<Vec<editor_core::ReviewRequest>> {
+    core.review_requests(worktree.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The prompt that starts an Agent session on PR `number`'s failing checks.
+#[tauri::command]
+async fn failing_check_prompt(
+    core: State<'_, Core>,
+    worktree: String,
+    number: u64,
+) -> CommandResult<String> {
+    core.failing_check_prompt(worktree.as_ref(), number)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The prompt that starts an Agent session on PR `number`'s review feedback.
+#[tauri::command]
+async fn review_feedback_prompt(
+    core: State<'_, Core>,
+    worktree: String,
+    number: u64,
+) -> CommandResult<String> {
+    core.review_feedback_prompt(worktree.as_ref(), number)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// "Push" to a branch whose PR is open: commits what's left and pushes, its output to `on_progress`.
 #[tauri::command]
 async fn push_to_pull_request(
@@ -1521,6 +1569,10 @@ fn main() {
             open_pull_request,
             pull_request_details,
             my_pull_requests,
+            worktree_attention,
+            review_requests,
+            failing_check_prompt,
+            review_feedback_prompt,
             rerun_checks,
             push_to_pull_request,
             set_permission_mode,
