@@ -314,7 +314,7 @@ Checkpoint:
 - Commit: `Dashboard: the view and its sections`
 
 ## Task 9: Dashboard as a view of the window
-Status: pending
+Status: completed
 Risk: high
 Dependencies: Task 8
 Files:

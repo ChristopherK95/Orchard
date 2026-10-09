@@ -276,6 +276,7 @@ const SHORTCUTS: { title: string; keys: [string, string][] }[] = [
       ["Ctrl P", "Go to a file in this Worktree, or start a session"],
       ["Ctrl Shift O", "Open another repository"],
       ["Ctrl ,", "Settings"],
+      ["Ctrl D", "Open or close the Dashboard"],
       ["Ctrl B", "Open or close the Board"],
       ["Ctrl `", "The Terminal (in the Columns view: the focused column's)"],
       ["Ctrl Shift E", "The Files drawer"],

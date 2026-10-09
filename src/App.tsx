@@ -27,7 +27,7 @@ import { FilesDrawer } from "./FilesDrawer";
 import { type BranchPopover, BranchSwitcher, popoverUnder } from "./BranchPicker";
 import { GitDrawer } from "./GitDrawer";
 import { myPrs, PrBoard, watchMyPrs } from "./PrBoard";
-import { reviewRequests, watchAttention, watchCleanUp, watchReviewRequests } from "./dashboardData";
+import { cleanUp, reviewRequests, watchAttention, watchCleanUp, watchReviewRequests } from "./dashboardData";
 import { PrButton, PrOverlay } from "./PrOverlay";
 import { ReviewOverlay } from "./ReviewOverlay";
 import type { OpenRequest } from "./ManualEditor";
@@ -211,17 +211,25 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   const [activeWorktree, setActiveWorktree] = createSignal(props.workspace.root);
   const [lastSessionIn, setLastSessionIn] = createStore<Record<string, SessionId>>({});
   const [creatingWorktree, setCreatingWorktree] = createSignal(false);
-  /** Tabs or Columns, with the Board of every session by state over either (they stay as they are
-   *  underneath). */
+  /** Tabs or Columns, with the Board of every session by state over either, and the Dashboard over
+   *  all three (they stay as they are underneath, so leaving it lands back in the one before). */
   const [mainView, setMainView] = createSignal<"tabs" | "columns">("tabs");
   const [boardOpen, setBoardOpen] = createSignal(false);
   /** Which board: every session by state, or the user's PRs by where each stands. */
   const [boardOf, setBoardOf] = createSignal<"sessions" | "prs">("sessions");
+  const [dashboardOpen, setDashboardOpen] = createSignal(false);
   const openBoard = (of: "sessions" | "prs") => {
     setBoardOf(of);
     setBoardOpen(true);
+    setDashboardOpen(false);
   };
-  const view = () => (boardOpen() ? "board" : mainView());
+  const view = () => (dashboardOpen() ? "dashboard" : boardOpen() ? "board" : mainView());
+  /** Back to the Tabs or Columns, from the Dashboard or the Board. */
+  const toMainView = () =>
+    batch(() => {
+      setDashboardOpen(false);
+      setBoardOpen(false);
+    });
   /** The Worktrees pinned as columns, and those in sidebar order. */
   const [pinned, setPinnedList] = createSignal<string[]>([]);
   /** The columns' widths, as shares of the row (none: even). */
@@ -268,9 +276,11 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   /** Whether a session's transcript is on screen (so it shouldn't notify). */
   const onScreen = (id: SessionId) =>
     mainView() === "columns" ? pinnedRow().some((w) => shownIn(w.path) === id) : id === activeId();
-  /** Switches between the Tabs and Columns views (closing the Board). */
-  const chooseView = (next: "tabs" | "columns") => {
-    setBoardOpen(false);
+  /** Switches between the Tabs and Columns views (closing the Board, and the Dashboard unless `quiet`
+   *  as for `show`). */
+  const chooseView = (next: "tabs" | "columns", opts: { quiet?: boolean } = {}) => {
+    if (opts.quiet) setBoardOpen(false);
+    else toMainView();
     if (next === mainView()) return;
     setMainView(next);
     if (next === "columns") {
@@ -278,7 +288,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       setRecentOpen(false);
       const focus = pinnedRow().find((w) => w.path === activeWorktree()) ?? pinnedRow()[0];
       if (focus) setActiveWorktree(focus.path);
-    } else selectWorktree(activeWorktree());
+    } else selectWorktree(activeWorktree(), opts);
   };
   /** The drawer can be parked on one Worktree in the Columns view; otherwise it follows focus. */
   const [drawerPin, setDrawerPin] = createSignal<string | null>(null);
@@ -289,12 +299,16 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   let titlebar!: HTMLElement;
   // Back on the Tabs, focus goes back where it was (the composer, say).
   let focusedBefore: Element | null = null;
+  const overMain = (v: string) => v === "board" || v === "dashboard";
+  let viewBefore = view();
   createEffect(
     on(
       view,
       (now) => {
-        if (now === "board") focusedBefore = document.activeElement;
-        else if (focusedBefore instanceof HTMLElement && focusedBefore.isConnected) focusedBefore.focus();
+        if (!overMain(now)) {
+          if (focusedBefore instanceof HTMLElement && focusedBefore.isConnected) focusedBefore.focus();
+        } else if (!overMain(viewBefore)) focusedBefore = document.activeElement;
+        viewBefore = now;
       },
       { defer: true },
     ),
@@ -336,18 +350,18 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   const [terminalMaximized, setTerminalMaximized] = createSignal(false);
   /** Ctrl+` and the header's button: the active Worktree's (the focused column's). */
   const toggleTerminal = () => {
-    setBoardOpen(false);
+    toMainView();
     toggleTerminalOf(activeWorktree());
   };
   const toggleDrawer = (which: "files" | "git") => {
-    setBoardOpen(false); // (the drawers are beside the Tabs or columns)
+    toMainView(); // (the drawers are beside the Tabs or columns)
     setDrawer((now) => (now === which ? null : which));
   };
   const [paletteOpen, setPaletteOpen] = createSignal(false);
   /** The Worktree being reviewed for a PR (ticket 42), over everything else. */
   const [reviewing, setReviewing] = createSignal<string | null>(null);
   const review = () => {
-    setBoardOpen(false);
+    toMainView();
     if (!worktree()?.removed) setReviewing(activeWorktree());
   };
   /** The PR shown over everything else: the Worktree's branch's, or PR `number` of its repo. */
@@ -370,7 +384,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   const [editorRequests, setEditorRequests] = createSignal<{ open: OpenRequest; n: number }[]>([]);
   let requested = 0;
   const openInEditor = (open: OpenRequest) => {
-    setBoardOpen(false); // (the Manual editor is beside the Tabs or columns)
+    toMainView(); // (the Manual editor is beside the Tabs or columns)
     setEditorOpen(true);
     setEditorRequests((all) => [...all.slice(-20), { open, n: ++requested }]);
   };
@@ -406,7 +420,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       .runAction(path, name)
       .then((started) => {
         if (!started.length) return;
-        setBoardOpen(false);
+        toMainView();
         if (!terminalOpen(path)) toggleTerminalOf(path);
         showShellOf(path, started[0].id);
       })
@@ -458,7 +472,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     // In the Columns view, focus moves to another column rather than leaving the view.
     const other = mainView() === "columns" ? pinnedRow().find((p) => p.path !== path) : undefined;
     if (other) setActiveWorktree(other.path);
-    else selectWorktree(props.workspace.root);
+    else selectWorktree(props.workspace.root, { quiet: true }); // (a Dashboard it was removed from stays up)
   };
   /** Worktree setups this editor started, by Worktree path; shown until the first session opens. */
   const [setups, setSetups] = createStore<Record<string, SetupView>>({});
@@ -485,19 +499,46 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   watchReviewRequests(mainWorktree);
   watchAttention();
   watchCleanUp();
+  /** The Dashboard entry's badge: what waits on the user (not Worktree hygiene). */
+  const dashboardBadge = () =>
+    needYou() +
+    reviewRequests.list().length +
+    myPrs.prs().filter((p) => p.state === "open" && (p.stage === "changesRequested" || p.stage === "checksFailing")).length;
+  // The Workspace opened on the Dashboard: the watchers above just asked GitHub.
+  let openedOnDashboard = false;
+  // Showing the Dashboard asks GitHub again, and reads the Worktrees ready to clean up.
+  createEffect(
+    on(
+      view,
+      (now) => {
+        if (now !== "dashboard") return;
+        if (openedOnDashboard) {
+          openedOnDashboard = false;
+          return;
+        }
+        myPrs.refresh();
+        reviewRequests.refresh();
+        cleanUp.refresh();
+      },
+      { defer: true },
+    ),
+  );
 
   /** Shows a session: in its column if the Columns view is up and its Worktree is pinned, else as
-   *  the Tabs view's visible Tab (a notification, a reopened Tab, the palette, the Board). */
-  const show = async (id: SessionId) => {
+   *  the Tabs view's visible Tab (a notification, a reopened Tab, the palette, the Board). `quiet`:
+   *  the Workspace's own doing (restoring the Tabs, a Worktree gone), not the user's, so the
+   *  Dashboard stays shown with the session behind it. */
+  const show = async (id: SessionId, opts: { quiet?: boolean } = {}) => {
+    const leave = () => (opts.quiet ? setBoardOpen(false) : toMainView());
     const path = sessions[id]?.worktree;
     if (path) setLastSessionIn(path, id);
     if (path && mainView() === "columns" && pinned().includes(path)) {
-      setBoardOpen(false);
+      leave();
       setActiveWorktree(path);
       return;
     }
     if (mainView() === "columns") setMainView("tabs"); // (its columns go, and stop streaming)
-    setBoardOpen(false);
+    leave();
     if (path) setActiveWorktree(path);
     try {
       await tabs.show(id);
@@ -506,12 +547,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     }
   };
 
-  /** Shows a Worktree: its last-used session, else its first, else an empty Tab row. */
-  const selectWorktree = (path: string) => {
+  /** Shows a Worktree: its last-used session, else its first, else an empty Tab row (`quiet` as for `show`). */
+  const selectWorktree = (path: string, opts: { quiet?: boolean } = {}) => {
     setRecentOpen(false);
     if (mainView() === "columns" && pinned().includes(path)) return void setActiveWorktree(path);
     const id = shownIn(path);
-    if (id !== undefined) return void show(id);
+    if (id !== undefined) return void show(id, opts);
     if (mainView() === "columns") setMainView("tabs");
     setActiveWorktree(path);
     tabs.hide(); // nothing should stream into an empty Worktree's view
@@ -532,12 +573,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
 
   const closeTab = (id: SessionId) => core.closeTab(id).catch((err) => setError(String(err)));
 
-  /** A new Agent session in the active Worktree. */
-  const newSession = async (path = activeWorktree()): Promise<SessionId | undefined> => {
+  /** A new Agent session in the active Worktree (`quiet` as for `show`). */
+  const newSession = async (path = activeWorktree(), opts: { quiet?: boolean } = {}): Promise<SessionId | undefined> => {
     setError("");
     try {
       const id = await core.newSessionIn(path);
-      await show(id);
+      await show(id, opts);
       return id;
     } catch (err) {
       setError(String(err));
@@ -596,7 +637,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     const { name, state: previous } = sessions[id]; // read before the store updates
     setSessions(id, "state", state);
     onBenchState(id, state);
-    const unseen = !onScreen(id) || boardOpen() || !document.hasFocus();
+    const unseen = !onScreen(id) || boardOpen() || dashboardOpen() || !document.hasFocus();
     if (!unseen) return;
     if (state === "needsYou") void notify(id, `${name} needs you`, "The Agent is waiting for your answer.");
     else if (settings()?.settings.notifications.turnFinished && previous === "working" && state === "idle")
@@ -625,7 +666,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         setWorktrees(event.worktrees);
         // The active Worktree was removed: fall back to the main checkout.
         const active = activeWorktree();
-        if (!event.worktrees.some((w) => w.path === active) && sessionsIn(active).length === 0) selectWorktree(props.workspace.root);
+        if (!event.worktrees.some((w) => w.path === active) && sessionsIn(active).length === 0) selectWorktree(props.workspace.root, { quiet: true });
       } else if (event.kind === "terminalsChanged") {
         sawTerminalsEvent = true;
         setShells(event.terminals);
@@ -636,7 +677,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         setOrder((ids) => ids.filter((other) => other !== id));
         setSessions(produce((all) => void delete all[id]));
         // Back to what's left of its Worktree, or to the main checkout if the Worktree's gone.
-        if (activeId() === id && path) selectWorktree(worktrees().some((w) => w.path === path) ? path : props.workspace.root);
+        if (activeId() === id && path) selectWorktree(worktrees().some((w) => w.path === path) ? path : props.workspace.root, { quiet: true });
       } else if (event.kind === "popOutReturned") {
         // A popped-out window closed before it showed its file: back into the pane, unsaved work and all.
         if (event.window === "main") openInEditor({ kind: "poppedOut", file: event.file });
@@ -654,8 +695,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       } else if (event.kind === "setupChanged") {
         const { worktree, commands, status } = event;
         updateSetup(worktree, (s) => Object.assign(s, { commands, status }));
-        // Setup finished while you watched it: on to its session.
-        if (status.kind === "done" && mainView() === "tabs" && activeWorktree() === worktree && activeId() === null) void show(status.sessionId);
+        // Setup finished while you watched it: on to its session (behind the Dashboard, if that's up).
+        if (status.kind === "done" && mainView() === "tabs" && activeWorktree() === worktree && activeId() === null) void show(status.sessionId, { quiet: true });
       } else if (event.kind === "setupOutput") {
         const { text } = event;
         updateSetup(event.worktree, (s) => (s.output = keepOutput(s.output, text)));
@@ -680,7 +721,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     });
     untilGone(unlisten);
     // Clicking a notification opens the session it was about.
-    const unlistenClicks = await onNotificationClicked((id) => sessions[id] && (boardOpen() || !onScreen(id)) && void show(id));
+    const unlistenClicks = await onNotificationClicked((id) => sessions[id] && (boardOpen() || dashboardOpen() || !onScreen(id)) && void show(id));
     untilGone(unlistenClicks);
     // Y/N answer the oldest open permission card anywhere in the Tab (outside text fields).
     const onKey = (e: KeyboardEvent) => {
@@ -724,9 +765,19 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       // (Ctrl+B is the editor's own when it takes it.)
       if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "b" && !e.defaultPrevented) {
         e.preventDefault();
-        if (!e.repeat) boardOpen() && boardOf() === "sessions" ? setBoardOpen(false) : openBoard("sessions");
+        if (!e.repeat) view() === "board" && boardOf() === "sessions" ? setBoardOpen(false) : openBoard("sessions");
         return;
       }
+      // Ctrl+D: the Dashboard, or back to the view before it. (Not when the Manual editor took it,
+      // where it's the next occurrence, nor in the Terminal, where it ends the shell's input.)
+      const inTerminal = !!(document.activeElement as Element | null)?.closest?.(".terminal-panel");
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "d" && !e.defaultPrevented && !inTerminal) {
+        e.preventDefault();
+        if (!e.repeat) setDashboardOpen((open) => !open);
+        return;
+      }
+      // (The Dashboard is a view, not an overlay: Escape doesn't close it.)
+      if (dashboardOpen()) return; // (Y/N answer the Tab's card, which isn't showing)
       if (boardOpen()) {
         if (e.key === "Escape") setBoardOpen(false);
         return; // (Y/N answer the Tab's card, which isn't showing)
@@ -748,7 +799,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     // Narrower than the Columns view allows: back to the Tabs.
     const onResize = () => {
       setWide(window.innerWidth >= COLUMNS_MIN_WIDTH);
-      if (!wide() && mainView() === "columns") chooseView("tabs");
+      if (!wide() && mainView() === "columns") chooseView("tabs", { quiet: true });
     };
     window.addEventListener("resize", onResize);
     untilGone(() => window.removeEventListener("resize", onResize));
@@ -774,6 +825,11 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     const loaded = await core.settings();
     if (disposed) return;
     if (!sawSettingsEvent) setSettings(loaded);
+    // Every Workspace opens on the Dashboard, unless the settings say not to.
+    if ((settings() ?? loaded).settings.dashboard.openOnStart) {
+      openedOnDashboard = true;
+      setDashboardOpen(true);
+    }
     // Setups started before this view (e.g. the webview reloaded); events since then win.
     for (const setup of await core.setups()) if (!setups[setup.worktree]) setSetups(setup.worktree, setup);
     const snapshot = await core.worktrees();
@@ -788,9 +844,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     });
     if (restored.length) {
       const last = await core.lastActiveSession();
-      return void show(restored.find((s) => s.id === last)?.id ?? restored[0].id);
+      return void show(restored.find((s) => s.id === last)?.id ?? restored[0].id, { quiet: true });
     }
-    const first = await newSession();
+    const first = await newSession(undefined, { quiet: true });
     if (first !== undefined && (await core.benchMode())) void runBenchmark(benchDriver, first).catch((err) => setError(`Benchmark failed: ${err}`));
   });
 
@@ -853,7 +909,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         activeSession={activeId()}
         settingUp={(path) => !!setups[path] && setups[path].status.kind !== "done"}
         onSelect={(path) => {
-          setBoardOpen(false);
+          toMainView();
           if (mainView() === "columns" && !pinned().includes(path)) void pin(path);
           else selectWorktree(path);
         }}
@@ -941,6 +997,14 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         </nav>
         <span class="grow" data-tauri-drag-region />
         <div class="segmented">
+          <button classList={{ on: view() === "dashboard" }} onClick={() => setDashboardOpen(true)} title="Your work in this repository at a glance (Ctrl+D)">
+            Dashboard
+            <Show when={view() !== "dashboard" && dashboardBadge() > 0}>
+              <span class="badge needs" title="Sessions that need you, reviews requested, and your PRs with changes requested or checks failing">
+                {dashboardBadge()}
+              </span>
+            </Show>
+          </button>
           <button classList={{ on: view() === "tabs" }} onClick={() => chooseView("tabs")} title="One session at a time">
             Tabs
           </button>
@@ -1014,7 +1078,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           top={titlebar.offsetHeight}
           banners={banners()}
           onOpen={(id) => {
-            setBoardOpen(false);
+            toMainView();
             if (mainView() === "columns" || id !== activeId()) void show(id);
           }}
         />
@@ -1155,7 +1219,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onRemoved={afterRemoved}
           onOpen={(path) => {
             setOverviewOpen(false);
-            setBoardOpen(false);
+            toMainView();
             selectWorktree(path);
           }}
           onClose={() => setOverviewOpen(false)}
@@ -1193,7 +1257,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
               label={w ? worktreeLabel(w) : of().worktree}
               colour={worktreeColour(of().worktree)}
               onOpenSnippet={(code, label) => {
-                setBoardOpen(false);
+                toMainView();
                 openInEditor({ kind: "snippet", code, label });
               }}
               onClose={() => setPrOf(null)}
