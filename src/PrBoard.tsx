@@ -31,11 +31,13 @@ const EVERY_MS = 5 * 60_000;
 const [prs, setPrs] = createSignal<MyPullRequest[]>([]);
 const [error, setError] = createSignal("");
 const [loading, setLoading] = createSignal(false);
+/** When the last read succeeded (ms since the epoch); null before one has. */
+const [refreshedAt, setRefreshedAt] = createSignal<number | null>(null);
 let from = "";
 let asked = 0;
 
 /** The user's PRs as last read (every open one, then the latest merged or closed), and how that went. */
-export const myPrs = { prs, error, loading, refresh: () => void load() };
+export const myPrs = { prs, error, loading, refreshedAt, refresh: () => void load() };
 
 async function load() {
   if (!from) return;
@@ -46,6 +48,7 @@ async function load() {
     if (n !== asked) return;
     setPrs(next);
     setError("");
+    setRefreshedAt(Date.now());
   } catch (err) {
     if (n === asked) setError(String(err));
   } finally {
@@ -61,6 +64,7 @@ export function watchMyPrs(worktree: () => string) {
       from = w;
       setPrs([]);
       setError("");
+      setRefreshedAt(null);
       void load();
     }),
   );

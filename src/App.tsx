@@ -26,7 +26,8 @@ import { CommandPalette, type PaletteCommand } from "./CommandPalette";
 import { FilesDrawer } from "./FilesDrawer";
 import { type BranchPopover, BranchSwitcher, popoverUnder } from "./BranchPicker";
 import { GitDrawer } from "./GitDrawer";
-import { PrBoard, watchMyPrs } from "./PrBoard";
+import { myPrs, PrBoard, watchMyPrs } from "./PrBoard";
+import { reviewRequests, watchAttention, watchCleanUp, watchReviewRequests } from "./dashboardData";
 import { PrButton, PrOverlay } from "./PrOverlay";
 import { ReviewOverlay } from "./ReviewOverlay";
 import type { OpenRequest } from "./ManualEditor";
@@ -480,6 +481,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   };
   const worktree = () => rowWorktrees().find((w) => w.path === activeWorktree());
   watchMyPrs(mainWorktree);
+  // (What the Dashboard shows besides the sessions, kept current whether or not it's showing.)
+  watchReviewRequests(mainWorktree);
+  watchAttention();
+  watchCleanUp();
 
   /** Shows a session: in its column if the Columns view is up and its Worktree is pinned, else as
    *  the Tabs view's visible Tab (a notification, a reopened Tab, the palette, the Board). */
@@ -755,8 +760,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     window.addEventListener("click", onClick);
     untilGone(() => window.removeEventListener("click", onClick));
     // Worktrees may have changed while the editor was in the background (the watcher covers the rest),
-    // and they're fetched if it's due (the core keeps it to every 5 minutes at most).
-    const onFocus = () => void core.windowFocused().catch(() => {});
+    // and they're fetched if it's due (the core keeps it to every 5 minutes at most). The PRs and
+    // review requests are asked for again too.
+    const onFocus = () => {
+      void core.windowFocused().catch(() => {});
+      myPrs.refresh();
+      reviewRequests.refresh();
+    };
     window.addEventListener("focus", onFocus);
     untilGone(() => window.removeEventListener("focus", onFocus));
     // Shells started before this view (the webview reloaded, say); events since then win.

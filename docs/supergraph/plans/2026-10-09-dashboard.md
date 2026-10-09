@@ -247,7 +247,7 @@ Checkpoint:
 - Commit: `Dashboard: commands for the frontend`
 
 ## Task 7: Frontend data watching
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 6
 Files:
