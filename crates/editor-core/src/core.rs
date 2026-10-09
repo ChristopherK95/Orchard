@@ -18,7 +18,7 @@ use crate::auto_suspend::{
     self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, SystemClock, SystemProbe,
 };
 use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewWorktree};
-use crate::dashboard::{self, WorktreeAttention};
+use crate::dashboard::{self, ReviewRequest, WorktreeAttention};
 use crate::documents::{
     self, CheckTicket, DocumentTracker, OpenDocument, OpenedFile, PoppedOutFile, SaveOver,
 };
@@ -2859,6 +2859,21 @@ impl Core {
         crate::pull_request::mine(&gh, &worktree)
             .await
             .map_err(CoreError::Git)
+    }
+
+    /// The Dashboard's review requests: the open, non-draft PRs of the Worktree's repo that ask the
+    /// user (whoever the GitHub CLI is logged in as) for a review directly, not through a team, the
+    /// most recently asked first.
+    pub async fn review_requests(&self, worktree: &Path) -> Result<Vec<ReviewRequest>, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let search = format!("q={}", dashboard::REVIEW_SEARCH);
+        let query = format!("query={}", dashboard::REVIEW_QUERY);
+        let args = ["api", "graphql", "-F", &search, "-f", &query];
+        crate::pull_request::gh_text(&gh, &worktree, &args)
+            .await
+            .and_then(|out| dashboard::review_requests_listed(&out))
+            .map_err(|e| CoreError::Git(crate::pull_request::not_about_creating(e)))
     }
 
     /// "Push", for a branch whose PR is already open: commits whatever isn't committed yet with

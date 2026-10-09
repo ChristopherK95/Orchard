@@ -1,5 +1,5 @@
 //! Issue 43: what the Dashboard shows that the core works out — the Worktrees that need attention,
-//! with real `git` and a bare origin.
+//! with real `git` and a bare origin, and what's asked of GitHub (a fake `gh` here).
 
 mod support;
 
@@ -106,4 +106,41 @@ async fn worktrees_needing_attention_are_listed_with_every_reason() {
     );
     let a_row = listed.iter().find(|w| w.path == a).unwrap();
     assert_eq!(a_row.branch.as_deref(), Some("a"));
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn review_requests_are_asked_of_gh_for_the_user_directly() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let gh = FakeGh::new(
+        r#"cat <<'JSON'
+{"data":{"viewer":{"login":"me"},"search":{"nodes":[
+  {"number":3,"title":"Fix it","url":"https://github.com/o/r/pull/3","author":{"login":"ann"},
+   "headRefName":"fix","latestReviews":{"nodes":[]},
+   "timelineItems":{"nodes":[{"createdAt":"2026-10-08T12:00:00Z","requestedReviewer":{"login":"me"}}]},
+   "commits":{"nodes":[]}}]}}}
+JSON"#,
+    );
+    let core = core_with_gh(&fake, &gh);
+    let root = core.open_workspace(&setup.repo()).await.unwrap().root;
+
+    let requests = core.review_requests(&root).await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].number, 3);
+    assert_eq!(requests[0].author, "ann");
+    assert_eq!(
+        requests[0].requested_at.as_deref(),
+        Some("2026-10-08T12:00:00Z")
+    );
+    assert!(!requests[0].re_requested);
+
+    let args = gh.args();
+    assert_eq!(&args[..2], ["api", "graphql"], "{args:?}");
+    assert!(
+        args.iter().any(|a| a.contains("user-review-requested:@me")
+            && a.contains("draft:false")
+            && a.contains("is:open")),
+        "{args:?}"
+    );
 }

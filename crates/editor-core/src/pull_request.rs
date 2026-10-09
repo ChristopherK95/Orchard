@@ -149,6 +149,15 @@ const GH_TIMEOUT: Duration = Duration::from_secs(120);
 const GH_HINT: &str =
     "Creating a PR takes the GitHub CLI: install `gh`, run `gh auth login` in a terminal once, then try again.";
 
+/// The same, where it isn't about creating a PR (the Dashboard's GitHub sections).
+const GH_SETUP_HINT: &str =
+    "This takes the GitHub CLI: install `gh`, run `gh auth login` in a terminal once, then refresh.";
+
+/// What a `gh` that failed said, with `GH_SETUP_HINT` in place of `GH_HINT`.
+pub(crate) fn not_about_creating(error: String) -> String {
+    error.replace(GH_HINT, GH_SETUP_HINT)
+}
+
 /// Signs, in `gh`'s words, that it isn't logged in.
 const GH_LOGIN_SIGNS: &[&str] = &["gh auth login", "authentication", "not logged", "401"];
 
@@ -674,7 +683,7 @@ pub(crate) async fn details_for(
 }
 
 /// What `gh` printed, or why it failed.
-async fn gh_text(gh: &Path, worktree: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) async fn gh_text(gh: &Path, worktree: &Path, args: &[&str]) -> Result<String, String> {
     let out = run_gh(gh, worktree, args, None).await?;
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     match out.status.success() {
@@ -829,26 +838,26 @@ struct GhReview {
 /// A check run or commit status, as `gh --json statusCheckRollup` gives it.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Status {
+pub(crate) struct Status {
     #[serde(rename = "__typename", default)]
-    typename: String,
-    name: Option<String>,
-    context: Option<String>,
-    workflow_name: Option<String>,
-    status: Option<String>,
-    conclusion: Option<String>,
-    state: Option<String>,
-    details_url: Option<String>,
-    target_url: Option<String>,
+    pub(crate) typename: String,
+    pub(crate) name: Option<String>,
+    pub(crate) context: Option<String>,
+    pub(crate) workflow_name: Option<String>,
+    pub(crate) status: Option<String>,
+    pub(crate) conclusion: Option<String>,
+    pub(crate) state: Option<String>,
+    pub(crate) details_url: Option<String>,
+    pub(crate) target_url: Option<String>,
     /// When a check run started; a commit status, when it was set.
-    started_at: Option<String>,
-    created_at: Option<String>,
+    pub(crate) started_at: Option<String>,
+    pub(crate) created_at: Option<String>,
 }
 
 /// The checks of `statusCheckRollup`, each once: it lists every attempt of a check (a re-run job
 /// is listed again, its earlier attempt still there), and only the latest of a check's attempts
 /// (by workflow and name) says where it stands. Each is where its first attempt was listed.
-fn latest_checks(statuses: Vec<Status>) -> Vec<Check> {
+pub(crate) fn latest_checks(statuses: Vec<Status>) -> Vec<Check> {
     let mut latest: Vec<Status> = Vec::new();
     for status in statuses {
         let key = |s: &Status| {
@@ -1461,6 +1470,8 @@ mod tests {
     fn a_missing_login_says_how_to_log_in() {
         let err = "To get started with GitHub CLI, please run:  gh auth login";
         assert!(opened(false, "", err).unwrap_err().contains(GH_HINT));
+        let elsewhere = not_about_creating(opened(false, "", err).unwrap_err());
+        assert!(elsewhere.contains(GH_SETUP_HINT) && !elsewhere.contains(GH_HINT));
     }
 
     #[test]

@@ -444,6 +444,49 @@ impl Rebuilt {
     }
 }
 
+/// A fake `gh` that logs its arguments (one per line) and answers as `gh pr create` would.
+#[cfg(unix)]
+pub struct FakeGh {
+    dir: tempfile::TempDir,
+}
+
+#[cfg(unix)]
+impl FakeGh {
+    pub fn new(script_tail: &str) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("args");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n{script_tail}\n",
+            log.display()
+        );
+        let path = dir.path().join("gh");
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Self { dir }
+    }
+
+    pub fn path(&self) -> PathBuf {
+        self.dir.path().join("gh")
+    }
+
+    pub fn args(&self) -> Vec<String> {
+        std::fs::read_to_string(self.dir.path().join("args"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+}
+
+#[cfg(unix)]
+pub fn core_with_gh(fake: &FakeAgent, gh: &FakeGh) -> Core {
+    Core::new(CoreConfig {
+        gh: Some(gh.path()),
+        ..CoreConfig::new(fake.command())
+    })
+}
+
 pub fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).expect("canonicalize")
 }

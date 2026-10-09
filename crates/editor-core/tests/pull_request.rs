@@ -7,7 +7,7 @@ mod support;
 use std::path::{Path, PathBuf};
 
 use editor_core::{
-    ChangeKind, Core, CoreConfig, PullRequestOutcome, PullRequestProgress, PullRequestRequest,
+    ChangeKind, Core, PullRequestOutcome, PullRequestProgress, PullRequestRequest,
     PushToPullRequestOutcome,
 };
 use support::*;
@@ -16,46 +16,6 @@ async fn open(core: &Core, repo: &Path) -> PathBuf {
     git(repo, &["config", "user.name", "Test"]);
     git(repo, &["config", "user.email", "test@example.com"]);
     core.open_workspace(repo).await.unwrap().root
-}
-
-/// A fake `gh` that logs its arguments (one per line) and answers as `gh pr create` would.
-struct FakeGh {
-    dir: tempfile::TempDir,
-}
-
-impl FakeGh {
-    fn new(script_tail: &str) -> Self {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("args");
-        let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n{script_tail}\n",
-            log.display()
-        );
-        let path = dir.path().join("gh");
-        std::fs::write(&path, script).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        Self { dir }
-    }
-
-    fn path(&self) -> PathBuf {
-        self.dir.path().join("gh")
-    }
-
-    fn args(&self) -> Vec<String> {
-        std::fs::read_to_string(self.dir.path().join("args"))
-            .unwrap_or_default()
-            .lines()
-            .map(str::to_owned)
-            .collect()
-    }
-}
-
-fn core_with_gh(fake: &FakeAgent, gh: &FakeGh) -> Core {
-    Core::new(CoreConfig {
-        gh: Some(gh.path()),
-        ..CoreConfig::new(fake.command())
-    })
 }
 
 fn write(dir: &Path, name: &str, text: &str) {

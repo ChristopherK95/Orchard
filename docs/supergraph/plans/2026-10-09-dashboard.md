@@ -84,7 +84,7 @@ Checkpoint:
 - Commit: `Dashboard: Worktrees that need attention, with why`
 
 ## Task 3: Reviews requested from the user
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 2
 Files:
