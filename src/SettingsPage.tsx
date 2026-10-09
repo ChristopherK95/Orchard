@@ -148,6 +148,12 @@ export function SettingsPage(props: {
                   on={app()?.notifications.turnFinished ?? false}
                   onChange={(on) => void change({ kind: "turnFinished", on })}
                 />
+                <Toggle
+                  label="Open the Dashboard when a repository opens"
+                  hint="At startup and on switching repository; Ctrl+D opens or closes it any time."
+                  on={app()?.dashboard.openOnStart ?? true}
+                  onChange={(on) => void change({ kind: "dashboardOpenOnStart", on })}
+                />
               </Show>
               <Show when={section() === "appearance"}>
                 <h2>Appearance</h2>

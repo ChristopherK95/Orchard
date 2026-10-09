@@ -415,7 +415,7 @@ Checkpoint:
 - Commit: `Dashboard: start an Agent session on a failing or reviewed PR`
 
 ## Task 12: Settings toggle and final verification
-Status: pending
+Status: completed
 Risk: low
 Dependencies: Task 11
 Files:
