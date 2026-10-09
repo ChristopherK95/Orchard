@@ -57,7 +57,11 @@ _Avoid_: File-change notification, sync
 
 **Board**:
 The overview of every Agent session in the Workspace, grouped by Agent session state. It opens over the Tabs view or the Columns view; toggle it with either.
-_Avoid_: Dashboard, overview
+_Avoid_: Overview (the Dashboard is the overview of the user's work; the Board is only the sessions)
+
+**Dashboard**:
+The live status wall of the user's own work in the Workspace, and the view a Workspace opens on: the Agent sessions that need them, reviews requested from them, their open PRs by stage, Worktrees that need attention or can be cleaned up. Each item leads to where it lives (a Tab, the PR overlay, a Worktree); a PR with failing checks or review feedback can start an Agent session on it.
+_Avoid_: Home, Board (that's only the Agent sessions)
 
 **Columns view**:
 The wide-display alternative to the Tabs view (offered from 1,600 px): each pinned Worktree side by side as a column, each column showing one of its Agent sessions at a time. More columns than fit scroll sideways.
@@ -83,7 +87,11 @@ _Avoid_: Task, script, run configuration
 
 **Review**:
 Going through everything a Worktree's pull request would bring, file by file (committed or not, new files too, from where its branch split from its Base), marking each viewed, and then opening the PR: what isn't committed yet is committed, the branch is pushed, and the PR is opened into the chosen branch with the user as assignee.
-_Avoid_: Code review (that's what happens on the PR afterwards), diff view
+_Avoid_: Code review (that's reviewing someone else's PR), diff view
+
+**Code review**:
+Going through someone else's pull request file by file (its head fetched and diffed locally, no Worktree needed), marking each viewed as on GitHub, commenting on lines into a pending review, and submitting it as Approve, Request changes or Comment.
+_Avoid_: Review (that's the user's own Worktree before its PR is opened)
 
 **Agent**:
 The coding-agent program driving an Agent session. Claude Code first; others may be supported later behind the same boundary.
