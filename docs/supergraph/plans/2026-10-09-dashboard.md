@@ -282,7 +282,7 @@ Checkpoint:
 - Commit: `Dashboard: watch review requests and Worktrees that need attention`
 
 ## Task 8: The Dashboard view and its sections
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 7
 Files:
