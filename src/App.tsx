@@ -36,6 +36,7 @@ const ManualEditor = lazy(() => import("./ManualEditor").then((m) => ({ default:
 // (xterm.js loads with the panel, the first time it opens.)
 const TerminalPanel = lazy(() => import("./TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 import { Board } from "./Board";
+import { Dashboard } from "./Dashboard";
 import { Transcript } from "./Transcript";
 import { ContextStrip, removedWorktree, Sidebar, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 import { notify, onNotificationClicked } from "./notify";
@@ -1081,6 +1082,29 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             toMainView();
             if (mainView() === "columns" || id !== activeId()) void show(id);
           }}
+        />
+      </Show>
+      <Show when={view() === "dashboard"}>
+        {/* Each item leads to where it lives; a session opens in the view that was showing before. */}
+        <Dashboard
+          sessions={order().map((id) => sessions[id])}
+          worktrees={rowWorktrees()}
+          top={titlebar.offsetHeight}
+          banners={banners()}
+          onSession={(id) => {
+            toMainView();
+            if (mainView() === "columns" || id !== activeId()) void show(id);
+          }}
+          onPr={openMyPr}
+          onReviewRequest={(r) => setPrOf({ worktree: mainWorktree(), number: r.number })}
+          onWorktree={(path) => {
+            toMainView();
+            selectWorktree(path);
+            setDrawer("git");
+          }}
+          onCleanUp={() => setOverviewOpen(true)}
+          onAllPrs={() => openBoard("prs")}
+          onStartSession={() => Promise.reject(new Error("Starting a session from here isn't wired up yet."))}
         />
       </Show>
       <Show when={view() === "board" && boardOf() === "prs"}>

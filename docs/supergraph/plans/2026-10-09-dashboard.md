@@ -351,7 +351,7 @@ Checkpoint:
 - Commit: `Dashboard: a view of the window, shown when a Workspace opens`
 
 ## Task 10: Where the Dashboard's items lead
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 9
 Files:
