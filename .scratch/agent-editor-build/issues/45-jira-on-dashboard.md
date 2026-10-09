@@ -8,3 +8,4 @@
 
 Notes:
 - Wanted when the Dashboard was designed; left out of its v1 because Orchard can't talk to Jira yet.
+- Also wanted with Jira: the Statistics section's period (47) as the current sprint, and maybe previous sprints.
