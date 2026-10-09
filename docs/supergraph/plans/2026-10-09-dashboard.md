@@ -382,7 +382,7 @@ Checkpoint:
 - Commit: `Dashboard: items open where they live`
 
 ## Task 11: Start an Agent session on a PR
-Status: pending
+Status: completed
 Risk: high
 Dependencies: Task 10
 Files:

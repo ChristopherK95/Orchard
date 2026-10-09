@@ -172,6 +172,11 @@ const MODE_LABEL: Record<PermissionMode, string> = {
 /** Unsent composer text and attachments by session. */
 const drafts = new Map<SessionId, { text: string; attachments: Attachment[] }>();
 
+/** Puts `text` in a session's composer, unsent (read when its composer is next shown). */
+export function setDraft(session: SessionId, text: string) {
+  drafts.set(session, { text, attachments: drafts.get(session)?.attachments ?? [] });
+}
+
 /** Reports an element's height as it changes (the floating composer's, for the transcript). */
 export function reportHeight(el: HTMLElement, onHeight?: (px: number) => void) {
   if (!onHeight) return;

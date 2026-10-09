@@ -7,6 +7,7 @@ import {
   type LoadedSettings,
   type MissingPrerequisite,
   type MyPullRequest,
+  type SetupStatus,
   type OpenDocument,
   type AutoSuspendReason,
   type RecentSession,
@@ -43,7 +44,7 @@ import { notify, onNotificationClicked } from "./notify";
 import { keepOutput, Setup, type SetupView } from "./Setup";
 import { StateBadge } from "./StateDot";
 import { setShells, shellRunning, showShellOf } from "./shells";
-import { Banner, Composer, FindOtherConversations, OtherConversations, RecentList } from "./Chat";
+import { Banner, Composer, FindOtherConversations, OtherConversations, RecentList, setDraft } from "./Chat";
 import { Columns, COLUMNS_MIN_WIDTH } from "./Columns";
 import { createTabView, type TabView } from "./TabView";
 import { BareTitlebar, WindowControls } from "./WindowControls";
@@ -477,6 +478,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   };
   /** Worktree setups this editor started, by Worktree path; shown until the first session opens. */
   const [setups, setSetups] = createStore<Record<string, SetupView>>({});
+  /** Waiting on a Worktree's setup to end, by Worktree path: true once it has. */
+  const setupWaiters = new Map<string, (status: SetupStatus) => boolean>();
   const updateSetup = (worktree: string, change: (setup: SetupView) => void) =>
     setSetups(
       produce((all) => {
@@ -584,6 +587,46 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     } catch (err) {
       setError(String(err));
     }
+  };
+
+  /** "Start an Agent session" on one of the user's PRs (from the Dashboard): its prompt (the failed
+   *  checks' logs, or the changes asked for) goes in the composer of a new session in the Worktree
+   *  on its branch, unsent, and that session's Tab is shown. With no such Worktree one is made
+   *  first, and with a Worktree setup it's the session the setup starts. Rejects with what went
+   *  wrong, for the Dashboard's row to say. */
+  const startSessionOn = async (pr: MyPullRequest) => {
+    const why = (err: unknown) => Promise.reject(err instanceof Error ? err.message : String(err));
+    const asking = pr.stage === "checksFailing" ? core.failingCheckPrompt(mainWorktree(), pr.number) : core.reviewFeedbackPrompt(mainWorktree(), pr.number);
+    const prompt = await asking.catch(why);
+    const there = rowWorktrees().find((w) => !w.removed && w.branch === pr.head);
+    const startIn = async (path: string) => {
+      const id = await core.newSessionIn(path).catch(why);
+      setDraft(id, prompt);
+      await show(id);
+    };
+    if (there) return startIn(there.path);
+    const created = await core.createWorktree({ kind: "existingBranch", name: `origin/${pr.head}` }).catch(why);
+    setNotice(created.warning ?? "");
+    const path = created.worktree.path;
+    if (mainView() === "columns") await pin(path);
+    const setup = created.setup;
+    if (!setup) return startIn(path);
+    // Events may have got here first: keep their status and output. The draft goes in as soon as
+    // the setup's session exists, before anything shows it.
+    updateSetup(setup.worktree, (s) => (s.commands = setup.commands));
+    const id = await new Promise<SessionId>((resolve, reject) => {
+      const settle = (status: SetupStatus) => {
+        if (status.kind === "done") {
+          setDraft(status.sessionId, prompt);
+          resolve(status.sessionId);
+        } else if (status.kind === "failed") reject(`The Worktree setup failed: ${status.message}`);
+        else if (status.kind === "sessionFailed") reject(status.message);
+        else return false;
+        return true;
+      };
+      if (!settle(setups[setup.worktree].status)) setupWaiters.set(setup.worktree, settle);
+    });
+    await show(id);
   };
 
   // Benchmark turns in flight: finished once that session has been Working and is Idle again.
@@ -696,6 +739,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       } else if (event.kind === "setupChanged") {
         const { worktree, commands, status } = event;
         updateSetup(worktree, (s) => Object.assign(s, { commands, status }));
+        if (setupWaiters.get(worktree)?.(status)) setupWaiters.delete(worktree);
         // Setup finished while you watched it: on to its session (behind the Dashboard, if that's up).
         if (status.kind === "done" && mainView() === "tabs" && activeWorktree() === worktree && activeId() === null) void show(status.sessionId, { quiet: true });
       } else if (event.kind === "setupOutput") {
@@ -1104,7 +1148,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           }}
           onCleanUp={() => setOverviewOpen(true)}
           onAllPrs={() => openBoard("prs")}
-          onStartSession={() => Promise.reject(new Error("Starting a session from here isn't wired up yet."))}
+          onStartSession={startSessionOn}
         />
       </Show>
       <Show when={view() === "board" && boardOf() === "prs"}>
