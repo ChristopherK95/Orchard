@@ -7,6 +7,7 @@ mod attachments;
 mod auto_suspend;
 mod core;
 mod create_worktree;
+mod dashboard;
 mod diff;
 mod documents;
 mod edit_notes;
@@ -34,6 +35,7 @@ pub use crate::core::{
     RecentSession, RecentWorkspace, SlashCommand, TranscriptStream, WorkspaceInfo, TABS_SLOT,
 };
 pub use crate::create_worktree::{BranchInfo, BranchList, CreatedWorktree, NewWorktree};
+pub use crate::dashboard::{AttentionReason, WorktreeAttention};
 pub use crate::documents::{FileContent, OpenDocument, OpenedFile, PoppedOutFile, SaveOver};
 pub use crate::edit_notes::EditNote;
 pub use crate::files::{DirEntry, FileMatch, FileWatchConfig, IndexStats, WatchStatus};

@@ -18,6 +18,7 @@ use crate::auto_suspend::{
     self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, SystemClock, SystemProbe,
 };
 use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewWorktree};
+use crate::dashboard::{self, WorktreeAttention};
 use crate::documents::{
     self, CheckTicket, DocumentTracker, OpenDocument, OpenedFile, PoppedOutFile, SaveOver,
 };
@@ -1990,6 +1991,32 @@ impl Core {
             rows.push(row);
         }
         Ok(rows)
+    }
+
+    /// The Dashboard's Worktrees that need attention (the main checkout too), main checkout first,
+    /// each with every reason: uncommitted changes, commits not pushed, behind its upstream, no
+    /// upstream but commits since its Base, or a merge or rebase in progress.
+    pub async fn worktree_attention(&self) -> Result<Vec<WorktreeAttention>, CoreError> {
+        self.workspace()?;
+        let mut listed = vec![];
+        for info in self.worktrees() {
+            let status = git::status(&info.path).await.map_err(CoreError::Git)?;
+            let since_base = if status.branch.is_some() && status.upstream.is_none() {
+                let (base, _) = self.base_of(&info.path).await;
+                git::count_not_in(&info.path, &base, "HEAD").await
+            } else {
+                0
+            };
+            let reasons = dashboard::reasons(&status, since_base);
+            if !reasons.is_empty() {
+                listed.push(WorktreeAttention {
+                    path: info.path,
+                    branch: info.branch,
+                    reasons,
+                });
+            }
+        }
+        Ok(listed)
     }
 
     fn sessions_in(&self, worktree: &Path) -> Vec<Arc<Session>> {

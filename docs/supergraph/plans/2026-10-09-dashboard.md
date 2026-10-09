@@ -44,7 +44,7 @@ Checkpoint:
 - Commit: `Settings: dashboard.open_on_start`
 
 ## Task 2: Worktree attention reasons
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: none
 Files:
