@@ -224,6 +224,69 @@ pub(crate) fn review_requests_listed(stdout: &str) -> Result<Vec<ReviewRequest>,
     Ok(requests)
 }
 
+/// Reads `gh pr view --json title,statusCheckRollup`: the PR's title and its latest checks.
+pub(crate) fn titled_checks(stdout: &str) -> Result<(String, Vec<Check>), String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Viewed {
+        #[serde(default)]
+        title: String,
+        #[serde(default)]
+        status_check_rollup: Vec<Status>,
+    }
+    let pr: Viewed = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("gh said something unexpected: {e}"))?;
+    Ok((pr.title, latest_checks(pr.status_check_rollup)))
+}
+
+/// How many of a failed job's last log lines go into the prompt.
+const LOG_TAIL: usize = 200;
+
+/// The prompt that starts an Agent session on a PR's failing checks: each failed check by name,
+/// with the last `LOG_TAIL` lines of its failed job's log (`None`: it has none, as for a check
+/// that isn't a GitHub Actions job, which is named with its link instead).
+pub(crate) fn failing_check_text(
+    number: u64,
+    title: &str,
+    failed: &[(Check, Option<String>)],
+) -> String {
+    let mut text = format!(
+        "The checks of PR #{number} ({title}) are failing. Find the cause of each failure below \
+         and fix it.\n"
+    );
+    for (check, log) in failed {
+        let name = match &check.workflow {
+            Some(workflow) => format!("{workflow} / {}", check.name),
+            None => check.name.clone(),
+        };
+        text.push_str(&format!("\n## {name}\n"));
+        match log {
+            Some(log) => {
+                let lines: Vec<&str> = log.lines().collect();
+                let tail = &lines[lines.len().saturating_sub(LOG_TAIL)..];
+                text.push_str(&format!(
+                    "\nThe last {} lines of its failed job's log:\n\n",
+                    tail.len()
+                ));
+                fenced(&mut text, &tail.join("\n"));
+            }
+            None => {
+                if let Some(url) = &check.url {
+                    text.push_str(&format!("\n{url}\n"));
+                }
+            }
+        }
+    }
+    text
+}
+
+/// `body` in a fenced block, its fence longer than any run of backticks in it.
+fn fenced(text: &mut String, body: &str) {
+    let longest = body.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(longest.max(2) + 1);
+    text.push_str(&format!("{fence}\n{body}\n{fence}\n"));
+}
+
 /// A check run or commit status as GraphQL gives it (`statusCheckRollup.contexts`).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -346,5 +409,34 @@ mod tests {
         );
         assert!(requests[0].checks[0].job.is_some());
         assert!(requests[1].checks.is_empty());
+    }
+
+    #[test]
+    fn a_failing_checks_prompt_has_its_name_and_the_logs_last_lines() {
+        let check = |name: &str, job| Check {
+            name: name.into(),
+            workflow: Some("CI".into()),
+            outcome: CheckOutcome::Failure,
+            url: Some(format!("https://example.com/{name}")),
+            job,
+        };
+        let log: String = (1..=250).map(|n| format!("line {n}\n")).collect();
+        let job = Some(crate::pull_request::ActionsJob { run: 1, job: 2 });
+        let prompt = failing_check_text(
+            12,
+            "Fix the parser",
+            &[
+                (check("test", job), Some(log)),
+                (check("external", None), None),
+            ],
+        );
+        assert!(prompt.contains("#12"), "{prompt}");
+        assert!(prompt.contains("Fix the parser"), "{prompt}");
+        assert!(prompt.contains("CI / test"), "{prompt}");
+        assert!(prompt.contains("line 51\n"), "{prompt}");
+        assert!(prompt.contains("line 250\n"), "{prompt}");
+        assert!(!prompt.contains("line 50\n"), "{prompt}");
+        assert!(prompt.contains("CI / external"), "{prompt}");
+        assert!(prompt.contains("https://example.com/external"), "{prompt}");
     }
 }

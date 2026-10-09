@@ -554,18 +554,31 @@ pub(crate) async fn rerun(
             .await
             .map(drop);
     };
-    let jq = ".jobs[] | [.databaseId, .name] | @tsv";
-    let jobs = gh_text(
-        gh,
-        worktree,
-        &["run", "view", &run, "--json", "jobs", "--jq", jq],
-    )
-    .await?;
-    let id = job_id(&jobs, id, &name)
+    let id = job_in(gh, worktree, &run, id, &name)
+        .await?
         .ok_or_else(|| format!("run {run} has no job \"{name}\" to re-run."))?;
     gh_text(gh, worktree, &["run", "rerun", "--job", &id.to_string()])
         .await
         .map(drop)
+}
+
+/// The id `gh run … --job` takes for the job of `run` whose link has id `id`, or whose name is
+/// `name`: the run's jobs are asked for and it's found among them (None: it isn't there).
+pub(crate) async fn job_in(
+    gh: &Path,
+    worktree: &Path,
+    run: &str,
+    id: u64,
+    name: &str,
+) -> Result<Option<u64>, String> {
+    let jq = ".jobs[] | [.databaseId, .name] | @tsv";
+    let jobs = gh_text(
+        gh,
+        worktree,
+        &["run", "view", run, "--json", "jobs", "--jq", jq],
+    )
+    .await?;
+    Ok(job_id(&jobs, id, name))
 }
 
 /// The job among a run's (`<databaseId>\t<name>` lines) whose id is `id`, else whose name is `name`.

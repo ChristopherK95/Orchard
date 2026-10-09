@@ -135,7 +135,7 @@ Checkpoint:
 - Commit: `Dashboard: reviews requested from the user`
 
 ## Task 4: Prompt for a failing check
-Status: pending
+Status: completed
 Risk: low
 Dependencies: Task 3
 Files:

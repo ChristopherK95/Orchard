@@ -2876,6 +2876,53 @@ impl Core {
             .map_err(|e| CoreError::Git(crate::pull_request::not_about_creating(e)))
     }
 
+    /// The prompt that starts an Agent session on PR `number`'s failing checks: each failed check
+    /// of its latest commit by name, with the last lines of its failed GitHub Actions job's log
+    /// (`gh run view --log-failed`).
+    pub async fn failing_check_prompt(
+        &self,
+        worktree: &Path,
+        number: u64,
+    ) -> Result<String, CoreError> {
+        use crate::pull_request::{gh_text, job_in, not_about_creating, CheckOutcome};
+        let worktree = self.known_worktree(worktree)?;
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let read = async {
+            let pr = number.to_string();
+            let viewed = gh_text(
+                &gh,
+                &worktree,
+                &["pr", "view", &pr, "--json", "title,statusCheckRollup"],
+            )
+            .await?;
+            let (title, checks) = dashboard::titled_checks(&viewed)?;
+            let mut failed = vec![];
+            for check in checks {
+                if check.outcome != CheckOutcome::Failure {
+                    continue;
+                }
+                let log = match check.job {
+                    Some(job) => {
+                        let run = job.run.to_string();
+                        match job_in(&gh, &worktree, &run, job.job, &check.name).await? {
+                            Some(id) => {
+                                let id = id.to_string();
+                                let args = ["run", "view", &run, "--job", &id, "--log-failed"];
+                                Some(gh_text(&gh, &worktree, &args).await?)
+                            }
+                            None => None,
+                        }
+                    }
+                    None => None,
+                };
+                failed.push((check, log));
+            }
+            Ok(dashboard::failing_check_text(number, &title, &failed))
+        };
+        read.await
+            .map_err(|e: String| CoreError::Git(not_about_creating(e)))
+    }
+
     /// "Push", for a branch whose PR is already open: commits whatever isn't committed yet with
     /// `commit_message` and pushes, telling `progress` as it goes. Asks first (doing nothing) while
     /// a session in the Worktree is Working, unless `even_if_working`.

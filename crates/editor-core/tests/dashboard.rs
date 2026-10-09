@@ -144,3 +144,44 @@ JSON"#,
         "{args:?}"
     );
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn failing_check_logs_are_asked_of_gh_per_failed_job() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    // The failed job's link says job 1; the run's jobs say it's 777.
+    let gh = FakeGh::new(
+        r#"case "$1 $2" in
+"pr view") cat <<'JSON'
+{"title":"Fix the parser","statusCheckRollup":[
+  {"__typename":"CheckRun","name":"test","workflowName":"CI","status":"COMPLETED","conclusion":"FAILURE",
+   "detailsUrl":"https://github.com/o/r/actions/runs/55/job/1","startedAt":"2026-10-08T12:00:00Z"},
+  {"__typename":"CheckRun","name":"lint","workflowName":"CI","status":"COMPLETED","conclusion":"SUCCESS",
+   "detailsUrl":"https://github.com/o/r/actions/runs/55/job/2","startedAt":"2026-10-08T12:00:00Z"}]}
+JSON
+;;
+"run view")
+  case "$*" in
+  *--log-failed*) printf 'test\tRun tests\tassertion failed: parse("1+")\n' ;;
+  *) printf '777\ttest\n778\tlint\n' ;;
+  esac
+;;
+esac"#,
+    );
+    let core = core_with_gh(&fake, &gh);
+    let root = core.open_workspace(&setup.repo()).await.unwrap().root;
+
+    let prompt = core.failing_check_prompt(&root, 12).await.unwrap();
+    assert!(prompt.contains("CI / test"), "{prompt}");
+    assert!(
+        prompt.contains(r#"assertion failed: parse("1+")"#),
+        "{prompt}"
+    );
+    assert!(!prompt.contains("lint"), "{prompt}");
+    // (The fake keeps the last call's arguments: the log's.)
+    assert_eq!(
+        gh.args(),
+        ["run", "view", "55", "--job", "777", "--log-failed"]
+    );
+}
