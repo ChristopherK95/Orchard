@@ -180,7 +180,9 @@ pub(crate) async fn collect(
         };
         let mut all = vec![];
         let mut pending = vec![];
-        let mut buffer = [0u8; 8192];
+        // (On the heap: held across the `.await`, an array would make every future awaiting a
+        // command 16 KB bigger, and a command's future is first built on the 1 MB main thread.)
+        let mut buffer = vec![0u8; 8192];
         while let Ok(read) = pipe.read(&mut buffer).await {
             if read == 0 {
                 break;

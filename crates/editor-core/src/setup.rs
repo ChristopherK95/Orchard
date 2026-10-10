@@ -143,7 +143,7 @@ pub(crate) async fn run(
 }
 /// Sends what `pipe` produces as text, never splitting a UTF-8 character across two sends.
 async fn forward(mut pipe: impl AsyncRead + Unpin, tx: mpsc::UnboundedSender<String>) {
-    let mut buffer = [0u8; 8192];
+    let mut buffer = vec![0u8; 8192];
     let mut pending: Vec<u8> = vec![];
     while let Ok(read) = pipe.read(&mut buffer).await {
         if read == 0 {
