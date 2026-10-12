@@ -441,9 +441,11 @@ export interface ReviewCommit {
   id: string;
   shortId: string;
   subject: string;
+  /** A merge commit: what it changed is only its conflicts' resolutions. */
+  merge: boolean;
 }
 
-/** What one commit changed on its own, and the parent its diffs run from. */
+/** What one commit changed on its own, and the parent its diffs run from (for a merge, git's own redo of it, conflict markers and all). */
 export interface CommitChanges {
   parent: string;
   files: ReviewFile[];

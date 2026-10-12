@@ -309,3 +309,74 @@ async fn a_branch_with_an_open_pr_pushes_to_it() {
         .collect();
     assert_eq!(steps, ["Committing 1 file", "Pushing agent/work to origin"]);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_merge_commit_shows_only_its_conflict_resolutions() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let gh = FakeGh::new("true");
+    let core = core_with_gh(&fake, &gh);
+    let root = open(&core, &setup.repo()).await;
+    write(&root, "shared.txt", "start\n");
+    git(&root, &["add", "shared.txt"]);
+    commit(&root, "Shared");
+    git(&root, &["checkout", "--quiet", "-b", "agent/work"]);
+    write(&root, "shared.txt", "ours\n");
+    git(&root, &["add", "shared.txt"]);
+    commit(&root, "Ours");
+    git(&root, &["checkout", "--quiet", "main"]);
+    write(&root, "shared.txt", "theirs\n");
+    write(&root, "main-only.txt", "from main\n");
+    git(&root, &["add", "-A"]);
+    commit(&root, "Theirs");
+    git(&root, &["checkout", "--quiet", "agent/work"]);
+    // Conflicts on shared.txt, resolved by keeping both; main-only.txt merges cleanly.
+    let _ = std::process::Command::new("git")
+        .current_dir(&root)
+        .args(["merge", "--quiet", "main"])
+        .output();
+    write(&root, "shared.txt", "ours\ntheirs\n");
+    git(&root, &["add", "shared.txt"]);
+    git(&root, &["commit", "--quiet", "--no-edit"]);
+
+    let review = core.review(&root).await.unwrap();
+    let merge = review.commits.iter().find(|c| c.merge).expect("the merge");
+    assert_eq!(merge.id, rev_parse(&root, "HEAD"));
+
+    let changes = core.commit_changes(&root, &merge.id).await.unwrap();
+    let paths: Vec<&str> = changes.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, ["shared.txt"]);
+    let lines = core
+        .commit_diff(
+            &root,
+            &changes.parent,
+            &merge.id,
+            "shared.txt",
+            None,
+            ChangeKind::Modified,
+        )
+        .await
+        .unwrap();
+    let removed: Vec<&str> = lines
+        .iter()
+        .filter(|l| l.kind == editor_core::DiffLineKind::Removed)
+        .map(|l| l.text.as_str())
+        .collect();
+    assert!(
+        removed.iter().any(|l| l.starts_with("<<<<<<<")),
+        "{removed:?}"
+    );
+
+    // A merge without conflicts resolved nothing by hand.
+    git(&root, &["checkout", "--quiet", "main"]);
+    write(&root, "later.txt", "later\n");
+    git(&root, &["add", "later.txt"]);
+    commit(&root, "Later");
+    git(&root, &["checkout", "--quiet", "agent/work"]);
+    git(&root, &["merge", "--quiet", "--no-edit", "main"]);
+    let clean = core
+        .commit_changes(&root, &rev_parse(&root, "HEAD"))
+        .await
+        .unwrap();
+    assert!(clean.files.is_empty(), "{:?}", clean.files);
+}

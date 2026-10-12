@@ -475,6 +475,11 @@ export function ReviewOverlay(props: {
                     <div class="review-scope">
                       <span class="grow">
                         <span class="mono muted">{c().shortId}</span> {c().subject}
+                        <Show when={c().merge}>
+                          <span class="pill" title="Only how its conflicts were resolved, against git's own merge with the conflict markers left in">
+                            conflict resolutions
+                          </span>
+                        </Show>
                       </span>
                       <button class="link" onClick={() => pickCommit(null)} title="Show every file the PR changes again">
                         All changes
@@ -486,7 +491,7 @@ export function ReviewOverlay(props: {
                   <p class="error small">{scopedError()}</p>
                 </Show>
                 <Show when={!scope() || scopedChanges()} fallback={<Show when={!scopedError()}><p class="muted small center"><Loader class="spin" /></p></Show>}>
-                <For each={files()} fallback={<p class="muted small center">{scope() ? "This commit changed no files." : `No changes against ${review()!.base}.`}</p>}>
+                <For each={files()} fallback={<p class="muted small center">{scope()?.merge ? "Merged without conflicts: nothing was resolved by hand." : scope() ? "This commit changed no files." : `No changes against ${review()!.base}.`}</p>}>
                   {(file, i) => (
                     <button class="review-file" classList={{ on: i() === at(), viewed: !scope() && isViewed(file) }} onClick={() => go(i())} title={file.renamedFrom ? `${file.renamedFrom} → ${file.path}` : file.path}>
                       <span class={`change change-${file.change}`}>{LETTER[file.change]}</span>
@@ -515,7 +520,7 @@ export function ReviewOverlay(props: {
                           class="review-commit"
                           classList={{ on: scope()?.id === c.id }}
                           onClick={() => pickCommit(c)}
-                          title={scope()?.id === c.id ? "Show all the changes again" : `Only what ${c.shortId} changed`}
+                          title={scope()?.id === c.id ? "Show all the changes again" : c.merge ? `Only how ${c.shortId}'s conflicts were resolved` : `Only what ${c.shortId} changed`}
                         >
                           <span class="mono">{c.shortId}</span>
                           <span class="review-commit-subject">{c.subject}</span>

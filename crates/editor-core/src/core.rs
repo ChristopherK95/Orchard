@@ -2760,10 +2760,11 @@ impl Core {
             commits: git::commits_since(&worktree, &split)
                 .await
                 .into_iter()
-                .map(|(id, short_id, subject)| ReviewCommit {
+                .map(|(id, short_id, subject, merge)| ReviewCommit {
                     id,
                     short_id,
                     subject,
+                    merge,
                 })
                 .collect(),
             uncommitted: status.files.len() as u32,
@@ -2806,8 +2807,8 @@ impl Core {
         text_diff(path, before, after, change)
     }
 
-    /// What one of the review's commits changed on its own (against its first parent), and the
-    /// parent each file's diff runs from (`commit_diff`).
+    /// What one of the review's commits changed on its own (against its first parent; a merge,
+    /// only its conflicts' resolutions), and what each file's diff runs from (`commit_diff`).
     pub async fn commit_changes(
         &self,
         worktree: &Path,
