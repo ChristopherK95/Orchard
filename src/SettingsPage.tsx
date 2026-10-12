@@ -3,7 +3,7 @@
 // layout: toggles apply at once, fields when they lose focus or on Enter. While the file doesn't
 // parse, the controls are locked (nothing is written over it) and the error says why.
 import { createEffect, createSignal, For, type JSX, on, onCleanup, onMount, Show } from "solid-js";
-import { type Action, core, type FontFamily, type LoadedSettings, type RepoSettings, type SettingChange } from "./core";
+import { type Action, BUBBLE_COLORS, core, type FontFamily, type LoadedSettings, type RepoSettings, type SettingChange } from "./core";
 import { CODE_FONT_SIZES } from "./appearance";
 import { ArrowDown, ArrowUp, ChevronDown, Plus, TriangleAlert, X } from "./icons";
 
@@ -189,6 +189,21 @@ export function SettingsPage(props: {
                   on={app()?.appearance.ligatures ?? true}
                   onChange={(on) => void change({ kind: "ligatures", on })}
                 />
+                <Row label="Chat bubble colour" hint="The colour of your own messages in the chat.">
+                  <div class="swatches">
+                    <For each={BUBBLE_COLORS}>
+                      {(color) => (
+                        <button
+                          data-user-bubble={color}
+                          classList={{ on: (app()?.appearance.userBubble ?? "grey") === color }}
+                          title={color[0].toUpperCase() + color.slice(1)}
+                          aria-label={color}
+                          onClick={() => void change({ kind: "userBubble", color })}
+                        />
+                      )}
+                    </For>
+                  </div>
+                </Row>
               </Show>
               <Show when={section() === "agents"}>
                 <h2>Agents</h2>
