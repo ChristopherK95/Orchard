@@ -5,6 +5,7 @@ import { For, type JSX, Match, Show, Switch } from "solid-js";
 import { ago } from "./Chat";
 import type { MyPullRequest, SessionId, SessionInfo, WorktreeInfo } from "./core";
 import { myPrs } from "./PrBoard";
+import { shellsIn } from "./shells";
 import {
   ArrowDownUp,
   ChevronsUpDown,
@@ -23,6 +24,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  SquareTerminal,
   Trash2,
   X,
 } from "./icons";
@@ -61,6 +63,24 @@ function worktreeSignal(sessions: SessionInfo[], settingUp: boolean): JSX.Elemen
   return null;
 }
 
+/** The Worktree's running shells, in its sidebar row: how many, and whether one runs something.
+ *  Clicking it (the row handles that) shows its Terminal panel. */
+function ShellBadge(props: { path: string }) {
+  const shells = () => shellsIn(props.path);
+  const title = () =>
+    `Shells running here (click to show the terminal):\n${shells()
+      .map((t) => `• ${t.name}${t.busy ? " (running)" : ""}`)
+      .join("\n")}`;
+  return (
+    <Show when={shells().length > 0}>
+      <span class="shell-badge" classList={{ busy: shells().some((t) => t.busy) }} title={title()}>
+        <SquareTerminal />
+        <Show when={shells().length > 1}>{shells().length}</Show>
+      </span>
+    </Show>
+  );
+}
+
 export interface SidebarProps {
   workspaceName: string;
   workspaceRoot: string;
@@ -79,8 +99,8 @@ export interface SidebarProps {
   /** A Worktree setup is running there (its first session hasn't started yet). */
   settingUp: (path: string) => boolean;
   onSelect: (path: string) => void;
-  /** The branch picker for a Worktree, under `anchor`. */
-  onSwitchBranch: (path: string, anchor: Element) => void;
+  /** Selects the Worktree and shows its Terminal panel (its row's shell badge). */
+  onShowTerminal: (path: string) => void;
   onShowSession: (id: SessionId) => void;
   onCloseSession: (id: SessionId) => void;
   onNewSession: (path: string) => void;
@@ -97,6 +117,9 @@ export interface SidebarProps {
 
 export function Sidebar(props: SidebarProps) {
   const dimmed = (w: WorktreeTab) => !!props.pinned && !props.pinned.includes(w.path);
+  /** A click on a row's shell badge shows the terminal; anywhere else just selects. */
+  const choose = (e: MouseEvent, path: string) =>
+    (e.target as Element).closest(".shell-badge") ? props.onShowTerminal(path) : props.onSelect(path);
   const title = (w: WorktreeTab) =>
     w.removed ? `${w.path}: no longer a Worktree; its sessions still run` : dimmed(w) ? `${worktreeLabel(w)}: give it a column` : w.path;
   return (
@@ -121,6 +144,9 @@ export function Sidebar(props: SidebarProps) {
                 <GitBranch />
                 <Show when={props.sessionsIn(w.path).some((s) => s.state === "needsYou")}>
                   <span class="needs-dot" />
+                </Show>
+                <Show when={shellsIn(w.path).length > 0}>
+                  <span class="shell-dot" title="A shell is running" />
                 </Show>
               </button>
             )}
@@ -166,29 +192,18 @@ export function Sidebar(props: SidebarProps) {
               const sessions = () => props.sessionsIn(w.path);
               return (
                 <>
-                  <span class="sidebar-item-wrap">
-                    <button
-                      class="sidebar-item"
-                      classList={{ on: w.path === props.active, dimmed: dimmed(w), removed: !!w.removed }}
-                      style={{ "--c": worktreeColour(w.path) }}
-                      title={title(w)}
-                      onClick={() => props.onSelect(w.path)}
-                    >
-                      <GitBranch class="wt-glyph" />
-                      <span class="label">{w.removed ? w.path.split(/[\\/]/).pop() : worktreeLabel(w)}</span>
-                      {worktreeSignal(sessions(), props.settingUp(w.path))}
-                    </button>
-                    <Show when={!w.removed}>
-                      <button
-                        class="ghost icon branch-switch opens-branches"
-                        onClick={(e) => props.onSwitchBranch(w.path, e.currentTarget)}
-                        title="Switch this Worktree's branch"
-                        aria-label={`Switch ${worktreeLabel(w)}'s branch`}
-                      >
-                        <ChevronsUpDown />
-                      </button>
-                    </Show>
-                  </span>
+                  <button
+                    class="sidebar-item"
+                    classList={{ on: w.path === props.active, dimmed: dimmed(w), removed: !!w.removed }}
+                    style={{ "--c": worktreeColour(w.path) }}
+                    title={title(w)}
+                    onClick={(e) => choose(e, w.path)}
+                  >
+                    <GitBranch class="wt-glyph" />
+                    <span class="label">{w.removed ? w.path.split(/[\\/]/).pop() : worktreeLabel(w)}</span>
+                    <ShellBadge path={w.path} />
+                    {worktreeSignal(sessions(), props.settingUp(w.path))}
+                  </button>
                   <Show when={!props.pinned && w.path === props.active}>
                     <SessionList {...props} worktree={w} sessions={sessions()} />
                   </Show>
