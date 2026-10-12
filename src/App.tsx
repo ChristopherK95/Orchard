@@ -40,7 +40,7 @@ const TerminalPanel = lazy(() => import("./TerminalPanel").then((m) => ({ defaul
 import { Board } from "./Board";
 import { Dashboard, type PrStart } from "./Dashboard";
 import { Transcript } from "./Transcript";
-import { ContextStrip, removedWorktree, Sidebar, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
+import { ContextStrip, removedWorktree, Sidebar, unfoldWorktree, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 import { notify, onNotificationClicked } from "./notify";
 import { keepOutput, Setup, type SetupView } from "./Setup";
 import { StateBadge } from "./StateDot";
@@ -1337,7 +1337,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             return w ? worktreeLabel(w) : path.split(/[\\/]/).pop() ?? path;
           }}
           colour={worktreeColour}
-          onPick={(id) => void show(id)}
+          onPick={(id) => {
+            unfoldWorktree(props.workspace.root, sessions[id].worktree);
+            void show(id);
+          }}
           onClose={() => setAgentPickerOpen(false)}
         />
       </Show>

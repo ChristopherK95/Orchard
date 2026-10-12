@@ -138,6 +138,10 @@ function setFold(root: string, path: string, open: boolean) {
   setFolds((all) => ({ ...all, [root]: next }));
   localStorage.setItem(foldsKey(root), JSON.stringify(next));
 }
+/** Folds a Worktree open that was folded shut by hand (going to one of its sessions shows it). */
+export function unfoldWorktree(root: string, path: string) {
+  if (foldsIn(root)[path] === false) setFold(root, path, true);
+}
 
 export function Sidebar(props: SidebarProps) {
   const dimmed = (w: WorktreeTab) => !!props.pinned && !props.pinned.includes(w.path);
