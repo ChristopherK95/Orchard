@@ -4,7 +4,6 @@
 import { createSignal, For, type JSX, Match, Show, Switch } from "solid-js";
 import { Avatar } from "./Avatar";
 import { ago } from "./Chat";
-import { contextOf, useUsage } from "./ContextMeter";
 import type { MyPullRequest, SessionId, SessionInfo, WorktreeInfo } from "./core";
 import { myPrs } from "./PrBoard";
 import { shellsIn } from "./shells";
@@ -33,6 +32,7 @@ import {
   X,
 } from "./icons";
 import { StateDot } from "./StateDot";
+import { ContextBar, useSessionFacts } from "./sessionFacts";
 import { STATE_LABEL } from "./stateLabels";
 
 /** The design's eight Worktree colours (wt-1 … wt-8): muted, so state colours stay louder. */
@@ -138,10 +138,6 @@ function setFold(root: string, path: string, open: boolean) {
   setFolds((all) => ({ ...all, [root]: next }));
   localStorage.setItem(foldsKey(root), JSON.stringify(next));
 }
-
-/** The time, a minute at a time: so "5 min ago" moves on. */
-const [minute, setMinute] = createSignal(Date.now());
-setInterval(() => setMinute(Date.now()), 60_000);
 
 export function Sidebar(props: SidebarProps) {
   const dimmed = (w: WorktreeTab) => !!props.pinned && !props.pinned.includes(w.path);
@@ -367,41 +363,11 @@ function SessionCards(props: SidebarProps & { worktree: WorktreeTab; sessions: S
   );
 }
 
-/** How long ago, briefly: "now", "4m", "3h", "2d". */
-function since(ms: number): string {
-  const min = Math.floor((Date.now() - ms) / 60_000);
-  if (min < 1) return "now";
-  if (min < 60) return `${min}m`;
-  if (min < 60 * 24) return `${Math.floor(min / 60)}h`;
-  return `${Math.floor(min / (60 * 24))}d`;
-}
-
-/** "$0.42"; under a cent, "<$0.01". */
-function dollars(usd: number): string {
-  return usd > 0 && usd < 0.01 ? "<$0.01" : `$${usd.toFixed(2)}`;
-}
-
 /** One session: its face and name, then where it stands, how long since it did anything, the
  *  model, how full its context is and what it has cost. */
 function SessionCard(props: { session: SessionInfo; colour: string; on: boolean; onShow: (id: SessionId) => void; onClose: (id: SessionId) => void }) {
   const s = () => props.session;
-  const usage = useUsage(() => props.session.id);
-  const context = () => contextOf(usage());
-  const cost = () => usage()?.costUsd ?? null;
-  const active = () => (minute(), s().lastActive === null ? "" : ago(new Date(s().lastActive!).toISOString()));
-  /** The model without its details ("Opus 4.8 (1M context)" is "Opus 4.8"); the title has them. */
-  const model = () => s().model?.replace(/\s*\(.*\)\s*$/, "") || null;
-  const title = () =>
-    [
-      s().name,
-      STATE_LABEL[s().state],
-      s().model,
-      active() && `Last active ${active()}`,
-      context() && `Context ${context()!.percent}% full`,
-      cost() !== null && `Cost ${dollars(cost()!)}`,
-    ]
-      .filter(Boolean)
-      .join("\n");
+  const { context, cost, active, model, title } = useSessionFacts(s);
   return (
     <div class={`session-card ${s().state}`} classList={{ on: props.on }}>
       <button
@@ -418,16 +384,7 @@ function SessionCard(props: { session: SessionInfo; colour: string; on: boolean;
               <span class="count-badge">{s().unread} new</span>
             </Show>
             <span class="grow" />
-            <Show when={context()}>
-              {(c) => (
-                <span class="context-bar" classList={{ high: c().percent >= 70, full: c().percent >= 90 }}>
-                  <span class="track">
-                    <span style={{ width: `${c().percent}%` }} />
-                  </span>
-                  {c().percent}%
-                </span>
-              )}
-            </Show>
+            <ContextBar context={context()} />
           </span>
           <span class="session-card-line meta">
             <span class="state">
@@ -436,15 +393,15 @@ function SessionCard(props: { session: SessionInfo; colour: string; on: boolean;
               </Show>
               {STATE_LABEL[s().state]}
             </span>
-            <Show when={s().lastActive !== null}>
-              <span class="ago">{(minute(), since(s().lastActive!))}</span>
+            <Show when={active()}>
+              <span class="ago">{active()}</span>
             </Show>
             <Show when={model()}>
               <span class="model">{model()}</span>
             </Show>
             <span class="grow" />
-            <Show when={cost() !== null}>
-              <span class="cost">{dollars(cost()!)}</span>
+            <Show when={cost()}>
+              <span class="cost">{cost()}</span>
             </Show>
           </span>
         </span>
