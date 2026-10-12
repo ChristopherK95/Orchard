@@ -1,8 +1,9 @@
 // The Dashboard (ticket 43): the live status wall of the user's own work in the Workspace, and the
-// view a Workspace opens on. Fixed sections, in this order: the Agent sessions that need the user,
-// reviews requested from them, their open PRs by stage, Worktrees that need attention, Worktrees
-// ready to clean up, how many sessions are Working and Idle, and, last, statistics of the user's work
-// over a chosen period (Statistics.tsx). Each item leads to where it lives (the Workspace view
+// view a Workspace opens on. Statistics of the user's work over a chosen period (Statistics.tsx) in
+// a column on the left; on the right, fixed sections in this order: the Agent sessions that need the
+// user, reviews requested from them, their open PRs by stage, Worktrees that need attention,
+// Worktrees ready to clean up, how many sessions are Working and Idle. (In a narrow window it's one
+// column, the statistics last.) Each item leads to where it lives (the Workspace view
 // decides how); a PR with failing checks or review feedback can start an Agent session on it. The
 // GitHub sections say when they were last read, and say so inline when `gh` can't be used, while
 // the local ones work as ever.
@@ -125,147 +126,150 @@ export function Dashboard(props: {
         <span class="hint">Ctrl+D for the view you were in</span>
       </div>
       <div class="dashboard-sections">
-        <Section icon={<Bell />} title="Needs you" count={needYou().length} needs empty="No sessions need you">
-          <For each={needYou()}>
-            {(s) => (
-              <Row colour={worktreeColour(s.worktree)} onOpen={() => props.onSession(s.id)} title="Open its Tab">
-                <StateDot state={s.state} />
-                <span class="dashboard-row-title">{s.name}</span>
-                <span class="dashboard-row-wt">{label(s.worktree, null)}</span>
-              </Row>
-            )}
-          </For>
-        </Section>
-
-        <Section
-          icon={<MessageSquareCode />}
-          title="Reviews requested"
-          count={reviewRequests.list().length}
-          empty="No reviews requested"
-          github={{ refreshed: since(reviewRequests.refreshedAt()), loading: reviewRequests.loading(), error: reviewRequests.error(), onRefresh: reviewRequests.refresh }}
-        >
-          <For each={reviewRequests.list()}>
-            {(r) => (
-              <Row colour={worktreeOn(r.head) ? worktreeColour(worktreeOn(r.head)!.path) : undefined} onOpen={() => props.onReviewRequest(r)} title={`#${r.number} ${r.title}`}>
-                <GitPullRequestArrow />
-                <span class="dashboard-row-title">{r.title}</span>
-                <span class="pr-number">#{r.number}</span>
-                <span class="dashboard-row-meta">
-                  {r.author}
-                  <Show when={r.requestedAt}>
-                    {(at) => (
-                      <>
-                        {" · asked "}
-                        {(now(), ago(at()))}
-                      </>
-                    )}
-                  </Show>
-                </span>
-                <Show when={r.reRequested}>
-                  <span class="dashboard-tag">re-requested</span>
-                </Show>
-                <ChecksSummary checks={r.checks} />
-              </Row>
-            )}
-          </For>
-        </Section>
-
-        <Section
-          icon={<GitPullRequestArrow />}
-          title="Your PRs"
-          count={openPrs().length}
-          empty="No open PRs"
-          github={{ refreshed: since(myPrs.refreshedAt()), loading: myPrs.loading(), error: myPrs.error().replace(PR_HINT, GH_HINT), onRefresh: myPrs.refresh }}
-          action={
-            <button class="link" onClick={() => props.onAllPrs()} title="Every PR of yours, merged and closed ones too, on the PR board">
-              All PRs →
-            </button>
-          }
-        >
-          <For each={STAGES}>
-            {(group) => {
-              const here = () => openPrs().filter((p) => p.stage === group.stage);
-              return (
-                <Show when={here().length}>
-                  <div class={`dashboard-group pr-stage-${group.stage}`}>
-                    {group.icon()}
-                    {group.title}
-                    <span class="badge">{here().length}</span>
-                  </div>
-                  <For each={here()}>{(pr) => <PrRow pr={pr} worktree={worktreeOn(pr.head)} onOpen={() => props.onPr(pr)} onStartSession={() => props.onStartSession(pr)} />}</For>
-                </Show>
-              );
-            }}
-          </For>
-        </Section>
-
-        <Section icon={<GitBranch />} title="Worktrees that need attention" count={attention.list().length} empty="No Worktrees need attention" error={attention.error()}>
-          <For each={attention.list()}>
-            {(w: WorktreeAttention) => (
-              <Row colour={worktreeColour(w.path)} onOpen={() => props.onWorktree(w.path)} title={`${w.path}: switch to it, with its changes`}>
-                <GitBranch />
-                <span class="dashboard-row-title mono">{label(w.path, w.branch)}</span>
-                <span class="dashboard-row-meta">{w.reasons.map(reasonText).join(" · ")}</span>
-              </Row>
-            )}
-          </For>
-        </Section>
-
-        <Section icon={<Eraser />} title="Ready to clean up" count={cleanUp.list().length} empty="Nothing to clean up" error={cleanUp.error()} onHead={() => props.onCleanUp()}>
-          <For each={cleanUp.list()}>
-            {(w: WorktreeMerge) => (
-              <Row colour={worktreeColour(w.path)} onOpen={() => props.onCleanUp()} title="Open the Worktrees overview">
-                <GitBranch />
-                <span class="dashboard-row-title mono">{label(w.path, w.branch)}</span>
-                <span class="dashboard-row-meta">{mergeText(w.merge)}</span>
-              </Row>
-            )}
-          </For>
-        </Section>
-
-        <Section icon={<Sparkles />} title="Sessions">
-          <p class="dashboard-line">
-            <span class="dashboard-count">
-              <StateDot state="working" />
-              {count("working")} Working
-            </span>
-            <span class="dashboard-count">
-              <StateDot state="idle" />
-              {count("idle", "suspended")} Idle
-            </span>
-          </p>
-        </Section>
-
-        <Section
-          icon={<History />}
-          title="Statistics"
-          github={{ refreshed: since(statistics.refreshedAt()), loading: statistics.loading(), error: statistics.error().replace(PR_HINT, GH_HINT), onRefresh: statistics.refresh }}
-          action={
-            <div class="segmented dashboard-period">
-              <For each={PERIODS}>
-                {(d) => (
-                  <button classList={{ on: statistics.days() === d }} aria-pressed={statistics.days() === d} onClick={() => statistics.setDays(d)} title={`The last ${d} days`}>
-                    {d}d
-                  </button>
-                )}
-              </For>
-            </div>
-          }
-        >
-          <Show
-            when={statistics.figures()}
-            fallback={
-              <Show when={!statistics.error()}>
-                <p class="dashboard-line muted">
-                  <Loader class="spin" />
-                  Asking GitHub…
-                </p>
-              </Show>
+        <div class="dashboard-column dashboard-stats-column">
+          <Section
+            icon={<History />}
+            title="Statistics"
+            github={{ refreshed: since(statistics.refreshedAt()), loading: statistics.loading(), error: statistics.error().replace(PR_HINT, GH_HINT), onRefresh: statistics.refresh }}
+            action={
+              <div class="segmented dashboard-period">
+                <For each={PERIODS}>
+                  {(d) => (
+                    <button classList={{ on: statistics.days() === d }} aria-pressed={statistics.days() === d} onClick={() => statistics.setDays(d)} title={`The last ${d} days`}>
+                      {d}d
+                    </button>
+                  )}
+                </For>
+              </div>
             }
           >
-            {(figures) => <StatisticsCards figures={figures()} now={now()} />}
-          </Show>
-        </Section>
+            <Show
+              when={statistics.figures()}
+              fallback={
+                <Show when={!statistics.error()}>
+                  <p class="dashboard-line muted">
+                    <Loader class="spin" />
+                    Asking GitHub…
+                  </p>
+                </Show>
+              }
+            >
+              {(figures) => <StatisticsCards figures={figures()} now={now()} />}
+            </Show>
+          </Section>
+        </div>
+        <div class="dashboard-column">
+          <Section icon={<Bell />} title="Needs you" count={needYou().length} needs empty="No sessions need you">
+            <For each={needYou()}>
+              {(s) => (
+                <Row colour={worktreeColour(s.worktree)} onOpen={() => props.onSession(s.id)} title="Open its Tab">
+                  <StateDot state={s.state} />
+                  <span class="dashboard-row-title">{s.name}</span>
+                  <span class="dashboard-row-wt">{label(s.worktree, null)}</span>
+                </Row>
+              )}
+            </For>
+          </Section>
+
+          <Section
+            icon={<MessageSquareCode />}
+            title="Reviews requested"
+            count={reviewRequests.list().length}
+            empty="No reviews requested"
+            github={{ refreshed: since(reviewRequests.refreshedAt()), loading: reviewRequests.loading(), error: reviewRequests.error(), onRefresh: reviewRequests.refresh }}
+          >
+            <For each={reviewRequests.list()}>
+              {(r) => (
+                <Row colour={worktreeOn(r.head) ? worktreeColour(worktreeOn(r.head)!.path) : undefined} onOpen={() => props.onReviewRequest(r)} title={`#${r.number} ${r.title}`}>
+                  <GitPullRequestArrow />
+                  <span class="dashboard-row-title">{r.title}</span>
+                  <span class="pr-number">#{r.number}</span>
+                  <span class="dashboard-row-meta">
+                    {r.author}
+                    <Show when={r.requestedAt}>
+                      {(at) => (
+                        <>
+                          {" · asked "}
+                          {(now(), ago(at()))}
+                        </>
+                      )}
+                    </Show>
+                  </span>
+                  <Show when={r.reRequested}>
+                    <span class="dashboard-tag">re-requested</span>
+                  </Show>
+                  <ChecksSummary checks={r.checks} />
+                </Row>
+              )}
+            </For>
+          </Section>
+
+          <Section
+            icon={<GitPullRequestArrow />}
+            title="Your PRs"
+            count={openPrs().length}
+            empty="No open PRs"
+            github={{ refreshed: since(myPrs.refreshedAt()), loading: myPrs.loading(), error: myPrs.error().replace(PR_HINT, GH_HINT), onRefresh: myPrs.refresh }}
+            action={
+              <button class="link" onClick={() => props.onAllPrs()} title="Every PR of yours, merged and closed ones too, on the PR board">
+                All PRs →
+              </button>
+            }
+          >
+            <For each={STAGES}>
+              {(group) => {
+                const here = () => openPrs().filter((p) => p.stage === group.stage);
+                return (
+                  <Show when={here().length}>
+                    <div class={`dashboard-group pr-stage-${group.stage}`}>
+                      {group.icon()}
+                      {group.title}
+                      <span class="badge">{here().length}</span>
+                    </div>
+                    <For each={here()}>{(pr) => <PrRow pr={pr} worktree={worktreeOn(pr.head)} onOpen={() => props.onPr(pr)} onStartSession={() => props.onStartSession(pr)} />}</For>
+                  </Show>
+                );
+              }}
+            </For>
+          </Section>
+
+          <Section icon={<GitBranch />} title="Worktrees that need attention" count={attention.list().length} empty="No Worktrees need attention" error={attention.error()}>
+            <For each={attention.list()}>
+              {(w: WorktreeAttention) => (
+                <Row colour={worktreeColour(w.path)} onOpen={() => props.onWorktree(w.path)} title={`${w.path}: switch to it, with its changes`}>
+                  <GitBranch />
+                  <span class="dashboard-row-title mono">{label(w.path, w.branch)}</span>
+                  <span class="dashboard-row-meta">{w.reasons.map(reasonText).join(" · ")}</span>
+                </Row>
+              )}
+            </For>
+          </Section>
+
+          <Section icon={<Eraser />} title="Ready to clean up" count={cleanUp.list().length} empty="Nothing to clean up" error={cleanUp.error()} onHead={() => props.onCleanUp()}>
+            <For each={cleanUp.list()}>
+              {(w: WorktreeMerge) => (
+                <Row colour={worktreeColour(w.path)} onOpen={() => props.onCleanUp()} title="Open the Worktrees overview">
+                  <GitBranch />
+                  <span class="dashboard-row-title mono">{label(w.path, w.branch)}</span>
+                  <span class="dashboard-row-meta">{mergeText(w.merge)}</span>
+                </Row>
+              )}
+            </For>
+          </Section>
+
+          <Section icon={<Sparkles />} title="Sessions">
+            <p class="dashboard-line">
+              <span class="dashboard-count">
+                <StateDot state="working" />
+                {count("working")} Working
+              </span>
+              <span class="dashboard-count">
+                <StateDot state="idle" />
+                {count("idle", "suspended")} Idle
+              </span>
+            </p>
+          </Section>
+        </div>
       </div>
     </section>
   );
