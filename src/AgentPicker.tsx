@@ -1,7 +1,8 @@
-// Ctrl+K: Ctrl+P's look, for hopping between Agent sessions. Each row is a session with its
-// Worktree and state; typing narrows by either name (letters in order, not necessarily adjacent).
+// Ctrl+K: Ctrl+P's look, for hopping between Agent sessions. Each row is a session (its face and
+// name) with its Worktree and state; typing narrows by either name (letters in order, not necessarily adjacent).
 // The ones that need the user come first. Arrow keys move, Enter shows the session, Esc closes.
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { Avatar } from "./Avatar";
 import type { SessionId, SessionInfo, SessionState } from "./core";
 import { GitBranch, Search } from "./icons";
 import { StateDot } from "./StateDot";
@@ -133,7 +134,10 @@ export function AgentPicker(props: {
                 onMouseEnter={() => setSelected(i())}
                 onClick={() => pick(row)}
               >
-                <StateDot state={row.session.state} />
+                <span class="agent-picker-face" style={{ "--c": row.colour }}>
+                  <Avatar name={row.session.name} colour={row.colour} size={24} />
+                  <StateDot state={row.session.state} />
+                </span>
                 <span class="file">
                   <Marked text={row.session.name} at={row.inName} />
                 </span>

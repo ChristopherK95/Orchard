@@ -960,7 +960,11 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .palette-empty { padding: 10px 14px; margin: 0; }
 /* Ctrl+K: the Agent picker, Ctrl+P's look with a session per row. */
 .agent-picker .palette-item .hit { color: var(--fg-1); }
-.agent-picker .state-dot { flex: none; }
+.agent-picker .palette-item { min-height: 40px; }
+/* The session's face, with its state dot on its corner. */
+.agent-picker-face { position: relative; flex: none; display: inline-flex; }
+.agent-picker-face .avatar { border-radius: var(--r-md); background: color-mix(in srgb, var(--c) 22%, var(--bg-1)); }
+.agent-picker-face .state-dot { position: absolute; right: -4px; bottom: -3px; width: 12px; height: 12px; border-radius: 50%; background: var(--card); }
 .agent-picker-worktree { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font: 12px var(--mono); color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; }
 .agent-picker .palette-item .agent-picker-worktree .lucide { flex: none; width: 12px; height: 12px; color: var(--c, var(--fg-3)); }
 .agent-picker-state { color: var(--suspended-text); }
