@@ -266,7 +266,12 @@ export interface Appearance {
   codeFont: string | null;
   codeFontSize: number;
   ligatures: boolean;
+  userBubble: BubbleColor;
 }
+
+/** The colours the user's chat bubbles can have. */
+export const BUBBLE_COLORS = ["grey", "green", "blue", "purple", "pink", "orange"] as const;
+export type BubbleColor = (typeof BUBBLE_COLORS)[number];
 
 export interface FontFamily {
   name: string;
@@ -307,6 +312,7 @@ export type SettingChange =
   | { kind: "codeFont"; family: string | null }
   | { kind: "codeFontSize"; px: number }
   | { kind: "ligatures"; on: boolean }
+  | { kind: "userBubble"; color: BubbleColor }
   | { kind: "vim"; on: boolean }
   | { kind: "turnFinished"; on: boolean }
   | { kind: "dashboardOpenOnStart"; on: boolean }

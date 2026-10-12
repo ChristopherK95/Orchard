@@ -47,7 +47,7 @@ impl Default for DashboardSettings {
     }
 }
 
-/// Fonts (ticket 32).
+/// Fonts (ticket 32) and the colour of the user's chat bubbles.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
 pub struct Appearance {
@@ -59,6 +59,21 @@ pub struct Appearance {
     pub code_font_size: u32,
     /// Ligatures (`=>`, `!=` drawn as one symbol) where code is shown.
     pub ligatures: bool,
+    /// The colour of the user's own messages in the transcript.
+    pub user_bubble: BubbleColor,
+}
+
+/// The colours a user's chat bubble can have (styles.css has the shades).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BubbleColor {
+    #[default]
+    Grey,
+    Green,
+    Blue,
+    Purple,
+    Pink,
+    Orange,
 }
 
 /// The code font sizes allowed (others in the file are taken as the nearest).
@@ -71,6 +86,7 @@ impl Default for Appearance {
             code_font: None,
             code_font_size: 13,
             ligatures: true,
+            user_bubble: BubbleColor::Grey,
         }
     }
 }
@@ -193,6 +209,9 @@ pub enum SettingChange {
     Ligatures {
         on: bool,
     },
+    UserBubble {
+        color: BubbleColor,
+    },
     Vim {
         on: bool,
     },
@@ -266,6 +285,18 @@ impl SettingChange {
                 )),
             ),
             Self::Ligatures { on } => (app("appearance"), "ligatures", Some(value(*on))),
+            Self::UserBubble { color } => (
+                app("appearance"),
+                "user_bubble",
+                Some(value(match color {
+                    BubbleColor::Grey => "grey",
+                    BubbleColor::Green => "green",
+                    BubbleColor::Blue => "blue",
+                    BubbleColor::Purple => "purple",
+                    BubbleColor::Pink => "pink",
+                    BubbleColor::Orange => "orange",
+                })),
+            ),
             Self::Vim { on } => (app("editor"), "vim", Some(value(*on))),
             Self::TurnFinished { on } => (app("notifications"), "turn_finished", Some(value(*on))),
             Self::DashboardOpenOnStart { on } => {
@@ -516,6 +547,8 @@ const FILE_HEADER: &str = "\
 code_font_size = 13
 # Ligatures (=> and != drawn as one symbol) where code is shown.
 ligatures = true
+# The colour of your messages in the chat: grey, green, blue, purple, pink or orange.
+user_bubble = \"grey\"
 
 [editor]
 # Vim keybindings in the Manual editor (:w saves, :q closes the file tab).
@@ -672,6 +705,28 @@ mod tests {
             panic!()
         };
         assert_eq!(settings.appearance.code_font, None);
+    }
+
+    #[test]
+    fn the_user_bubble_is_grey_unless_a_colour_is_chosen() {
+        let settings: Settings = toml::from_str("").unwrap();
+        assert_eq!(settings.appearance.user_bubble, BubbleColor::Grey);
+        assert!(toml::from_str::<Settings>("[appearance]\nuser_bubble = \"teal\"").is_err());
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        change(
+            &path,
+            None,
+            &SettingChange::UserBubble {
+                color: BubbleColor::Green,
+            },
+        )
+        .unwrap();
+        let Read::Parsed(settings) = read(&path) else {
+            panic!()
+        };
+        assert_eq!(settings.appearance.user_bubble, BubbleColor::Green);
     }
 
     #[test]
