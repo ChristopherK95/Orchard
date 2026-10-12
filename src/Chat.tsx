@@ -2,9 +2,10 @@
 // composer, banners, the Recent sessions list and the state labels.
 import { createEffect, createResource, createSignal, For, type JSX, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { type Attachment, core, type OtherConversation, type PermissionMode, type QueuedPrompt, type RecentSession, type SessionId, type SessionInfo } from "./core";
+import { type Attachment, core, type FileMatch, type OtherConversation, type PermissionMode, type QueuedPrompt, type RecentSession, type SessionId, type SessionInfo } from "./core";
 import { ContextMeter } from "./ContextMeter";
 import { EditNotes } from "./EditNotes";
+import { createMentionMenu, mention, MentionMarks, MentionMenu } from "./FileMentions";
 import { createSlashMenu, SlashMenu, useSlashCommands } from "./SlashCommands";
 import {
   ArrowUp,
@@ -285,12 +286,28 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
   };
+  // Typing `@` and part of a name lists the Worktree's files to mention.
+  const [caret, setCaret] = createSignal(0);
+  const trackCaret = () => setCaret(input.selectionStart);
+  const mentions = createMentionMenu(text, caret, () => props.session.worktree);
+  const completeMention = (file: FileMatch) => {
+    const span = mentions.span();
+    if (!span) return;
+    const value = text();
+    const inserted = `${mention(file.path)} `;
+    setText(value.slice(0, span.start) + inserted + value.slice(span.end).replace(/^ /, ""));
+    const at = span.start + inserted.length;
+    input.focus();
+    input.setSelectionRange(at, at);
+    setCaret(at);
+  };
   const working = () => props.session.state === "working";
   // Mid-turn: a message queues, and Stop is offered.
   const busy = () => working() || props.session.state === "needsYou";
   // A Suspended session takes a message too: sending it resumes the session. A Working one queues it.
   const disabled = () => props.session.state !== "idle" && props.session.state !== "suspended" && !working();
   let input!: HTMLTextAreaElement;
+  let marks!: HTMLDivElement;
   let root!: HTMLDivElement;
   // (Not while the Dashboard or a Board over it has the keyboard.)
   const focus = () => !document.activeElement?.closest(".board") && input.focus();
@@ -543,35 +560,53 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
             onPick={(command) => complete(command.name)}
           />
         </Show>
-        <div class="composer-inner">
-          <textarea
-            ref={input}
-            style={{ height: `${inputHeight()}px` }}
-            value={text()}
-            onInput={(e) => setText(e.currentTarget.value)}
-            onPaste={onPaste}
-            onKeyDown={(e) => {
-              if (slash.key(e, (command) => complete(command.name))) return;
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              } else if (e.key === "Escape" && busy()) {
-                e.preventDefault();
-                e.stopPropagation();
-                void stop();
-              }
-            }}
-            placeholder={
-              props.session.state === "exited"
-                ? "The Agent exited."
-                : props.session.state === "needsYou"
-                  ? "Answer the permission card above first (Y / N)."
-                  : working()
-                    ? "Queue a message for when the Agent's done (Enter to queue, Esc to stop the Agent)"
-                    : "Message the Agent (Enter to send, Shift+Enter for a newline, / for commands)"
-            }
-            disabled={locked()}
+        <Show when={mentions.open() && !slash.open() && !locked()}>
+          <MentionMenu
+            items={mentions.items()}
+            selected={mentions.selected()}
+            onHover={mentions.setSelected}
+            onPick={completeMention}
           />
+        </Show>
+        <div class="composer-inner">
+          <div class="composer-field">
+            <MentionMarks text={text()} worktree={props.session.worktree} ref={(el) => (marks = el)} />
+            <textarea
+              ref={input}
+              style={{ height: `${inputHeight()}px` }}
+              value={text()}
+              onInput={(e) => {
+                setText(e.currentTarget.value);
+                trackCaret();
+              }}
+              onKeyUp={trackCaret}
+              onScroll={(e) => (marks.scrollTop = e.currentTarget.scrollTop)}
+              onClick={trackCaret}
+              onPaste={onPaste}
+              onKeyDown={(e) => {
+                if (slash.key(e, (command) => complete(command.name))) return;
+                if (mentions.key(e, completeMention)) return;
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void send();
+                } else if (e.key === "Escape" && busy()) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  void stop();
+                }
+              }}
+              placeholder={
+                props.session.state === "exited"
+                  ? "The Agent exited."
+                  : props.session.state === "needsYou"
+                    ? "Answer the permission card above first (Y / N)."
+                    : working()
+                      ? "Queue a message for when the Agent's done (Enter to queue, Esc to stop the Agent)"
+                      : "Message the Agent (Enter to send, Shift+Enter for a newline, / for commands, @ for files)"
+              }
+              disabled={locked()}
+            />
+          </div>
           <div class="composer-bar">
             <button
               class="ghost attach icon-only"
