@@ -1,11 +1,12 @@
-// The Worktrees overview: every Worktree of the repository, with whether its branch has been
+// The Worktrees overview: every Worktree of the repository but the main checkout (which can't be
+// removed), with whether its branch has been
 // merged into its Base (however the PR landed), so the ones that are done can be removed. It shows
 // what the last fetch knew at once, then fetches for news of merged PRs and looks again. Ticked
 // Worktrees are removed together, after a confirmation of what each removal stops and deletes;
 // one that would lose work is skipped there, and goes through its own Remove dialog instead.
 import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { core, type MergeState, type RemovalCheck, type WorktreeMerge } from "./core";
-import { Check, GitBranch, GitMerge, House, Loader, Trash2, TriangleAlert, X } from "./icons";
+import { Check, GitBranch, GitMerge, Loader, Trash2, TriangleAlert, X } from "./icons";
 import { worktreeColour, type WorktreeTab } from "./Worktrees";
 
 const plural = (n: number, thing: string) => `${n} ${thing}${n === 1 ? "" : "s"}`;
@@ -14,10 +15,9 @@ const plural = (n: number, thing: string) => `${n} ${thing}${n === 1 ? "" : "s"}
 const merged = (m: MergeState | null) => m?.kind === "merged" || m?.kind === "changesInBase";
 
 /** Can go: merged, with nothing uncommitted. */
-const ready = (row: WorktreeMerge) => !row.isMain && merged(row.merge) && row.changed === 0;
+const ready = (row: WorktreeMerge) => merged(row.merge) && row.changed === 0;
 
 function status(row: WorktreeMerge): { text: string; tone: "ok" | "warn" | "muted" | "error" } {
-  if (row.isMain) return { text: "Main checkout: stays", tone: "muted" };
   if (row.error) return { text: row.error, tone: "error" };
   const m = row.merge;
   switch (m?.kind) {
@@ -84,9 +84,9 @@ export function WorktreesOverview(props: {
   const [fetched, setFetched] = createSignal(0);
   const listed = () => props.worktrees.map((w) => `${w.path} ${w.head} ${w.changed}`).join("\n");
   const [rows] = createResource(() => [listed(), fetched()] as const, () => core.mergeOverview());
-  // Ready to remove first; the rest as the sidebar orders them.
+  // Ready to remove first; the rest as the sidebar orders them. Not the main checkout: it stays.
   const sorted = createMemo(() => {
-    const all = rows.latest ?? [];
+    const all = (rows.latest ?? []).filter((r) => !r.isMain);
     return [...all.filter(ready), ...all.filter((r) => !ready(r))];
   });
   const readyCount = () => sorted().filter(ready).length;
@@ -98,7 +98,7 @@ export function WorktreesOverview(props: {
   let chosen = false;
   createEffect(() => {
     const all = sorted();
-    const live = (path: string) => all.some((r) => r.path === path && !r.isMain);
+    const live = (path: string) => all.some((r) => r.path === path);
     setChecked((now) => {
       const kept = now.filter(live);
       return chosen ? kept : all.filter(ready).map((r) => r.path);
@@ -307,9 +307,11 @@ export function WorktreesOverview(props: {
               </Show>
               <Show when={rows.latest} fallback={<Show when={!rows.error}><p class="muted">Checking each branch…</p></Show>}>
                 <p class="muted small">
-                  {readyCount() === 0
-                    ? "None of the Worktrees' branches are merged yet."
-                    : `${plural(readyCount(), "Worktree")} can be removed: ${readyCount() === 1 ? "its branch is" : "their branches are"} merged, with nothing uncommitted.`}
+                  {sorted().length === 0
+                    ? "There are no Worktrees besides the main checkout."
+                    : readyCount() === 0
+                      ? "None of the Worktrees' branches are merged yet."
+                      : `${plural(readyCount(), "Worktree")} can be removed: ${readyCount() === 1 ? "its branch is" : "their branches are"} merged, with nothing uncommitted.`}
                 </p>
                 <ul class="overview-list">
                   <For each={sorted()}>
@@ -318,20 +320,16 @@ export function WorktreesOverview(props: {
                       const sessions = () => props.sessionCount(row.path);
                       return (
                         <li classList={{ ready: ready(row) }} style={{ "--c": worktreeColour(row.path) }}>
-                          <Show when={!row.isMain} fallback={<span class="overview-check" />}>
-                            <input
-                              type="checkbox"
-                              class="overview-check"
-                              checked={isChecked(row.path)}
-                              onChange={(e) => toggle(row.path, e.currentTarget.checked)}
-                              aria-label={`Remove ${props.label(row.path)}`}
-                            />
-                          </Show>
+                          <input
+                            type="checkbox"
+                            class="overview-check"
+                            checked={isChecked(row.path)}
+                            onChange={(e) => toggle(row.path, e.currentTarget.checked)}
+                            aria-label={`Remove ${props.label(row.path)}`}
+                          />
                           <button class="overview-open" onClick={() => props.onOpen(row.path)} title={`Go to ${row.path}`}>
                             <span class="overview-name">
-                              <Show when={row.isMain} fallback={<GitBranch />}>
-                                <House />
-                              </Show>
+                              <GitBranch />
                               <span class="mono">{props.label(row.path)}</span>
                             </span>
                             <span class={`overview-status ${s().tone}`}>
@@ -352,12 +350,10 @@ export function WorktreesOverview(props: {
                             </Show>
                             <span class="mono muted small overview-path">{row.path}</span>
                           </button>
-                          <Show when={!row.isMain}>
-                            <button class="overview-remove small" onClick={() => props.onRemove(row.path)} title="Remove just this Worktree (shows what it would lose first)">
-                              <Trash2 />
-                              Remove…
-                            </button>
-                          </Show>
+                          <button class="overview-remove small" onClick={() => props.onRemove(row.path)} title="Remove just this Worktree (shows what it would lose first)">
+                            <Trash2 />
+                            Remove…
+                          </button>
                         </li>
                       );
                     }}
