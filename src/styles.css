@@ -305,16 +305,17 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .sidebar-item { flex: none; justify-content: flex-start; gap: 8px; min-height: 32px; padding: 0 8px; background: transparent; border: 0; color: var(--fg-2); font-weight: 400; text-align: left; }
 .sidebar-item:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-1); }
 .sidebar-item.on { background: var(--bg-4); color: var(--fg-1); font-weight: 500; }
-.sidebar-item-wrap { position: relative; flex: none; display: flex; flex-direction: column; }
-.sidebar-item-wrap .branch-switch { position: absolute; top: 4px; right: 4px; min-height: 24px; width: 24px; padding: 0; visibility: hidden; background: var(--bg-3); color: var(--fg-3); }
-.sidebar-item-wrap:hover .branch-switch, .sidebar-item-wrap .branch-switch:focus-visible { visibility: visible; }
-.sidebar-item-wrap .branch-switch .lucide { width: 13px; height: 13px; }
 .sidebar-item .wt-glyph { color: var(--c); }
 .sidebar-item .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sidebar-item.dimmed .wt-glyph { color: var(--fg-dim); }
 .sidebar-item.dimmed:not(:hover) { color: var(--fg-3); }
 .sidebar-item.removed .label { text-decoration: line-through; color: var(--fg-3); }
 .sidebar-item .lucide.spin { width: 13px; height: 13px; }
+/* Its running shells: a click shows its terminal. */
+.sidebar-item .shell-badge { flex: none; display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 5px; border-radius: 4px; color: var(--fg-3); font-size: 11px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.sidebar-item .shell-badge .lucide { width: 13px; height: 13px; }
+.sidebar-item .shell-badge.busy { color: var(--ok); }
+.sidebar-item .shell-badge:hover { background: var(--bg-4); color: var(--fg-1); }
 .sidebar-list.my-prs { flex: 0 1 auto; max-height: 40%; }
 .my-pr { min-height: 30px; }
 .my-pr .wt-glyph { width: 14px; height: 14px; }
@@ -358,6 +359,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .rail-item.add { color: var(--fg-3); }
 .rail-item:last-child { color: var(--fg-2); }
 .rail-item .needs-dot { position: absolute; top: 5px; right: 5px; width: 8px; height: 8px; box-shadow: 0 0 0 2px var(--bg-2); }
+.rail-item .shell-dot { position: absolute; bottom: 5px; right: 5px; box-shadow: 0 0 0 2px var(--bg-2); }
 
 /* Header · 52 px: the sidebar trigger, where you are, the views, and the window's buttons. It's
    the window's title bar (a drag region). It shares the sidebar's surface and reaches 1 px left

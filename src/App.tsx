@@ -992,6 +992,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           if (mainView() === "columns" && !pinned().includes(path)) void pin(path);
           else selectWorktree(path);
         }}
+        onShowTerminal={(path) => {
+          toMainView();
+          if (mainView() === "columns" && !pinned().includes(path)) void pin(path);
+          else selectWorktree(path);
+          if (!terminalOpen(path)) toggleTerminalOf(path);
+        }}
         onShowSession={(id) => void show(id)}
         onCloseSession={(id) => void closeTab(id)}
         onNewSession={(path) => void newSession(path)}
@@ -1001,7 +1007,6 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         }}
         onNewWorktree={() => setCreatingWorktree(true)}
         onOverview={() => setOverviewOpen(true)}
-        onSwitchBranch={toggleBranches}
         onSwitchWorkspace={() => setSwitching(true)}
         onSearch={() => !removing() && !creatingWorktree() && setPaletteOpen(true)}
         onSettings={() => openSettingsPage()}
