@@ -1333,8 +1333,10 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .board-card-top .pr-button { margin-left: auto; min-height: 20px; padding: 0 5px; gap: 4px; font: 500 11px var(--mono); color: var(--fg-3); }
 .board-card-top .pr-button .lucide { width: 12px; height: 12px; }
 .pr-backdrop { padding: 4vh 3vw; align-items: stretch; }
-.modal.pr-overlay { width: min(1280px, 100%); height: 100%; max-height: 100%; border-top: 3px solid var(--c); }
-.pr-head { padding: 14px 14px 12px 18px; border-bottom: 1px solid var(--line); }
+/* No borders, like Review: the head, summary and side are one grey frame around the timeline, a
+   rounded panel; the head is tinted with the Worktree's colour. */
+.modal.pr-overlay { width: min(1280px, 100%); height: 100%; max-height: 100%; background: var(--bg-2); border-color: var(--bg-2); border-radius: var(--r-lg); }
+.pr-head { padding: 14px 14px 12px 18px; background: color-mix(in srgb, var(--c) 18%, var(--bg-2)); }
 .pr-head > b { display: flex; flex-direction: column; gap: 4px; }
 .pr-mark { flex: none; width: 20px; height: 20px; align-self: flex-start; margin-top: 2px; color: var(--fg-2); }
 .pr-mark.open, .pr-state.open .lucide { color: var(--idle); }
@@ -1355,13 +1357,13 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .pr-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 40px; text-align: center; }
 .pr-empty > .lucide { width: 24px; height: 24px; color: var(--fg-3); margin-bottom: 6px; }
 .pr-empty p { margin: 0; }
-.pr-summary { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--bg-2); font-size: 12.5px; color: var(--fg-2); }
+.pr-summary { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 18px; background: var(--bg-2); font-size: 12.5px; color: var(--fg-2); }
 .pr-summary b { color: var(--fg-1); font-weight: 500; }
 .pr-size { font: 12px var(--mono); }
 .pr-size .add { color: var(--diff-add-sign); }
 .pr-size .del { color: var(--diff-del-sign); }
-.pr-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 300px); }
-.pr-main { min-height: 0; display: flex; flex-direction: column; }
+.pr-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 300px); padding: 0 0 8px 8px; }
+.pr-main { min-height: 0; display: flex; flex-direction: column; background: var(--bg-1); border-radius: var(--r-lg); overflow: hidden; }
 .pr-tabs { margin: 12px 18px 0; align-self: flex-start; }
 .pr-tabs button { gap: 6px; }
 .pr-tabs .lucide { width: 14px; height: 14px; }
@@ -1370,7 +1372,7 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .pr-filter { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 18px 0; font-size: 12px; }
 .pr-chip { --t: var(--fg-2); min-height: 24px; gap: 6px; padding: 0 9px; border-radius: 999px; background: color-mix(in srgb, var(--t) 14%, transparent); border: 1px solid transparent; color: color-mix(in srgb, var(--t) 70%, #fff); font-size: 12px; font-weight: 500; }
 .pr-chip:hover:not(:disabled) { background: color-mix(in srgb, var(--t) 22%, transparent); color: color-mix(in srgb, var(--t) 70%, #fff); }
-.pr-chip.on { border-color: var(--t); }
+.pr-chip.on, .pr-chip.on:hover:not(:disabled) { background: color-mix(in srgb, var(--t) 34%, transparent); color: #fff; }
 .pr-chip .badge { height: 16px; min-width: 16px; padding: 0 5px; font-size: 10.5px; }
 .pr-filter-error { display: inline-flex; align-items: center; gap: 4px; color: var(--warn); cursor: help; }
 .pr-filter-error .lucide { width: 12px; height: 12px; }
@@ -1390,8 +1392,10 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .pr-assignee { display: flex; align-items: center; gap: 6px; }
 .pr-scroll { flex: 1; min-height: 0; overflow: auto; padding: 14px 18px 24px; }
 .pr-timeline { display: flex; flex-direction: column; gap: 12px; }
-.pr-post { border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--bg-1); overflow: hidden; }
-.pr-post > header { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 6px 0 12px; background: var(--bg-2); font-size: 12.5px; }
+/* Posts and threads: cards on the panel, their parts split by a 2 px gap of it rather than a line;
+   an approval or a change request keeps its coloured edge. */
+.pr-post { border: 1px solid var(--card); border-radius: var(--r-lg); background: var(--card); overflow: hidden; }
+.pr-post > header { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 6px 0 12px; background: color-mix(in srgb, var(--fg-1) 4%, var(--card)); font-size: 12.5px; }
 .pr-post > header b { font-weight: 600; }
 .pr-post > header .icon { min-height: 24px; width: 24px; }
 .pr-post-mark { flex: none; width: 14px; height: 14px; color: var(--fg-3); }
@@ -1399,21 +1403,21 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .pr-post-mark.changes { color: var(--danger); }
 .pr-post.approved { border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); }
 .pr-post.changes_requested { border-color: var(--danger-border); }
-.pr-post-body { padding: 12px 14px; border-top: 1px solid var(--line); }
+.pr-post-body { padding: 12px 14px; }
 .pr-post-body .markdown, .pr-thread-comment .markdown { font-size: 13.5px; }
 .pr-quiet { margin: 6px 2px; font-size: 13px; }
 .pr-threads { display: flex; flex-direction: column; gap: 18px; }
 .pr-file h4 { margin: 0 0 8px; font-size: 12.5px; color: var(--fg-1); }
-.pr-thread { margin-bottom: 10px; border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+.pr-thread { margin-bottom: 10px; border-radius: var(--r-lg); background: var(--card); overflow: hidden; }
 .pr-thread.outdated { opacity: 0.8; }
-.pr-thread-head { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 6px 0 12px; background: var(--bg-2); }
+.pr-thread-head { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 6px 0 12px; background: color-mix(in srgb, var(--fg-1) 4%, var(--card)); }
 .pr-thread-head .icon { min-height: 24px; width: 24px; }
 .pr-outdated { padding: 1px 7px; border-radius: 999px; background: var(--bg-4); font-size: 11px; color: var(--fg-2); }
-.pr-hunk { margin: 0; padding: 6px 0; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--bg-2); font: 12px/1.55 var(--mono); overflow-x: auto; }
+.pr-hunk { margin: 0; padding: 6px 0; display: flex; flex-direction: column; background: var(--code-bg); font: 12px/1.55 var(--mono); overflow-x: auto; }
 .pr-hunk > span { padding: 0 12px; white-space: pre; }
 .pr-hunk > .add { background: var(--diff-add-bg); color: var(--diff-add-fg); }
 .pr-hunk > .del { background: var(--diff-del-bg); color: var(--diff-del-fg); }
-.pr-thread-comment { padding: 10px 14px; border-top: 1px solid var(--line); }
+.pr-thread-comment { padding: 10px 14px; border-top: 2px solid var(--bg-1); }
 .pr-thread-comment .who { margin-bottom: 4px; font-size: 12.5px; }
 .pr-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 1px; }
 .pr-list > li { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 10px; border-radius: var(--r-md); font-size: 13px; }
@@ -1429,7 +1433,7 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .pr-check-mark.ok, .pr-checks-summary .ok { color: var(--ok); }
 .pr-check-mark.bad { color: var(--danger); }
 .pr-check-mark.wait { color: var(--needs-text); }
-.pr-side { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 18px; padding: 14px 18px 24px; border-left: 1px solid var(--line); background: var(--bg-2); font-size: 13px; }
+.pr-side { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 18px; padding: 14px 18px 24px; background: var(--bg-2); font-size: 13px; }
 .pr-side h4 { margin: 0 0 8px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-3); }
 .pr-side p { margin: 0; }
 .pr-status { display: flex; align-items: center; gap: 8px; margin-bottom: 4px !important; }
