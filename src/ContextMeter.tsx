@@ -1,8 +1,10 @@
 // The composer's context meter: how full the session's context window is, as a ring and a
-// percentage, and on hover the tokens used and left, what the session has spent, and its cost.
+// percentage, then the tokens the session has spent and its cost, each with its icon; on hover,
+// the context's tokens used and left and the spent tokens by kind.
 import { createEffect, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 import { core, type SessionId, type SessionUsage } from "./core";
+import { Coins, DollarSign } from "./icons";
 
 /** Each session's usage as the core last announced it. */
 const [bySession, setBySession] = createStore<Record<SessionId, SessionUsage>>({});
@@ -15,6 +17,11 @@ function tokens(n: number): string {
   if (n < 10_000) return n.toLocaleString("en-US");
   if (n < 1_000_000) return `${(n / 1000).toFixed(n < 100_000 ? 1 : 0)}k`;
   return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+/** "$0.42"; under a cent, "<$0.01". */
+export function dollars(usd: number): string {
+  return usd > 0 && usd < 0.01 ? "<$0.01" : `$${usd.toFixed(2)}`;
 }
 
 /** A session's usage, kept current (asked for once, then followed); undefined until it's known. */
@@ -55,18 +62,36 @@ export function ContextMeter(props: { session: SessionId }) {
         class="context-meter"
         classList={{ high: (context()?.percent ?? 0) >= 70, full: (context()?.percent ?? 0) >= 90 }}
         tabIndex={0}
-        aria-label={context() ? `Context ${context()!.percent}% full` : "Tokens used"}
+        aria-label={[
+          context() && `Context ${context()!.percent}% full`,
+          spent() && `${tokens(spent())} tokens used`,
+          usage()?.costUsd != null && `cost ${dollars(usage()!.costUsd!)}`,
+        ]
+          .filter(Boolean)
+          .join(", ")}
       >
-        <Show when={context()} fallback={<span class="value">{tokens(spent())} tokens</span>}>
+        <Show when={context()}>
           {(c) => (
-            <>
+            <span class="stat context">
               <svg viewBox="0 0 16 16" aria-hidden="true">
                 <circle class="track" cx="8" cy="8" r="6" />
                 <circle class="fill" cx="8" cy="8" r="6" stroke-dasharray={`${(RING * c().percent) / 100} ${RING}`} />
               </svg>
               <span class="value">{c().percent}%</span>
-            </>
+            </span>
           )}
+        </Show>
+        <Show when={spent()}>
+          <span class="stat tokens">
+            <Coins />
+            {tokens(spent())} tokens
+          </span>
+        </Show>
+        <Show when={usage()?.costUsd != null}>
+          <span class="stat cost">
+            <DollarSign />
+            {dollars(usage()!.costUsd!).replace("$", "")}
+          </span>
         </Show>
         <div class="context-popover" role="tooltip">
           <Show when={context()}>
@@ -98,14 +123,6 @@ export function ContextMeter(props: { session: SessionId }) {
               <dd>{tokens(usage()!.cacheReadTokens)}</dd>
               <dt>Cache write</dt>
               <dd>{tokens(usage()!.cacheWriteTokens)}</dd>
-              <dt>Total</dt>
-              <dd>{tokens(spent())}</dd>
-            </dl>
-          </Show>
-          <Show when={usage()?.costUsd != null}>
-            <dl>
-              <dt>Cost</dt>
-              <dd>${usage()!.costUsd!.toFixed(2)}</dd>
             </dl>
           </Show>
           <p class="muted">Not kept when the editor restarts: a restored session counts from its next turn.</p>

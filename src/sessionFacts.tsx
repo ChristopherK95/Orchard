@@ -2,7 +2,7 @@
 // how long since it was active, the model, how full its context is and what it has cost.
 import { type Accessor, createSignal, Show } from "solid-js";
 import { ago } from "./Chat";
-import { contextOf, useUsage } from "./ContextMeter";
+import { contextOf, dollars, useUsage } from "./ContextMeter";
 import type { SessionInfo } from "./core";
 import { STATE_LABEL } from "./stateLabels";
 
@@ -17,11 +17,6 @@ function since(ms: number): string {
   if (min < 60) return `${min}m`;
   if (min < 60 * 24) return `${Math.floor(min / 60)}h`;
   return `${Math.floor(min / (60 * 24))}d`;
-}
-
-/** "$0.42"; under a cent, "<$0.01". */
-function dollars(usd: number): string {
-  return usd > 0 && usd < 0.01 ? "<$0.01" : `$${usd.toFixed(2)}`;
 }
 
 export function useSessionFacts(session: Accessor<SessionInfo>) {
