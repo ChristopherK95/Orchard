@@ -35,7 +35,7 @@ pub(crate) fn parse_utc(text: &str) -> Option<i64> {
     if separators.iter().any(|&(at, sep)| bytes[at] != sep) {
         return None;
     }
-    let fraction = &text[19..text.len() - 1];
+    let fraction = text.get(19..text.len() - 1)?;
     if !(fraction.is_empty()
         || (fraction.len() > 1
             && fraction.starts_with('.')
@@ -718,6 +718,9 @@ mod tests {
             parse_utc("2026-10-08T12:00:00Z")
         );
         assert_eq!(parse_utc("yesterday"), None);
+        // Not a time, and not split on a character's bytes either.
+        assert_eq!(parse_utc("2026-10-08T12:00:0é.5Z"), None);
+        assert_eq!(parse_utc("2026-10-08T12:00:00é5Z"), None);
 
         let periods = Periods {
             now: 100 * DAY,
