@@ -456,8 +456,12 @@ impl FakeGh {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("args");
+        let calls = dir.path().join("calls");
+        std::fs::create_dir(&calls).unwrap();
         let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n{script_tail}\n",
+            "#!/bin/sh\nf=$(mktemp '{}/call.XXXXXX'); printf '%s\\n' \"$@\" > \"$f\"\n\
+             printf '%s\\n' \"$@\" > '{}'\n{script_tail}\n",
+            calls.display(),
             log.display()
         );
         let path = dir.path().join("gh");
@@ -475,6 +479,21 @@ impl FakeGh {
             .unwrap_or_default()
             .lines()
             .map(str::to_owned)
+            .collect()
+    }
+
+    /// Every call's arguments (one per line, as `args`), in no particular order: calls made at the
+    /// same time each have a file of their own.
+    pub fn calls(&self) -> Vec<Vec<String>> {
+        std::fs::read_dir(self.dir.path().join("calls"))
+            .unwrap()
+            .map(|entry| {
+                std::fs::read_to_string(entry.unwrap().path())
+                    .unwrap()
+                    .lines()
+                    .map(str::to_owned)
+                    .collect()
+            })
             .collect()
     }
 }

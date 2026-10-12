@@ -184,6 +184,8 @@ esac"#,
         gh.args(),
         ["run", "view", "55", "--job", "777", "--log-failed"]
     );
+    // It remembers every call too: the PR's checks, the run's jobs, the log.
+    assert_eq!(gh.calls().len(), 3);
 }
 
 #[cfg(unix)]

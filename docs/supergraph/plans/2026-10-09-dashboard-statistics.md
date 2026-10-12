@@ -15,7 +15,7 @@ Decisions this plan builds on (agreed with the user):
 - Session log: `sessions.jsonl` in the app data folder next to `state.json` (see Task 9 for why), entries older than a year dropped on startup.
 
 ## Task 1: FakeGh remembers every call
-Status: pending
+Status: completed
 Risk: low
 Dependencies: none
 Files:
