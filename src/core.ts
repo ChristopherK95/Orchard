@@ -55,6 +55,10 @@ export interface SessionInfo {
   permissionMode: PermissionMode;
   /** New transcript items since the Tab was last shown. */
   unread: number;
+  /** The model it runs on, as the Agent names it ("Opus 4.8"); null until it's said. */
+  model: string | null;
+  /** When it last started or finished a turn (ms since the Unix epoch); null if it never has. */
+  lastActive: number | null;
 }
 
 /** A file as the Manual editor opens it; `version` goes back with the save. */
@@ -775,6 +779,8 @@ export type CoreEvent =
   | { kind: "sessionCreated"; session: SessionInfo }
   | { kind: "sessionStateChanged"; sessionId: SessionId; state: SessionState }
   | { kind: "permissionModeChanged"; sessionId: SessionId; mode: PermissionMode }
+  | { kind: "sessionModelChanged"; sessionId: SessionId; model: string }
+  | { kind: "sessionActivityChanged"; sessionId: SessionId; at: number }
   | { kind: "sessionUnreadChanged"; sessionId: SessionId; unread: number }
   /** The slash commands (and skills) the session's Agent offers: the whole list. */
   | { kind: "availableCommandsChanged"; sessionId: SessionId; commands: SlashCommand[] }

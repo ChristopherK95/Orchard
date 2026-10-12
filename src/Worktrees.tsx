@@ -1,15 +1,19 @@
 // The sidebar and context strip (ticket 06, redone in the shadcn style): the Workspace's Worktrees
-// down the left with the active one's Agent sessions under it, folding to an icon rail, and a strip
-// saying exactly where your next prompt goes.
-import { For, type JSX, Match, Show, Switch } from "solid-js";
+// down the left, each folding open to its Agent sessions as cards (a face, a name, where it stands),
+// the whole folding to an icon rail; and a strip saying exactly where your next prompt goes.
+import { createSignal, For, type JSX, Match, Show, Switch } from "solid-js";
+import { Avatar } from "./Avatar";
 import { ago } from "./Chat";
+import { contextOf, useUsage } from "./ContextMeter";
 import type { MyPullRequest, SessionId, SessionInfo, WorktreeInfo } from "./core";
 import { myPrs } from "./PrBoard";
 import { shellsIn } from "./shells";
 import {
   ArrowDownUp,
+  ChevronRight,
   ChevronsUpDown,
   CirclePause,
+  Columns2,
   CirclePlay,
   FileDiff,
   Folder,
@@ -29,6 +33,7 @@ import {
   X,
 } from "./icons";
 import { StateDot } from "./StateDot";
+import { STATE_LABEL } from "./stateLabels";
 
 /** The design's eight Worktree colours (wt-1 … wt-8): muted, so state colours stay louder. */
 const PALETTE = ["#6f87c4", "#a287c2", "#5d9cab", "#b89a66", "#6aa87a", "#c07d86", "#bd845c", "#848a96"];
@@ -104,8 +109,8 @@ export interface SidebarProps {
   onShowSession: (id: SessionId) => void;
   onCloseSession: (id: SessionId) => void;
   onNewSession: (path: string) => void;
-  /** Opens the Recent sessions menu under `anchor`. */
-  onRecent: (anchor: DOMRect) => void;
+  /** Opens the Worktree's Recent sessions menu under `anchor`. */
+  onRecent: (path: string, anchor: DOMRect) => void;
   onNewWorktree: () => void;
   onOverview: () => void;
   onSwitchWorkspace: () => void;
@@ -115,11 +120,40 @@ export interface SidebarProps {
   onPrBoard: () => void;
 }
 
+/** Which Worktrees were folded open (true) or shut by hand, by Workspace root: kept across restarts. */
+const [folds, setFolds] = createSignal<Record<string, Record<string, boolean>>>({});
+const foldsKey = (root: string) => `orchard.sidebar.folds:${root}`;
+function foldsIn(root: string): Record<string, boolean> {
+  if (!(root in folds())) {
+    let saved = {};
+    try {
+      saved = JSON.parse(localStorage.getItem(foldsKey(root)) ?? "{}");
+    } catch {}
+    setFolds((all) => ({ ...all, [root]: saved }));
+  }
+  return folds()[root];
+}
+function setFold(root: string, path: string, open: boolean) {
+  const next = { ...foldsIn(root), [path]: open };
+  setFolds((all) => ({ ...all, [root]: next }));
+  localStorage.setItem(foldsKey(root), JSON.stringify(next));
+}
+
+/** The time, a minute at a time: so "5 min ago" moves on. */
+const [minute, setMinute] = createSignal(Date.now());
+setInterval(() => setMinute(Date.now()), 60_000);
+
 export function Sidebar(props: SidebarProps) {
   const dimmed = (w: WorktreeTab) => !!props.pinned && !props.pinned.includes(w.path);
-  /** A click on a row's shell badge shows the terminal; anywhere else just selects. */
+  /** Open as last folded by hand; until then, the active Worktree and any with a session that
+   *  needs you are. */
+  const isOpen = (path: string) =>
+    foldsIn(props.workspaceRoot)[path] ?? (path === props.active || props.sessionsIn(path).some((s) => s.state === "needsYou"));
+  const fold = (path: string, open: boolean) => setFold(props.workspaceRoot, path, open);
+  /** A click on a header's shell badge shows the terminal; anywhere else folds it open or shut
+   *  (only a session card switches to a session). */
   const choose = (e: MouseEvent, path: string) =>
-    (e.target as Element).closest(".shell-badge") ? props.onShowTerminal(path) : props.onSelect(path);
+    (e.target as Element).closest(".shell-badge") ? props.onShowTerminal(path) : fold(path, !isOpen(path));
   const title = (w: WorktreeTab) =>
     w.removed ? `${w.path}: no longer a Worktree; its sessions still run` : dimmed(w) ? `${worktreeLabel(w)}: give it a column` : w.path;
   return (
@@ -190,24 +224,60 @@ export function Sidebar(props: SidebarProps) {
           <For each={props.worktrees}>
             {(w) => {
               const sessions = () => props.sessionsIn(w.path);
+              const open = () => isOpen(w.path);
               return (
-                <>
-                  <button
-                    class="sidebar-item"
-                    classList={{ on: w.path === props.active, dimmed: dimmed(w), removed: !!w.removed }}
-                    style={{ "--c": worktreeColour(w.path) }}
-                    title={title(w)}
-                    onClick={(e) => choose(e, w.path)}
-                  >
-                    <GitBranch class="wt-glyph" />
-                    <span class="label">{w.removed ? w.path.split(/[\\/]/).pop() : worktreeLabel(w)}</span>
-                    <ShellBadge path={w.path} />
-                    {worktreeSignal(sessions(), props.settingUp(w.path))}
-                  </button>
-                  <Show when={!props.pinned && w.path === props.active}>
-                    <SessionList {...props} worktree={w} sessions={sessions()} />
+                <section class="wt-group" classList={{ open: open(), dimmed: dimmed(w) }} style={{ "--c": worktreeColour(w.path) }}>
+                  <div class="wt-head" classList={{ on: w.path === props.active, removed: !!w.removed }}>
+                    <button
+                      class="wt-head-main"
+                      title={w.removed ? title(w) : `${w.path}\n${open() ? "Fold" : "Unfold"}`}
+                      aria-expanded={open()}
+                      onClick={(e) => choose(e, w.path)}
+                    >
+                      <span class="fold">
+                        <ChevronRight />
+                      </span>
+                      <GitBranch class="wt-glyph" />
+                      <span class="label">
+                        {w.removed ? w.path.split(/[\\/]/).pop() : worktreeLabel(w)}
+                        <Show when={sessions().length}>
+                          <span class="wt-count"> ({sessions().length})</span>
+                        </Show>
+                      </span>
+                      <ShellBadge path={w.path} />
+                      <Show when={!open()} fallback={props.settingUp(w.path) && <Loader class="spin setting-up" aria-label="Setting up" />}>
+                        {worktreeSignal(sessions(), props.settingUp(w.path))}
+                      </Show>
+                    </button>
+                    <Show when={!w.removed}>
+                      <span class="wt-actions">
+                        <Show when={dimmed(w)}>
+                          <button class="ghost icon" onClick={() => props.onSelect(w.path)} title="Give it a column in the Columns view" aria-label="Give it a column">
+                            <Columns2 />
+                          </button>
+                        </Show>
+                        <Show when={!props.pinned}>
+                          <button
+                            class="ghost icon recent-menu"
+                            onClick={(e) => props.onRecent(w.path, e.currentTarget.getBoundingClientRect())}
+                            title="Closed sessions in this Worktree, and its conversations started elsewhere"
+                            aria-label="Recent sessions"
+                          >
+                            <History />
+                          </button>
+                        </Show>
+                        <Show when={!props.settingUp(w.path)}>
+                          <button class="ghost icon" onClick={() => props.onNewSession(w.path)} title="New Agent session in this Worktree" aria-label="New session">
+                            <Plus />
+                          </button>
+                        </Show>
+                      </span>
+                    </Show>
+                  </div>
+                  <Show when={open()}>
+                    <SessionCards {...props} worktree={w} sessions={sessions()} />
                   </Show>
-                </>
+                </section>
               );
             }}
           </For>
@@ -276,59 +346,112 @@ function MyPullRequests(props: { worktrees: WorktreeTab[]; onOpen: (pr: MyPullRe
   );
 }
 
-/** The active Worktree's sessions, under it: each Tab, a new one, and the Recent menu. */
-function SessionList(props: SidebarProps & { worktree: WorktreeTab; sessions: SessionInfo[] }) {
-  const path = props.worktree.path;
+/** A Worktree's sessions, under it, a card each; or, with none, a way to start one. */
+function SessionCards(props: SidebarProps & { worktree: WorktreeTab; sessions: SessionInfo[] }) {
   return (
-    <div class="sub-menu">
-      <For each={props.sessions}>
-        {(s) => (
-          <span class="sub-item-wrap" classList={{ on: s.id === props.activeSession }}>
-            <button
-              class="sub-item"
-              onClick={() => s.id !== props.activeSession && props.onShowSession(s.id)}
-              onAuxClick={(e) => e.button === 1 && props.onCloseSession(s.id)}
-            >
-              <span class="label">{s.name}</span>
-              <Switch>
-                <Match when={s.state === "needsYou"}>
-                  <span class="state-badge needsYou">Needs you</span>
-                </Match>
-                <Match when={s.unread > 0 && s.id !== props.activeSession}>
-                  <span class="count-badge">{s.unread} new</span>
-                </Match>
-                <Match when={s.state === "working"}>
-                  <Loader class="spin working" aria-label="Working" />
-                </Match>
-                <Match when={s.state !== "idle"}>
-                  <StateDot state={s.state} title={s.state === "exited" ? "Exited" : "Suspended"} />
-                </Match>
-              </Switch>
+    <div class="session-cards">
+      <For
+        each={props.sessions}
+        fallback={
+          <Show when={!props.worktree.removed && !props.settingUp(props.worktree.path)}>
+            <button class="session-empty" onClick={() => props.onNewSession(props.worktree.path)} title="New Agent session in this Worktree">
+              <Plus />
+              New session
             </button>
-            <button class="close-tab" aria-label={`Close ${s.name}`} title="Close (it stays in Recent sessions; Ctrl+Shift+T reopens)" onClick={() => props.onCloseSession(s.id)}>
-              <X />
-            </button>
-          </span>
-        )}
+          </Show>
+        }
+      >
+        {(s) => <SessionCard session={s} colour={worktreeColour(props.worktree.path)} on={s.id === props.activeSession} onShow={props.onShowSession} onClose={props.onCloseSession} />}
       </For>
-      <Show when={!props.worktree.removed && !props.settingUp(path)}>
-        <button class="sub-item quiet" onClick={() => props.onNewSession(path)} title="New Agent session in this Worktree">
-          <Plus />
-          New session
-        </button>
-      </Show>
-      <Show when={!props.worktree.removed}>
-        <span class="recent-menu">
-          <button
-            class="sub-item quiet"
-            onClick={(e) => props.onRecent(e.currentTarget.getBoundingClientRect())}
-            title="Closed sessions in this Worktree, and its conversations started elsewhere"
-          >
-            <History />
-            Recent sessions
-          </button>
+    </div>
+  );
+}
+
+/** How long ago, briefly: "now", "4m", "3h", "2d". */
+function since(ms: number): string {
+  const min = Math.floor((Date.now() - ms) / 60_000);
+  if (min < 1) return "now";
+  if (min < 60) return `${min}m`;
+  if (min < 60 * 24) return `${Math.floor(min / 60)}h`;
+  return `${Math.floor(min / (60 * 24))}d`;
+}
+
+/** "$0.42"; under a cent, "<$0.01". */
+function dollars(usd: number): string {
+  return usd > 0 && usd < 0.01 ? "<$0.01" : `$${usd.toFixed(2)}`;
+}
+
+/** One session: its face and name, then where it stands, how long since it did anything, the
+ *  model, how full its context is and what it has cost. */
+function SessionCard(props: { session: SessionInfo; colour: string; on: boolean; onShow: (id: SessionId) => void; onClose: (id: SessionId) => void }) {
+  const s = () => props.session;
+  const usage = useUsage(() => props.session.id);
+  const context = () => contextOf(usage());
+  const cost = () => usage()?.costUsd ?? null;
+  const active = () => (minute(), s().lastActive === null ? "" : ago(new Date(s().lastActive!).toISOString()));
+  /** The model without its details ("Opus 4.8 (1M context)" is "Opus 4.8"); the title has them. */
+  const model = () => s().model?.replace(/\s*\(.*\)\s*$/, "") || null;
+  const title = () =>
+    [
+      s().name,
+      STATE_LABEL[s().state],
+      s().model,
+      active() && `Last active ${active()}`,
+      context() && `Context ${context()!.percent}% full`,
+      cost() !== null && `Cost ${dollars(cost()!)}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  return (
+    <div class={`session-card ${s().state}`} classList={{ on: props.on }}>
+      <button
+        class="session-card-main"
+        title={title()}
+        onClick={() => !props.on && props.onShow(s().id)}
+        onAuxClick={(e) => e.button === 1 && props.onClose(s().id)}
+      >
+        <Avatar name={s().name} colour={props.colour} />
+        <span class="session-card-body">
+          <span class="session-card-line">
+            <span class="name">{s().name}</span>
+            <Show when={s().unread > 0 && !props.on}>
+              <span class="count-badge">{s().unread} new</span>
+            </Show>
+            <span class="grow" />
+            <Show when={context()}>
+              {(c) => (
+                <span class="context-bar" classList={{ high: c().percent >= 70, full: c().percent >= 90 }}>
+                  <span class="track">
+                    <span style={{ width: `${c().percent}%` }} />
+                  </span>
+                  {c().percent}%
+                </span>
+              )}
+            </Show>
+          </span>
+          <span class="session-card-line meta">
+            <span class="state">
+              <Show when={s().state === "working"} fallback={<StateDot state={s().state} />}>
+                <Loader class="spin" />
+              </Show>
+              {STATE_LABEL[s().state]}
+            </span>
+            <Show when={s().lastActive !== null}>
+              <span class="ago">{(minute(), since(s().lastActive!))}</span>
+            </Show>
+            <Show when={model()}>
+              <span class="model">{model()}</span>
+            </Show>
+            <span class="grow" />
+            <Show when={cost() !== null}>
+              <span class="cost">{dollars(cost()!)}</span>
+            </Show>
+          </span>
         </span>
-      </Show>
+      </button>
+      <button class="close-tab" aria-label={`Close ${s().name}`} title="Close (it stays in Recent sessions; Ctrl+Shift+T reopens)" onClick={() => props.onClose(s().id)}>
+        <X />
+      </button>
     </div>
   );
 }

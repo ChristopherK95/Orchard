@@ -166,7 +166,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .state-badge.needsYou { --s: var(--needs-you); --t: var(--needs-text); }
 .state-badge.idle { --s: var(--idle); --t: var(--idle-text); }
 .state-badge.exited { --s: var(--exited); --t: var(--exited-text); }
-.sub-item .state-badge, .sidebar-item .state-badge { height: 16px; padding: 0 6px; font-size: 11px; }
+.sidebar-item .state-badge { height: 16px; padding: 0 6px; font-size: 11px; }
 @keyframes breathe-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 /* "Needs you", where only a dot fits. */
 .needs-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--needs-you); }
@@ -331,24 +331,71 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .my-pr-number { flex: none; font-size: 11px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
 .my-prs-note { padding: 4px 8px; font-size: 12px; color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
 .my-prs-note.error { color: var(--needs-text); }
-/* The active Worktree's sessions: a sub-menu on a rail. */
-.sub-menu { flex: none; display: flex; flex-direction: column; gap: 2px; margin: 0 0 4px 15px; padding: 2px 0 2px 10px; border-left: 1px solid var(--line); }
-.sub-item-wrap { display: flex; align-items: center; border-radius: var(--r-md); }
-.sub-item-wrap:hover { background: var(--bg-3); }
-.sub-item-wrap.on { background: var(--bg-3); }
-.sub-item { flex: 1; min-width: 0; justify-content: flex-start; gap: 8px; min-height: 28px; padding: 0 8px; background: transparent; border: 0; color: var(--fg-2); font-weight: 400; text-align: left; }
-.sub-item:hover:not(:disabled) { background: transparent; color: var(--fg-1); }
-.sub-item-wrap.on .sub-item { color: var(--fg-1); cursor: default; }
-.sub-item .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.sub-item .lucide.spin { width: 13px; height: 13px; }
-.sub-item.quiet { flex: none; width: 100%; color: var(--fg-3); }
-.sub-item.quiet:hover:not(:disabled) { background: var(--bg-3); }
-.sub-item.quiet .lucide { width: 13px; height: 13px; }
-.sub-menu .recent-menu { display: flex; }
-.sub-item-wrap .close-tab { flex: none; }
+/* Each Worktree, a header folding open to its sessions, a card each. */
+.wt-group { flex: none; display: flex; flex-direction: column; gap: 4px; }
+.wt-group + .wt-group { margin-top: 2px; }
+.wt-head { display: flex; align-items: center; min-height: 30px; border-radius: var(--r-md); color: var(--fg-3); }
+.wt-head:hover { background: var(--bg-3); color: var(--fg-1); }
+.wt-head.on { color: var(--fg-1); }
+.wt-head-main { flex: 1; min-width: 0; justify-content: flex-start; gap: 6px; min-height: 30px; padding: 0 4px 0 2px; background: transparent; border: 0; color: inherit; font-size: 12px; font-weight: 500; text-align: left; }
+.wt-head-main:hover:not(:disabled) { background: transparent; color: inherit; }
+.wt-head .fold { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: var(--r-sm); color: var(--fg-3); }
+.wt-head .fold .lucide { width: 13px; height: 13px; transition: transform 120ms ease; }
+.wt-group.open .wt-head .fold .lucide { transform: rotate(90deg); }
+.wt-head .wt-glyph { flex: none; width: 14px; height: 14px; color: var(--c); }
+.wt-head .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wt-head .wt-count { color: var(--fg-dim); font-weight: 400; font-variant-numeric: tabular-nums; }
+.wt-head .state-badge { height: 16px; padding: 0 6px; font-size: 11px; }
+.wt-head .lucide.spin { width: 13px; height: 13px; }
+.wt-head .shell-badge { flex: none; display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 5px; border-radius: 4px; color: var(--fg-3); font-size: 11px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.wt-head .shell-badge .lucide { width: 13px; height: 13px; }
+.wt-head .shell-badge.busy { color: var(--ok); }
+.wt-head .shell-badge:hover { background: var(--bg-4); color: var(--fg-1); }
+.wt-head.removed .label { text-decoration: line-through; }
+.wt-actions { flex: none; display: none; gap: 1px; padding-right: 3px; }
+.wt-head:hover .wt-actions, .wt-actions:focus-within { display: flex; }
+.wt-head:hover .wt-head-main > .state-badge { display: none; }
+.wt-actions button.icon { min-height: 22px; width: 22px; color: var(--fg-3); }
+.wt-actions .lucide { width: 14px; height: 14px; }
+.wt-group.dimmed .wt-glyph { color: var(--fg-dim); }
+.wt-group.dimmed:not(:hover) .wt-head, .wt-group.dimmed:not(:hover) .session-cards { opacity: 0.6; }
+
+.session-cards { display: flex; flex-direction: column; gap: 4px; padding-bottom: 4px; }
+.session-card { position: relative; display: flex; border-radius: var(--r-lg); background: var(--bg-3); box-shadow: inset 0 0 0 1px transparent; }
+.session-card:hover { background: var(--bg-4); }
+.session-card.on { background: color-mix(in srgb, var(--c) 14%, var(--bg-3)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 55%, transparent); }
+.session-card.needsYou { background: color-mix(in srgb, var(--needs-you) 10%, var(--bg-3)); box-shadow: inset 0 0 0 1px var(--needs-border); }
+.session-card-main { flex: 1; min-width: 0; justify-content: flex-start; align-items: center; gap: 9px; min-height: 48px; padding: 6px 8px; background: transparent; border: 0; color: var(--fg-2); font-weight: 400; text-align: left; }
+.session-card-main:hover:not(:disabled) { background: transparent; color: var(--fg-2); }
+.session-card.on .session-card-main { cursor: default; }
+.session-card .avatar { flex: none; border-radius: var(--r-md); background: color-mix(in srgb, var(--c) 22%, var(--bg-1)); }
+.session-card-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.session-card-line { display: flex; align-items: center; gap: 6px; min-width: 0; height: 18px; }
+.session-card-line .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-1); font-weight: 600; }
+.session-card-line .count-badge { height: 15px; padding: 0 5px; font-size: 10px; }
+.session-card-line.meta { font-size: 11px; color: var(--fg-3); white-space: nowrap; }
+.session-card-line.meta > * { flex: none; }
+.session-card-line .state { display: inline-flex; align-items: center; gap: 4px; color: var(--suspended-text); }
+.session-card-line .state .state-dot { width: 10px; height: 10px; }
+.session-card-line .state .lucide { width: 10px; height: 10px; }
+.session-card.working .state { color: var(--working-text); }
+.session-card.needsYou .state { color: var(--needs-text); }
+.session-card.idle .state { color: var(--idle-text); }
+.session-card.exited .state { color: var(--exited-text); }
+.session-card-line .model { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.session-card-line .cost, .session-card-line .ago, .context-bar { font-variant-numeric: tabular-nums; }
+.context-bar { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--ok); }
+.context-bar .track { width: 34px; height: 4px; border-radius: 2px; background: var(--bg-1); overflow: hidden; }
+.context-bar .track span { display: block; height: 100%; background: currentColor; }
+.context-bar.high { color: var(--warn); }
+.context-bar.full { color: var(--danger); }
+.session-card .close-tab { position: absolute; top: 4px; right: 2px; margin: 0; background: var(--bg-4); }
+.session-empty { flex: none; justify-content: flex-start; gap: 8px; min-height: 30px; padding: 0 10px; background: transparent; border: 1px dashed var(--line); border-radius: var(--r-lg); color: var(--fg-3); font-weight: 400; }
+.session-empty:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-1); }
+.session-empty .lucide { width: 13px; height: 13px; }
 .close-tab { min-height: 20px; width: 20px; padding: 0; margin-right: 4px; background: transparent; border: 0; border-radius: var(--r-sm); color: var(--fg-3); visibility: hidden; }
 .close-tab .lucide { width: 12px; height: 12px; }
-.sub-item-wrap:hover .close-tab, .trigger-wrap:hover .close-tab, .close-tab:focus-visible { visibility: visible; }
+.session-card:hover .close-tab, .trigger-wrap:hover .close-tab, .close-tab:focus-visible { visibility: visible; }
 .close-tab:hover:not(:disabled) { background: var(--bg-4); color: var(--fg-1); }
 .sidebar-footer { flex: none; justify-content: flex-start; gap: 10px; min-height: 34px; padding: 0 8px; background: transparent; border: 0; color: var(--fg-2); font-weight: 400; }
 .sidebar-footer:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-1); }
