@@ -1,13 +1,14 @@
 // The Columns view (ticket 28): each pinned Worktree gets a panel with its own session tabs and
 // transcript, streamed in its own view slot. One column has focus: it's the active Worktree, so the
-// next prompt, Y / N, the drawer and the palette all follow it. Only the focused column has the
-// full composer; the others show a one-line stub that focuses them. Each column's tab list ends
-// with Terminal: its Worktree's shell, in place of the transcript. Dragging the gap between two
-// columns moves width from one to the other (ticket 36).
+// next prompt, Y / N, the drawer and the palette all follow it. Every column has the full
+// composer (so switching focus doesn't resize it), but only the focused one takes the keyboard;
+// clicking into another focuses that column. Each column's tab list ends with Terminal: its
+// Worktree's shell, in place of the transcript. Dragging the gap between two columns moves width
+// from one to the other (ticket 36).
 import { createEffect, createSignal, For, lazy, Match, onCleanup, Show, Switch } from "solid-js";
-import { Banner, Composer, FindOtherConversations, RecentList, reportHeight } from "./Chat";
+import { Banner, Composer, FindOtherConversations, RecentList } from "./Chat";
 import type { OtherConversation, PermissionRequest, RecentSession, SessionId, SessionInfo } from "./core";
-import { ArrowUp, ChevronDown, CirclePause, CirclePlay, Ellipsis, GitBranch, Pin, Plus, Sparkles, SquareTerminal, Trash2, X } from "./icons";
+import { ChevronDown, CirclePause, CirclePlay, Ellipsis, GitBranch, Pin, Plus, Sparkles, SquareTerminal, Trash2, X } from "./icons";
 import { PrButton } from "./PrOverlay";
 import { Setup, type SetupView } from "./Setup";
 import { shellRunning } from "./shells";
@@ -183,7 +184,7 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
   const sessions = () => props.sessionsIn(path);
   const session = () => sessions().find((s) => s.id === view.shown());
   const terminal = () => props.terminalOpen(path) && !props.worktree.removed;
-  /** The floating composer's (or stub's) height: the transcript's last item stays above it. */
+  /** The floating composer's height: the transcript's last item stays above it. */
   const [composerHeight, setComposerHeight] = createSignal(0);
   const setup = () => {
     const s = props.setupOf(path);
@@ -321,12 +322,7 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
                   answerKeys={() => props.isFocused}
                   bottomInset={composerHeight}
                 />
-                <Show
-                  when={props.isFocused}
-                  fallback={<ComposerStub worktree={props.worktree} session={s} onFocus={() => props.onFocus(path)} onHeight={setComposerHeight} />}
-                >
-                  <Composer session={s} onHeight={setComposerHeight} />
-                </Show>
+                <Composer session={s} onHeight={setComposerHeight} takeFocus={props.isFocused} />
               </>
             )}
           </Show>
@@ -435,24 +431,4 @@ function ColumnHeader(props: ColumnsProps & { worktree: WorktreeTab; isFocused: 
 /** Whether a press lands on something clickable, which focuses its column on click, not mousedown. */
 function isControl(target: EventTarget | null) {
   return target instanceof Element && !!target.closest("button, a, input, textarea, select, [role='button']");
-}
-
-/** An unfocused column's composer: one line that focuses the column. */
-function ComposerStub(props: { worktree: WorktreeTab; session: SessionInfo; onFocus: () => void; onHeight: (px: number) => void }) {
-  const branch = () => worktreeLabel(props.worktree);
-  return (
-    <div class="composer stub" ref={(el) => reportHeight(el, props.onHeight)}>
-      <button class="composer-stub" onClick={() => props.onFocus()}>
-        <span class="grow ellipsis">
-          <Show when={props.session.state !== "needsYou"} fallback="Answer the permission above, or click to focus">
-            Message {branch()}
-            {props.session.state === "suspended" ? " — sending resumes it" : ""}
-          </Show>
-        </span>
-        <Show when={props.session.state === "needsYou"} fallback={<ArrowUp />}>
-          <kbd>Alt ←→</kbd>
-        </Show>
-      </button>
-    </div>
-  );
 }

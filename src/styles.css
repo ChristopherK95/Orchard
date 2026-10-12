@@ -9,6 +9,7 @@
   --bg-4: #27272a;
   /* Cards and the composer sit a step off the page; code a step under it. */
   --card: #0f0f11;
+  --card-focus: #151518;
   --code-bg: #0b0b0d;
   --line: #27272a;
   --line-strong: #3f3f46;
@@ -147,7 +148,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .segmented { display: inline-flex; flex: none; gap: 2px; padding: 3px; background: var(--bg-4); border-radius: var(--r-lg); }
 .segmented button { min-height: 26px; padding: 0 10px; background: transparent; border-color: transparent; border-radius: var(--r-md); color: var(--fg-2); font-size: 13px; font-weight: 500; }
 .segmented button:hover:not(:disabled) { background: transparent; color: var(--fg-1); }
-.segmented button.on { background: var(--bg-1); border-color: var(--line-strong); color: var(--fg-1); }
+.segmented button.on { background: var(--bg-1); border-color: var(--bg-1); color: var(--fg-1); }
 .segmented.full { display: flex; }
 .segmented.full button { flex: 1; }
 
@@ -225,20 +226,26 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 /* The settings page (ticket 31). */
 /* (.modal comes later and would set the width back to 520 px.) Grows with the window, within
    bounds, and never past the backdrop's padding. */
-.modal.settings-page { width: min(clamp(760px, 64vw, 1240px), 100%); height: min(clamp(560px, 78vh, 960px), 100%); max-height: 100%; }
-.settings-main { flex: 1; min-height: 0; display: flex; border-top: 1px solid var(--line); }
-.settings-nav { flex: none; width: 190px; display: flex; flex-direction: column; padding: 4px 8px 12px; border-right: 1px solid var(--line); overflow: auto; }
-.settings-nav .palette-group { padding-left: 8px; }
+/* No borders, like the main window: the head, nav and foot are one frame (the sidebar's grey) around
+   the content, a rounded panel of the page's black. */
+.modal.settings-page { width: min(clamp(760px, 64vw, 1240px), 100%); height: min(clamp(560px, 78vh, 960px), 100%); max-height: 100%; background: var(--bg-2); border-color: var(--bg-2); border-radius: var(--r-lg); }
+.settings-page .modal-head { padding-bottom: 12px; }
+.settings-page .modal-foot { padding-top: 10px; padding-bottom: 12px; }
+.settings-main { flex: 1; min-height: 0; display: flex; padding-right: 8px; }
+.settings-nav { flex: none; width: 190px; display: flex; flex-direction: column; padding: 4px 8px 12px; overflow: auto; }
+/* Group headings read as labels, not options: small caps-style, spaced out, with room above. */
+.settings-nav .palette-group { padding: 14px 8px 6px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-dim); }
+.settings-nav .palette-group:first-child { padding-top: 8px; }
 .settings-nav-item { justify-content: flex-start; min-height: 28px; padding: 0 8px; border: 0; background: transparent; color: var(--fg-2); font-weight: 400; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-nav-item:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-1); }
 /* (Square on the left, so the accent bar there is straight.) */
-.settings-nav-item.on { background: var(--bg-3); color: var(--fg-1); font-weight: 500; }
-.settings-content { flex: 1; min-width: 0; overflow: auto; padding: 14px 20px 20px; display: flex; flex-direction: column; gap: 12px; }
+.settings-nav-item.on { background: var(--bg-3); border-radius: 0 var(--r-md) var(--r-md) 0; box-shadow: inset 2px 0 0 var(--ok); color: var(--fg-1); font-weight: 500; }
+.settings-content { flex: 1; min-width: 0; overflow: auto; padding: 14px 20px 20px; background: var(--bg-1); border-radius: var(--r-lg); display: flex; flex-direction: column; gap: 12px; }
 .settings-content h2 { margin: 0 0 4px; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 .settings-fields { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .settings-fields:disabled { opacity: 0.6; }
 /* (The control moves under its label when they don't both fit.) */
-.settings-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.settings-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 0; }
 .settings-row.block { flex-direction: column; align-items: stretch; gap: 10px; }
 .settings-row.indent { padding-left: 24px; }
 .settings-row.toggle { flex-wrap: nowrap; justify-content: flex-start; gap: 10px; cursor: pointer; }
@@ -253,7 +260,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .settings-command input { flex: 1; min-width: 0; }
 .settings-commands .add-command { align-self: flex-start; }
 .settings-actions { display: flex; flex-direction: column; gap: 10px; }
-.settings-action { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: var(--r-lg); }
+.settings-action { display: flex; flex-direction: column; gap: 6px; padding: 10px; background: var(--card); border-radius: var(--r-lg); }
 .settings-action > .settings-commands { padding-left: 12px; }
 .settings-actions > .add-command { align-self: flex-start; }
 .font-picker { position: relative; width: 260px; max-width: 100%; }
@@ -262,13 +269,13 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .font-picker-button .lucide { flex: none; width: 12px; height: 12px; color: var(--fg-3); }
 .font-picker .not-installed { flex: none; font: 11px var(--ui); color: var(--warn); }
 /* (As wide as the picker, so the scrolling page never clips it at the side.) */
-.font-picker-menu { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; right: 0; display: flex; flex-direction: column; background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--e-2); overflow: hidden; }
+.font-picker-menu { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; right: 0; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--card); border-radius: var(--r-lg); box-shadow: var(--e-2); overflow: hidden; }
 .font-picker-menu input { margin: 8px; height: 28px; font-family: var(--ui); }
 .font-picker-list { max-height: 280px; overflow: auto; padding-bottom: 4px; }
 .font-picker-list .palette-item.current .file { color: var(--idle-text); }
 .shortcut-group { display: flex; flex-direction: column; margin-bottom: 8px; }
 .shortcut-group h3 { margin: 4px 0 2px; font-size: 12px; font-weight: 500; color: var(--fg-3); }
-.shortcut-row { display: flex; align-items: center; gap: 16px; min-height: 36px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.shortcut-row { display: flex; align-items: center; gap: 16px; min-height: 36px; padding: 6px 0; font-size: 13px; }
 .shortcut-keys { flex: none; display: inline-flex; align-items: center; gap: 4px; }
 .shortcut-keys kbd { height: 20px; padding: 0 6px; font-size: 11px; }
 .settings-broken { display: flex; gap: 10px; padding: 12px 14px; border: 1px solid var(--danger-border); border-radius: var(--r-lg); background: var(--danger-tint); }
@@ -283,7 +290,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 
 /* Sidebar · 256 px: the Workspace switcher, search, the Worktrees with the active one's sessions
    under it, and Settings. */
-.sidebar { flex: none; width: 256px; min-height: 0; display: flex; flex-direction: column; gap: 4px; padding: 8px; background: var(--bg-2); border-right: 1px solid var(--line); user-select: none; }
+.sidebar { flex: none; width: 256px; min-height: 0; display: flex; flex-direction: column; gap: 4px; padding: 8px; background: var(--bg-2); border-right: 1px solid var(--bg-2); user-select: none; }
 .logo-box { flex: none; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; min-height: 0; background: var(--bg-4); border: 0; border-radius: var(--r-lg); }
 .logo-box .logo { display: flex; width: 18px; height: 18px; }
 /* The mark is inlined SVG with its own 224 px size: fit it to its box. */
@@ -364,9 +371,9 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 /* Header · 52 px: the sidebar trigger, where you are, the views, and the window's buttons. It's
    the window's title bar (a drag region). It shares the sidebar's surface and reaches 1 px left
    over the sidebar's edge, so the two read as one L around the content. */
-.app-header { position: relative; flex: none; height: 52px; display: flex; align-items: center; gap: 12px; margin-left: -1px; padding-left: 17px; background: var(--bg-2); border-bottom: 1px solid var(--line); user-select: none; }
+.app-header { position: relative; flex: none; height: 52px; display: flex; align-items: center; gap: 12px; margin-left: -1px; padding-left: 17px; background: var(--bg-2); border-bottom: 1px solid var(--bg-2); user-select: none; }
 /* The L's inner corner, rounded: an arc over the meeting lines, the square outside it filled in. */
-.app-header::after { content: ""; position: absolute; top: 100%; left: 0; width: 10px; height: 10px; border-top: 1px solid var(--line); border-left: 1px solid var(--line); border-top-left-radius: 10px; box-shadow: 0 0 0 10px var(--bg-2); clip-path: inset(0); pointer-events: none; }
+.app-header::after { content: ""; position: absolute; top: 100%; left: 0; width: 10px; height: 10px; border-top: 1px solid var(--bg-2); border-left: 1px solid var(--bg-2); border-top-left-radius: 10px; box-shadow: 0 0 0 10px var(--bg-2); clip-path: inset(0); pointer-events: none; }
 .app-header > button.icon { min-height: 28px; width: 30px; color: var(--fg-1); }
 .vsep { flex: none; width: 1px; height: 16px; background: var(--line); }
 .breadcrumb { min-width: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg-2); white-space: nowrap; overflow: hidden; }
@@ -380,6 +387,9 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .search-button .grow { text-align: left; overflow: hidden; text-overflow: ellipsis; }
 .terminal-button kbd { height: 15px; padding: 0 5px; border: 0; font-size: 10px; margin-right: 0; }
 .terminal-button.outline kbd { background: var(--bg-4); }
+/* The top bar's outline buttons (Terminal, Git, Review, the PR) show no border: it's their background. */
+.app-header button.outline { border-color: var(--bg-1); }
+.app-header button.outline:hover:not(:disabled), .app-header button.outline.on { border-color: var(--bg-3); }
 .app-header > .segmented { flex-shrink: 0; }
 /* Narrower windows: the key hints go first, then the labels of Terminal and Changes. */
 @media (max-width: 1440px) { .app-header .terminal-button kbd { display: none; } }
@@ -458,8 +468,9 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .setup-actions { display: flex; align-items: center; gap: 8px; }
 
 /* Dialogs: a black scrim, 12 px radius, a 1 px border. Esc cancels; Enter runs the primary action. */
-.modal-backdrop { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.7); display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 16px; animation: fade 240ms ease-out; }
-@keyframes fade { from { opacity: 0; } }
+.modal-backdrop { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.7); display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 16px; animation: scrim-in 240ms ease-out; }
+/* (The scrim fades in by its colour, not its opacity: fading the opacity made the dialog flicker as it opened.) */
+@keyframes scrim-in { from { background-color: rgba(0, 0, 0, 0); } }
 .modal { width: min(520px, 100%); max-height: 100%; display: flex; flex-direction: column; background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-xl); box-shadow: var(--e-3); overflow: hidden; }
 .modal-head { flex: none; display: flex; align-items: center; gap: 10px; padding: 18px 14px 6px 20px; }
 .modal-head > b { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; flex: 1; min-width: 0; }
@@ -563,14 +574,16 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .markdown a { color: var(--fg-1); text-decoration: underline; text-decoration-color: var(--fg-dim); text-underline-offset: 3px; }
 .markdown a:hover { text-decoration-color: var(--fg-2); }
 .markdown blockquote { margin: 0 0 10px; padding: 2px 0 2px 12px; border-left: 2px solid var(--line-strong); color: var(--fg-2); }
-.markdown table { width: 100%; border-collapse: separate; border-spacing: 0; margin: 0 0 10px; border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; font-size: 13px; }
-.markdown th { text-align: left; font-weight: 500; color: var(--fg-2); background: var(--bg-2); }
+/* Tables, step lists and code blocks show no border (like the composer): cards, their rows split by
+   a 2 px gap of the page rather than a line. */
+.markdown table { width: 100%; border-collapse: separate; border-spacing: 0 2px; margin: -2px 0 8px; border-radius: var(--r-lg); overflow: hidden; font-size: 13px; }
+.markdown th { text-align: left; font-weight: 500; color: var(--fg-2); background: color-mix(in srgb, var(--fg-1) 4%, var(--card)); }
+.markdown td { background: var(--card); }
 .markdown th, .markdown td { padding: 8px 12px; }
-.markdown tr + tr td, .markdown thead + tbody td { border-top: 1px solid var(--line); }
 .markdown hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
 
 /* A question the Agent asks (see markdown.ts): a card whose options answer it into the composer. */
-.qcard { border: 1px solid var(--line); border-radius: var(--r-xl); background: var(--card); margin: 4px 0 12px; overflow: hidden; }
+.qcard { border: 1px solid var(--card); border-radius: var(--r-lg); background: var(--card); margin: 4px 0 12px; overflow: hidden; }
 .qcard-head { display: flex; align-items: baseline; gap: 10px; padding: 12px 16px 0; }
 .qcard-n { flex: none; display: grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: var(--r-md); background: var(--bg-4); font: 600 12px var(--mono); color: var(--fg-2); transform: translateY(-1px); }
 .qcard-title { font-weight: 600; color: var(--fg-1); }
@@ -578,14 +591,14 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .qcard-body { margin: 8px 16px 0; color: var(--fg-2); }
 .qcard-body > :last-child { margin-bottom: 0; }
 .qcard-options { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px 0; }
-.qcard-option { justify-content: flex-start; gap: 10px; min-height: 36px; padding: 6px 10px; background: var(--bg-1); border-color: var(--line); color: var(--fg-prose); font-size: 13.5px; font-weight: 400; line-height: 1.5; white-space: normal; text-align: left; }
-.qcard-option:hover:not(:disabled) { background: var(--bg-3); border-color: var(--line-strong); }
+.qcard-option { justify-content: flex-start; gap: 10px; min-height: 36px; padding: 6px 10px; background: var(--bg-1); border-color: var(--bg-1); color: var(--fg-prose); font-size: 13.5px; font-weight: 400; line-height: 1.5; white-space: normal; text-align: left; }
+.qcard-option:hover:not(:disabled) { background: var(--bg-3); border-color: var(--bg-3); }
 .qcard-option.recommended { border-color: rgba(34, 197, 94, 0.35); background: var(--ok-tint); }
 .qcard-letter { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: var(--r-sm); background: var(--bg-4); font: 600 11.5px var(--mono); color: var(--fg-2); }
 .qcard-option.recommended .qcard-letter { background: rgba(34, 197, 94, 0.18); color: var(--idle-text); }
 .qcard-text { flex: 1; min-width: 0; }
 .qcard-badge { flex: none; font-size: 11.5px; font-weight: 500; color: var(--idle-text); }
-.qcard-rec { display: flex; align-items: flex-start; gap: 12px; margin-top: 12px; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--bg-2); font-size: 13.5px; color: var(--fg-2); }
+.qcard-rec { display: flex; align-items: flex-start; gap: 12px; margin-top: 12px; padding: 10px 16px; background: var(--bg-2); font-size: 13.5px; color: var(--fg-2); }
 .qcard-rec-text { flex: 1; min-width: 0; }
 .qcard-rec-text > p, .qcard-rec-text > ul, .qcard-rec-text > ol { margin: 6px 0 0; }
 .qcard-rec-text > :is(ul, ol) + p { margin-top: 8px; }
@@ -594,11 +607,10 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .qcard > :last-child:not(.qcard-rec) { margin-bottom: 14px; }
 
 /* A list of bold-led items (see markdown.ts): rows with a title, the text under it, and a number. */
-.markdown .steps { list-style: none; padding: 0; border: 1px solid var(--line); border-radius: var(--r-xl); background: var(--card); overflow: hidden; }
-.markdown .steps > li { display: grid; grid-template-columns: 1fr; column-gap: 12px; margin: 0; padding: 10px 16px; }
+.markdown .steps { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 2px; border-radius: var(--r-lg); overflow: hidden; }
+.markdown .steps > li { display: grid; grid-template-columns: 1fr; column-gap: 12px; margin: 0; padding: 10px 16px; background: var(--card); }
 .markdown ol.steps > li { grid-template-columns: auto 1fr; }
 .markdown ol.steps > li > :not(.step-n) { grid-column: 2; }
-.markdown .steps > li + li { border-top: 1px solid var(--line); }
 .markdown .steps .steps { margin: 8px 0 0; }
 .step-n { display: grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; margin-top: 1px; border-radius: var(--r-md); background: var(--bg-4); font: 600 12px var(--mono); color: var(--fg-2); }
 .step-title { font-weight: 600; color: var(--fg-1); }
@@ -611,8 +623,8 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .step-tag.c4 { background: var(--info-tint); color: var(--info); }
 
 /* Code blocks: a file-ish header (language, Copy, Open in editor) and numbered lines. */
-.cb { border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; background: var(--code-bg); margin: 4px 0 12px; }
-.cb-head { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); font: 12px var(--mono); color: var(--fg-2); }
+.cb { border: 1px solid var(--code-bg); border-radius: var(--r-lg); overflow: hidden; background: var(--code-bg); margin: 4px 0 12px; }
+.cb-head { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 6px 0 12px; background: var(--card); font: 12px var(--mono); color: var(--fg-2); }
 .cb-head button { min-height: 26px; padding: 0 8px; gap: 6px; background: transparent; font: 12px var(--ui); font-weight: 500; color: var(--fg-2); }
 .cb-head button:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-1); }
 .cb-head svg { width: 13px; height: 13px; stroke-width: 1.5; }
@@ -706,8 +718,8 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .composer { flex: none; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 24px 20px; background: var(--bg-1); }
 .composer > * { width: min(var(--measure), 100%); }
 .composer .error { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
-.composer-box { display: flex; padding: 12px 12px 10px 14px; background: var(--card); border: 1px solid var(--line); border-radius: var(--r-xl); }
-.composer-box:focus-within { border-color: #52525b; }
+.composer-box { display: flex; padding: 12px 12px 10px 14px; background: var(--card); border: 1px solid var(--card); border-radius: var(--r-lg); }
+.composer-box:focus-within { background: var(--card-focus); border-color: var(--card-focus); }
 .composer-box.locked { opacity: 0.7; }
 .composer-inner { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 .composer textarea { width: 100%; resize: none; height: 44px; min-height: 22px; padding: 0; background: transparent; border: 0; border-radius: 0; font-size: 14px; line-height: 1.5; }
@@ -791,10 +803,11 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .main-row { flex: 1; min-height: 0; display: flex; }
 .main-col { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 
-/* Drawer (Files / Git), on the right edge. */
-.files-drawer { width: 308px; flex: none; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bg-2); min-height: 0; }
+/* Drawer (Files / Git), on the right edge. No borders, like the sidebar: its parts are set apart by
+   their spacing and backgrounds, not lines. */
+.files-drawer { width: 308px; flex: none; display: flex; flex-direction: column; border-left: 1px solid var(--bg-2); background: var(--bg-2); min-height: 0; }
 .git-drawer { width: 360px; }
-.drawer-head { flex: none; height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.drawer-head { flex: none; height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; font-size: 12px; }
 .drawer-head .lucide { width: 12px; height: 12px; color: var(--c, var(--fg-2)); }
 .drawer-head .drawer-branch { font: 12px var(--mono); color: var(--fg-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .drawer-head .segmented { margin-left: auto; }
@@ -820,26 +833,25 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .change-untracked { color: var(--fg-3); }
 .change-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--warn); flex: none; }
 /* Git drawer. */
-.git-top { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px; border-bottom: 1px solid var(--line); }
-.branch-pick { width: 100%; min-height: 32px; justify-content: flex-start; gap: 8px; padding: 0 10px; background: var(--bg-1); border-color: var(--line); font: 12px var(--mono); font-weight: 400; }
-.branch-pick:hover:not(:disabled) { background: var(--bg-3); }
+.git-top { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 4px 10px 10px; }
+.branch-pick { width: 100%; min-height: 32px; justify-content: flex-start; gap: 8px; padding: 0 10px; background: var(--bg-1); border-color: var(--bg-1); font: 12px var(--mono); font-weight: 400; }
+.branch-pick:hover:not(:disabled), .branch-pick.on { background: var(--bg-3); border-color: var(--bg-3); }
 .branch-pick .lucide { width: 12px; height: 12px; color: var(--c, var(--fg-2)); }
 .branch-pick .counts { margin-left: auto; color: var(--fg-3); font-size: 11.5px; }
 .branch-pick .chev { color: var(--fg-2); }
-.branch-pick.on { border-color: var(--ring); }
 .git-sync { display: flex; align-items: center; gap: 6px; }
-.git-sync button { min-height: 28px; padding: 0 10px; font-size: 12px; background: var(--bg-1); border-color: var(--line); }
-.git-sync button:hover:not(:disabled) { background: var(--bg-3); }
+.git-sync button { min-height: 28px; padding: 0 10px; font-size: 12px; background: var(--bg-1); border-color: var(--bg-1); }
+.git-sync button:hover:not(:disabled) { background: var(--bg-3); border-color: var(--bg-3); }
 .git-sync button .lucide { width: 12px; height: 12px; color: var(--fg-2); }
 .git-sync .note { margin-left: auto; font-size: 11px; color: var(--fg-dim); }
-.git-mode { flex: none; padding: 8px 10px; border-bottom: 1px solid var(--line); }
-.git-notice { flex: none; display: flex; align-items: center; gap: 8px; margin: 0; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 12.5px; white-space: pre-wrap; }
+.git-mode { flex: none; padding: 2px 10px 8px; }
+.git-notice { flex: none; display: flex; align-items: center; gap: 8px; margin: 0; padding: 7px 10px; font-size: 12.5px; white-space: pre-wrap; }
 .git-notice.warn { color: var(--warn); background: var(--needs-tint); }
 .git-notice.error { color: var(--danger); background: var(--danger-tint); }
 .git-operation { flex: none; padding: 10px; border-bottom: 1px solid var(--needs-border); font-size: 12.5px; display: flex; flex-direction: column; gap: 6px; background: var(--needs-tint); }
 .git-operation .conflicted-file { justify-content: flex-start; min-height: 24px; padding: 0 6px; color: var(--needs-text); }
 .git-operation .actions { display: flex; gap: 6px; }
-.branch-picker { flex: none; padding: 8px 10px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; max-height: 50%; min-height: 0; }
+.branch-picker { flex: none; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; max-height: 50%; min-height: 0; }
 .branch-picker .branch-list { overflow: auto; min-height: 0; }
 .branch-row { display: flex; align-items: center; gap: 4px; }
 .branch-row .branch { flex: 1; min-width: 0; }
@@ -849,8 +861,7 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .branch-row > .ghost { flex: none; display: none; }
 .branch-row:hover > .ghost, .branch-row:focus-within > .ghost { display: inline-flex; }
 .branch-row.taken .branch { opacity: 0.5; }
-.git-section { position: sticky; top: -4px; z-index: 1; display: flex; align-items: center; gap: 8px; min-height: 30px; margin: 0 -4px; padding: 0 10px; font-size: 12px; font-weight: 500; color: var(--fg-2); background: var(--bg-2); border-bottom: 1px solid var(--line); border-top: 1px solid var(--line); }
-.git-section:first-child { border-top: 0; }
+.git-section { position: sticky; top: -4px; z-index: 1; display: flex; align-items: center; gap: 8px; min-height: 30px; margin: 0 -4px; padding: 0 10px; font-size: 12px; font-weight: 500; color: var(--fg-2); background: var(--bg-2); }
 .git-section .link { margin-left: auto; }
 .git-file { display: flex; align-items: center; gap: 10px; min-height: 27px; padding: 0 4px 0 10px; border-radius: var(--r-sm); font-size: 13px; }
 .git-file:hover { background: var(--bg-3); }
@@ -867,19 +878,24 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .git-base label { display: flex; flex-direction: column; gap: 4px; color: var(--fg-3); }
 .git-base input { height: 26px; font-size: 12px; }
 .git-base-error { margin: 0 6px 6px; }
-.git-commit { flex: none; border-top: 1px solid var(--line); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.git-commit { flex: none; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
 .git-commit textarea { resize: vertical; min-height: 52px; font-size: 13px; }
 .git-commit label { font-size: 13px; display: flex; gap: 8px; align-items: center; }
 .git-commit .actions { display: flex; align-items: center; gap: 8px; }
 .git-commit button.primary { align-self: flex-start; }
-.git-ask { flex: none; padding: 10px; border-top: 1px solid var(--line); background: var(--bg-1); font-size: 12.5px; display: flex; flex-direction: column; gap: 8px; }
+.git-ask { flex: none; padding: 10px; background: var(--bg-1); font-size: 12.5px; display: flex; flex-direction: column; gap: 8px; }
 .git-ask .actions { display: flex; gap: 6px; }
 .drawer-tree.hidden, .git-commit.hidden { display: none; }
 
 /* Ctrl+P: the palette. */
-.palette { width: min(620px, 100%); border-radius: var(--r-xl); box-shadow: var(--e-3); }
+/* Like the composer: no border (it's the background), a card a step off the page, 8 px corners. */
+.palette { width: min(620px, 100%); background: var(--card); border-color: var(--card); border-radius: var(--r-lg); box-shadow: var(--e-3); }
 .palette-search { display: flex; align-items: center; gap: 10px; padding: 0 12px 0 14px; border-bottom: 1px solid var(--line); }
 .palette-search > .lucide { color: var(--fg-3); }
+/* The file picker's one colour: its icons, and the letters that match the search. */
+.palette { --find: var(--ok); }
+.palette .palette-search > .lucide, .palette .palette-item .lucide { color: var(--find); }
+.palette .palette-item .hit { color: var(--find); text-decoration-color: color-mix(in srgb, var(--find) 50%, transparent); }
 .palette-input { flex: 1; height: 44px; border: 0; border-radius: 0; padding: 0; font-size: 14px; background: transparent; }
 .palette-input:focus { box-shadow: none; }
 .palette-scope { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 999px; background: var(--bg-4); font: 11.5px var(--mono); color: var(--fg-2); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
@@ -914,10 +930,12 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .board-column-head { display: flex; align-items: center; gap: 8px; height: 22px; font-size: 13px; font-weight: 600; }
 .board-column-head.needsYou { color: var(--needs-text); }
 .board-empty { margin: 0; padding: 12px; font-size: 12px; color: var(--fg-dim); border: 1px dashed var(--line); border-radius: var(--r-lg); text-align: center; }
-.board-card { position: relative; border: 1px solid var(--line); border-radius: var(--r-xl); background: var(--card); padding: 12px 14px 12px 27px; display: flex; flex-direction: column; gap: 6px; cursor: pointer; font-size: 12.5px; }
+/* Cards show no border (it's their background), only a brighter one on hover and the keyboard's;
+   Needs you keeps its amber edge. */
+.board-card { position: relative; border: 1px solid var(--card); border-radius: var(--r-xl); background: var(--card); padding: 12px 14px 12px 27px; display: flex; flex-direction: column; gap: 6px; cursor: pointer; font-size: 12.5px; }
 .board-card::before { content: ""; position: absolute; left: 14px; top: 12px; bottom: 12px; width: 3px; border-radius: 999px; background: var(--c); }
-.board-card:hover { border-color: var(--line-strong); }
-.board-card:focus-within, .board-card:focus-visible { border-color: var(--ring); }
+.board-card:hover { background: var(--card-focus); border-color: var(--card-focus); }
+.board-card:focus-within, .board-card:focus-visible { background: var(--bg-3); border-color: var(--bg-3); }
 .board-card.needsYou { border-color: var(--needs-border); }
 .board-card-top { display: flex; align-items: center; gap: 6px; font: 11.5px var(--mono); color: var(--fg-3); min-width: 0; }
 .board-card-top .lucide { width: 11px; height: 11px; color: var(--c); }
@@ -1001,10 +1019,11 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .dashboard-group.pr-stage-changesRequested, .dashboard-group.pr-stage-changesRequested .lucide { color: var(--needs-text); }
 .dashboard-group.pr-stage-checksFailing, .dashboard-group.pr-stage-checksFailing .lucide { color: var(--danger); }
 .dashboard-group.pr-stage-approved .lucide { color: var(--ok); }
-.dashboard-row { position: relative; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--card); padding: 0 12px 0 23px; cursor: pointer; font-size: 12.5px; }
+/* Rows and stat cards show no border (it's their background), like the Board's cards. */
+.dashboard-row { position: relative; border: 1px solid var(--card); border-radius: var(--r-lg); background: var(--card); padding: 0 12px 0 23px; cursor: pointer; font-size: 12.5px; }
 .dashboard-row::before { content: ""; position: absolute; left: 11px; top: 9px; bottom: 9px; width: 3px; border-radius: 999px; background: var(--c); }
-.dashboard-row:hover { border-color: var(--line-strong); }
-.dashboard-row:focus-within { border-color: var(--ring); }
+.dashboard-row:hover { background: var(--card-focus); border-color: var(--card-focus); }
+.dashboard-row:focus-within { background: var(--bg-3); border-color: var(--bg-3); }
 .dashboard-row-open { width: 100%; min-height: 36px; padding: 0; gap: 8px; justify-content: flex-start; background: none; border: 0; color: var(--fg-2); font-size: 12.5px; font-weight: 400; text-align: left; min-width: 0; }
 .dashboard-row-open:hover:not(:disabled) { background: none; }
 .dashboard-row-open > .lucide { width: 13px; height: 13px; color: var(--fg-3); }
@@ -1022,7 +1041,7 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .dashboard-period { padding: 2px; }
 .dashboard-period button { min-height: 22px; padding: 0 9px; font-size: 12px; }
 .dashboard-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
-.dashboard-stat { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--card); cursor: default; font-size: 12.5px; }
+.dashboard-stat { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 10px 12px; border: 1px solid var(--card); border-radius: var(--r-lg); background: var(--card); cursor: default; font-size: 12.5px; }
 .dashboard-stat-title { color: var(--fg-2); font-weight: 500; }
 .dashboard-stat-figure { display: flex; align-items: baseline; gap: 6px; color: var(--fg-1); font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .dashboard-stat-n { color: var(--fg-3); font-size: 12px; font-weight: 400; }
@@ -1102,7 +1121,7 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .editor-host .cm-matchingBracket { outline: 1px solid var(--ring); background: transparent; }
 .editor-placeholder { flex: 1; flex-direction: column; gap: 4px; text-align: center; }
 .popout .manual-editor { border-left: 0; }
-.diff-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 12px; border-bottom: 1px solid var(--line); font-size: 12px; background: var(--bg-2); }
+.diff-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 12px; font-size: 12px; background: var(--bg-2); }
 .diff-head button { min-height: 26px; padding: 0 10px; font-size: 12px; }
 .diff.diff-view { flex: 1; min-height: 0; max-height: none; overflow: auto; border: 0; border-radius: 0; font-size: 12.5px; }
 .diff.side-by-side { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-content: start; }
@@ -1117,13 +1136,19 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .modal-form { display: flex; flex-direction: column; min-height: 0; }
 
 /* Columns view (ticket 28): a panel per pinned Worktree, at least 640 px wide; more than fit
-   scroll sideways. The focused one gets a lighter border and the only full composer. */
+   scroll sideways, a step lighter than the gaps between them (and cards a step lighter again). */
 .columns { flex: 1; min-width: 0; min-height: 0; display: flex; padding: 8px; overflow-x: auto; overflow-y: hidden; }
 /* (Each column's flex-grow is its share of the row, from 0 px: widths go by the shares.) */
-.column { flex: 1 1 0; min-width: 640px; min-height: 0; display: flex; flex-direction: column; background: var(--bg-1); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-.column.focused { background: #0c0c0e; border-color: #52525b; }
+.column { flex: 1 1 0; min-width: 640px; min-height: 0; display: flex; flex-direction: column; background: var(--bg-2); border: 1px solid var(--bg-2); border-radius: 10px; overflow: hidden; --card: #18181b; --card-focus: #1e1e22; }
 .column-head { flex: none; height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .column-head .swatch { flex: none; width: 3px; height: 18px; border-radius: 2px; background: var(--c); }
+/* The focused column shows by its header: tinted with its Worktree's colour, while the others'
+   swatch and branch dim (and its composer has the keyboard). */
+.column.focused .column-head { background: color-mix(in srgb, var(--c) 18%, var(--bg-2)); }
+.column:not(.focused) .column-head .swatch { background: color-mix(in srgb, var(--c) 35%, var(--bg-2)); }
+.column:not(.focused) .column-head button.branch { color: var(--fg-3); }
+/* (The swatch dims by its colour, not its opacity: fading the opacity made it flicker.) */
+.column-head, .column-head .swatch, .column-head button.branch { transition: color 120ms, background-color 120ms; }
 .column-head .branch { min-width: 0; overflow: hidden; text-overflow: ellipsis; font: 500 13px var(--mono); }
 .column-head button.branch { min-height: 28px; gap: 4px; padding: 0 6px; margin-left: -6px; background: transparent; color: var(--fg-1); }
 .column-head button.branch:hover:not(:disabled) { background: var(--bg-3); }
@@ -1149,11 +1174,6 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .column-resize .grip { width: 12px; height: 20px; border-radius: var(--r-sm); background: var(--bg-4); border: 1px solid var(--line-strong); opacity: 0; transition: opacity 80ms; }
 .column-resize:hover .grip, .column-resize.dragging .grip { opacity: 1; }
 .column .banner { padding-left: 14px; }
-.composer.stub { padding: 8px 12px 12px; }
-.composer-stub { justify-content: flex-start; gap: 8px; min-height: 38px; padding: 0 8px 0 12px; background: var(--card); border-color: var(--line); border-radius: var(--r-lg); color: var(--fg-3); font-size: 13px; font-weight: 400; }
-.composer-stub:hover:not(:disabled) { background: var(--card); border-color: var(--line-strong); color: var(--fg-2); }
-.composer-stub .lucide { width: 14px; height: 14px; margin-right: 6px; }
-.composer-stub kbd { height: 15px; border: 0; font-size: 10px; }
 .segmented button:disabled { opacity: 0.4; }
 .menu-sep { height: 1px; margin: 4px -4px; background: var(--line); }
 .menu-item .wt-glyph, .recent-row .wt-glyph { color: var(--c); }
@@ -1207,17 +1227,18 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
    its controls take clicks: the faded strip above the input still scrolls the transcript. */
 .main-col, .column-body { position: relative; }
 .composer { position: absolute; left: 0; right: 0; bottom: 0; z-index: 5; padding: 24px 24px 20px; pointer-events: none; background: linear-gradient(to bottom, rgba(9, 9, 11, 0) 0%, rgba(9, 9, 11, 0.9) 35%, var(--bg-1) 60%); }
-.column.focused .composer { background: linear-gradient(to bottom, rgba(12, 12, 14, 0) 0%, rgba(12, 12, 14, 0.9) 35%, #0c0c0e 60%); }
+.column .composer { background: linear-gradient(to bottom, rgba(17, 17, 19, 0) 0%, rgba(17, 17, 19, 0.9) 35%, var(--bg-2) 60%); }
 .composer > * { pointer-events: auto; }
 .composer-box { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
-.composer.stub { padding: 18px 12px 12px; }
-.column .composer:not(.stub) { padding: 18px 12px 12px; }
+.column .composer { padding: 18px 12px 12px; }
 .column .composer > * { width: 100%; }
 
 /* Review and create PR (ticket 42): a near-full-window overlay, file list beside the diff. */
 .review-backdrop { padding: 4vh 3vw; align-items: stretch; }
-.modal.review-overlay { width: min(1500px, 100%); height: 100%; max-height: 100%; border-top: 3px solid var(--c); }
-.review-head { padding: 12px 14px 10px 18px; border-bottom: 1px solid var(--line); }
+/* No borders, like Settings: the head, file list and foot are one grey frame around the diff, a
+   rounded panel; the head is tinted with the Worktree's colour (as a focused column's is). */
+.modal.review-overlay { width: min(1500px, 100%); height: 100%; max-height: 100%; background: var(--bg-2); border-color: var(--bg-2); border-radius: var(--r-lg); }
+.review-head { padding: 12px 14px 10px 18px; margin-bottom: 8px; background: color-mix(in srgb, var(--c) 18%, var(--bg-2)); }
 .review-head > b { display: flex; align-items: center; gap: 12px; }
 .review-mark { flex: none; width: 18px; height: 18px; color: var(--c); }
 .review-branch { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-size: 12.5px; font-weight: 400; }
@@ -1227,14 +1248,14 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .review-steps li { padding: 3px 9px; border-radius: 999px; }
 .review-steps li.on { background: var(--bg-4); color: var(--fg-1); }
 .review-loading { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 40px; }
-.review-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); }
-.review-files { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 1px; padding: 8px; border-right: 1px solid var(--line); background: var(--bg-2); }
+.review-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); padding-right: 8px; }
+.review-files { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 1px; padding: 0 8px 8px; background: var(--bg-2); }
 .review-progress { display: flex; flex-direction: column; gap: 6px; padding: 4px 6px 10px; font-size: 12px; color: var(--fg-2); }
 .review-bar { height: 4px; border-radius: 999px; background: var(--bg-4); overflow: hidden; }
 .review-bar > span { display: block; height: 100%; background: var(--ok); transition: width 160ms ease-out; }
 .review-file { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--r-md); background: transparent; font-weight: 400; font-size: 12.5px; color: var(--fg-1); text-align: left; }
 .review-file:hover:not(:disabled) { background: var(--bg-3); }
-.review-file.on { background: var(--bg-4); border-color: var(--line-strong); }
+.review-file.on { background: var(--bg-4); border-color: var(--bg-4); }
 .review-file.viewed .review-file-name { color: var(--fg-3); }
 .review-file-name { flex: 1; min-width: 0; display: flex; gap: 6px; overflow: hidden; white-space: nowrap; }
 .review-file-name .dir { font-size: 11.5px; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; }
@@ -1243,25 +1264,26 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .review-commits { margin-top: 12px; }
 .review-commit { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 26px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--r-md); background: transparent; font-size: 12px; font-weight: 400; color: var(--fg-2); text-align: left; }
 button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-1); }
-.review-commit.on { background: var(--bg-4); border-color: var(--line-strong); color: var(--fg-1); }
+.review-commit.on { background: var(--bg-4); border-color: var(--bg-4); color: var(--fg-1); }
 .review-commit .mono { flex: none; font-size: 11px; color: var(--fg-3); }
 .review-commit-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.review-scope { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; padding: 6px 8px; border: 1px solid var(--line-strong); border-left: 3px solid var(--c); border-radius: var(--r-md); background: var(--bg-1); font-size: 12px; }
+.review-scope { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; padding: 6px 8px; border: 1px solid var(--bg-1); border-left: 3px solid var(--c); border-radius: var(--r-md); background: var(--bg-1); font-size: 12px; }
 .review-scope .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.review-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.review-file-head { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--bg-1); font-size: 12.5px; }
+.review-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-radius: var(--r-lg); overflow: hidden; }
+.review-file-head { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg-1); font-size: 12.5px; }
 .review-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .review-stat, .review-foot .hint { white-space: nowrap; }
 .added-key { color: var(--diff-add-sign); }
 .removed-key { color: var(--diff-del-sign); }
 .pill { padding: 1px 8px; border-radius: 999px; font-size: 11px; color: var(--warn); background: var(--needs-tint); border: 1px solid var(--needs-border); }
-.viewed-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; min-height: 28px; border: 1px solid var(--line-strong); border-radius: var(--r-md); cursor: pointer; }
+.viewed-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; min-height: 28px; background: var(--bg-3); border-radius: var(--r-md); cursor: pointer; }
 .review-diff { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--code-bg); }
-.review-foot { border-top: 1px solid var(--line); }
+.review-foot { padding-top: 10px; padding-bottom: 12px; }
 .review-foot button .lucide { width: 14px; height: 14px; }
 .review-pr { width: min(720px, 100%); margin: 0 auto; padding-top: 18px; overflow: auto; flex: 1; }
 .review-pr-row { display: flex; gap: 12px; }
-.review-pr .git-notice, .review-pr .git-ask { border: 1px solid var(--line); border-radius: var(--r-md); }
+.review-pr .git-notice, .review-pr .git-ask { border: 1px solid transparent; border-radius: var(--r-md); }
+.review-pr .git-notice:not(.warn, .error, .ok), .review-pr .git-ask { background: var(--bg-1); }
 .review-pr .git-notice.warn { border-color: var(--needs-border); }
 .review-body-text { min-height: 160px; resize: vertical; font: 13px/1.5 var(--mono); }
 .modal-body label.check-row { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; }
@@ -1279,7 +1301,7 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .review-url .lucide.copied { color: var(--ok); }
 
 /* Create PR's live log: each step, then what it printed (hooks, git's progress, gh). */
-.pr-log { max-height: 300px; overflow: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--code-bg); }
+.pr-log { max-height: 300px; overflow: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-radius: var(--r-md); background: var(--code-bg); }
 .pr-log-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 500; color: var(--fg-1); }
 .pr-log-head .lucide { flex: none; width: 13px; height: 13px; color: var(--ok); }
 .pr-log-head .lucide.spin { color: var(--fg-2); }
@@ -1295,7 +1317,8 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .review-push { flex: 1; min-height: 0; padding: 16px 20px; }
 .review-push > label, .review-push > .hint { width: min(720px, 100%); }
 .review-push .pr-log { flex: 1; min-height: 120px; max-height: none; }
-.review-push .git-notice, .review-push .git-ask { border: 1px solid var(--line); border-radius: var(--r-md); }
+.review-push .git-notice, .review-push .git-ask { border: 1px solid transparent; border-radius: var(--r-md); }
+.review-push .git-notice:not(.warn, .error, .ok), .review-push .git-ask { background: var(--bg-1); }
 .review-push .git-notice.warn { border-color: var(--needs-border); }
 .review-push .review-pr-error { flex: none; }
 

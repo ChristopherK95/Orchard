@@ -1,6 +1,6 @@
 // Pieces of the chat surface shared by the Tabs view and each column of the Columns view: the
 // composer, banners, the Recent sessions list and the state labels.
-import { createEffect, createResource, createSignal, For, type JSX, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
+import { createEffect, createResource, createSignal, For, type JSX, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { type Attachment, core, type FileMatch, type OtherConversation, type PermissionMode, type QueuedPrompt, type RecentSession, type SessionId, type SessionInfo } from "./core";
 import { ContextMeter } from "./ContextMeter";
@@ -256,7 +256,8 @@ export function reportHeight(el: HTMLElement, onHeight?: (px: number) => void) {
   onCleanup(() => observer.disconnect());
 }
 
-export function Composer(props: { session: SessionInfo; onHeight?: (px: number) => void }) {
+/** `takeFocus` (by default on): whether it takes the keyboard (as it shows, and once a turn is over). */
+export function Composer(props: { session: SessionInfo; onHeight?: (px: number) => void; takeFocus?: boolean }) {
   // The draft outlives the composer: it moves between columns with focus, and Tabs get switched.
   const saved = drafts.get(props.session.id);
   const [text, setDraft] = createSignal(saved?.text ?? "");
@@ -309,9 +310,9 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
   let input!: HTMLTextAreaElement;
   let marks!: HTMLDivElement;
   let root!: HTMLDivElement;
-  // (Not while the Dashboard or a Board over it has the keyboard.)
-  const focus = () => !document.activeElement?.closest(".board") && input.focus();
-  onMount(focus);
+  // (Not while the Dashboard or a Board over it has the keyboard, nor in an unfocused column.)
+  const focus = () => props.takeFocus !== false && !document.activeElement?.closest(".board") && input.focus();
+  createEffect(() => props.takeFocus !== false && focus());
   const answerer = (line: string) => {
     setText(withAnswer(text(), line));
     input.focus();
