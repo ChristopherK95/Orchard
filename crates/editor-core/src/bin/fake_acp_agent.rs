@@ -36,6 +36,11 @@
 //! its chunks), and its `"promptUsage": {"inputTokens": 3, …}` goes in its `session/prompt` result,
 //! like the real adapter's.
 //!
+//! A top-level `"models": [{ "value": "default", "name": "Default", "description": "Opus 4.8" }, …]`
+//! is the model option in each `session/new`, `session/resume` and `session/load` result's
+//! `configOptions` (the first is current), like the real adapter's. A turn's `"setModel": "<value>"`
+//! makes another current, sent as a `config_option_update` (after its chunks).
+//!
 //! Each `session/prompt` consumes the next turn (across all sessions); once the script runs out, the
 //! agent echoes the prompt. A `permission` turn first announces the tool call, then asks
 //! `session/request_permission` (id `"perm-1"`, `"perm-2"`, …) and waits for the answer, which it
@@ -82,6 +87,9 @@ struct Script {
     /// Conversations `session/list` answers with, besides this process's own.
     #[serde(default)]
     listed: Vec<Value>,
+    /// The model option's choices (the first is current); none, no model option.
+    #[serde(default)]
+    models: Vec<Value>,
     /// The `promptCapabilities` it announces (images and embedded files, unless set).
     #[serde(default = "default_prompt_capabilities")]
     prompt_capabilities: Value,
@@ -135,6 +143,8 @@ struct Turn {
     usage: Option<Value>,
     /// The `usage` of its `session/prompt` result.
     prompt_usage: Option<Value>,
+    /// Make this model current (sent as a `config_option_update` after the chunks).
+    set_model: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -177,6 +187,8 @@ struct Agent {
     requests: u32,
     /// Each session's working directory, by session id.
     cwds: std::collections::HashMap<String, String>,
+    /// The current model, once a turn's `setModel` changed it (the first of `models` till then).
+    model: Option<Value>,
 }
 
 fn main() {
@@ -212,6 +224,7 @@ fn main() {
             fail_resume: false,
             commands: vec![],
             listed: vec![],
+            models: vec![],
             prompt_capabilities: default_prompt_capabilities(),
         });
     let log = std::env::var("FAKE_ACP_LOG").ok().map(|path| {
@@ -228,6 +241,7 @@ fn main() {
         sessions: 0,
         requests: 0,
         cwds: Default::default(),
+        model: None,
     };
     agent.record(&json!({ "started": std::process::id() }));
     agent.run();
@@ -351,8 +365,22 @@ impl Agent {
     }
 
     /// The modes part of a `session/new` or `session/resume` result.
+    /// The `configOptions`: the model option, with `current` its current value.
+    fn config_options(&self) -> Value {
+        if self.script.models.is_empty() {
+            return json!([]);
+        }
+        let current = self
+            .model
+            .clone()
+            .unwrap_or_else(|| self.script.models[0]["value"].clone());
+        json!([{ "id": "model", "name": "Model", "category": "model", "type": "select",
+                 "currentValue": current, "options": self.script.models }])
+    }
+
     fn modes(&self) -> Value {
         json!({
+            "configOptions": self.config_options(),
             "modes": {
                 "currentModeId": self.script.initial_mode,
                 "availableModes": [
@@ -430,6 +458,13 @@ impl Agent {
                 .expect("object")
                 .extend(fields.clone());
             notify_update(&session_id, update);
+        }
+        if let Some(model) = &turn.set_model {
+            self.model = Some(json!(model));
+            notify_update(
+                &session_id,
+                json!({ "sessionUpdate": "config_option_update", "configOptions": self.config_options() }),
+            );
         }
         if turn.exit {
             std::process::exit(1);

@@ -285,7 +285,7 @@ async fn committing_while_a_session_is_working_asks_first() {
     assert_eq!(
         outcome,
         CommitOutcome::SessionsWorking {
-            sessions: vec!["Session 1".into()]
+            sessions: vec!["Bramble".into()]
         }
     );
     assert_eq!(files(&core, &root).await.len(), 1, "nothing committed");

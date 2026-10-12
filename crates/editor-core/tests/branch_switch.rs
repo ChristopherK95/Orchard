@@ -92,13 +92,10 @@ async fn switching_waits_while_a_session_is_mid_turn() {
     core.send_prompt(session, "work").await.unwrap();
     states_until(&mut states, session, SessionState::Working).await;
 
-    assert_eq!(
-        core.git_status(&root).await.unwrap().mid_turn,
-        ["Session 1"]
-    );
+    assert_eq!(core.git_status(&root).await.unwrap().mid_turn, ["Bramble"]);
     assert!(matches!(
         core.switch_branch(&root, "feature").await,
-        Err(CoreError::SessionsWorking(names)) if names == ["Session 1"]
+        Err(CoreError::SessionsWorking(names)) if names == ["Bramble"]
     ));
     assert_eq!(branch_of(&core, &root).as_deref(), Some("main"));
 }

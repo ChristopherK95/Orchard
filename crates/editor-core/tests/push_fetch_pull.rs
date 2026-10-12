@@ -224,7 +224,7 @@ async fn pulling_while_a_session_is_mid_turn_asks_first() {
     assert_eq!(
         core.pull(&root, false).await.unwrap(),
         PullOutcome::SessionsWorking {
-            sessions: vec!["Session 1".into()]
+            sessions: vec!["Bramble".into()]
         }
     );
     assert_ne!(rev_parse(&root, "HEAD"), theirs, "nothing pulled");

@@ -71,6 +71,12 @@ pub(crate) struct SavedSession {
     /// this was recorded count as started.)
     #[serde(default = "started_by_default")]
     pub(crate) started: bool,
+    /// The model it last ran on, to show until the Agent says again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) model: Option<String>,
+    /// When it last started or finished a turn (ms since the Unix epoch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) last_active: Option<u64>,
 }
 
 fn started_by_default() -> bool {
@@ -175,6 +181,8 @@ mod tests {
             permission_mode: PermissionMode::Plan,
             files: vec![],
             started: true,
+            model: None,
+            last_active: None,
         }
     }
 
