@@ -22,6 +22,7 @@ mod process;
 mod pull_request;
 mod remove_worktree;
 mod session;
+mod session_log;
 mod settings;
 mod setup;
 mod statistics;

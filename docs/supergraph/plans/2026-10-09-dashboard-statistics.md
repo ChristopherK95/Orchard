@@ -292,7 +292,7 @@ Checkpoint:
 - Commit: `Statistics: the period is remembered per Workspace`
 
 ## Task 8: The session log file
-Status: pending
+Status: completed
 Risk: low
 Dependencies: none
 Files:
