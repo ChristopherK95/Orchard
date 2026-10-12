@@ -66,5 +66,6 @@ pub use crate::settings::{
     Notifications, RepoSettings, SettingChange, Settings, WindowsShell,
 };
 pub use crate::setup::{SetupInfo, SetupStatus};
+pub use crate::statistics::{Compared, Median, Statistics, Waiting};
 pub use crate::terminal::{TerminalId, TerminalInfo, TerminalOutput, TerminalStream};
 pub use crate::worktrees::WorktreeInfo;

@@ -122,7 +122,7 @@ Checkpoint:
 - Commit: `Statistics: draft time doesn't count towards a PR's time`
 
 ## Task 4: The six figures
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 3
 Files:

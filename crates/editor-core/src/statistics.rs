@@ -4,6 +4,8 @@
 
 use serde::Serialize;
 
+use crate::dashboard::ReviewRequest;
+
 /// A day in seconds.
 const DAY: i64 = 86_400;
 
@@ -194,6 +196,187 @@ pub(crate) fn ready_time(
     total.max(0)
 }
 
+/// One of the user's PRs, as the authored search reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AuthoredPr {
+    pub(crate) created_at: i64,
+    pub(crate) merged_at: Option<i64>,
+    pub(crate) open: bool,
+    pub(crate) is_draft: bool,
+    pub(crate) draft_events: Vec<DraftEvent>,
+    pub(crate) reviews: Vec<Reviewed>,
+}
+
+/// A submitted review: when, and by whom.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Reviewed {
+    pub(crate) at: i64,
+    pub(crate) login: String,
+    pub(crate) bot: bool,
+}
+
+/// A PR the user reviewed: its author, and when the user's reviews were submitted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReviewedPr {
+    pub(crate) author: String,
+    pub(crate) mine: Vec<i64>,
+}
+
+/// A PR that has waited since a time: the user's oldest open PR, or the review request to the
+/// user that has waited longest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Waiting {
+    pub number: u64,
+    pub title: String,
+    /// As GitHub gave it (ISO).
+    pub since: String,
+}
+
+/// The six figures of the Dashboard's Statistics, for `days` days.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Statistics {
+    pub days: u32,
+    /// The user's PRs merged, into any base branch.
+    pub merged: Compared<u32>,
+    /// From first ready for review to merged, draft spells left out.
+    pub time_to_merge: Compared<Median>,
+    /// From first ready to the first review by someone else (bots left out), over the PRs that
+    /// first became ready in the period.
+    pub time_to_first_review: Compared<Median>,
+    /// The period's open, non-draft PRs that nobody else has reviewed yet.
+    pub still_waiting: u32,
+    /// PRs by others the user reviewed (several reviews of one count once).
+    pub reviews_given: Compared<u32>,
+    pub oldest_open: Option<Waiting>,
+    pub longest_request: Option<Waiting>,
+}
+
+/// Works out the figures from what the searches found.
+pub(crate) fn figures(
+    periods: Periods,
+    viewer: &str,
+    authored: &[AuthoredPr],
+    reviewed: &[ReviewedPr],
+    oldest_open: Option<Waiting>,
+    requests: &[ReviewRequest],
+) -> Statistics {
+    let (merged, time_to_merge) = merges(periods, authored);
+    let (time_to_first_review, still_waiting) = first_reviews(periods, viewer, authored);
+    Statistics {
+        days: periods.days,
+        merged,
+        time_to_merge,
+        time_to_first_review,
+        still_waiting,
+        reviews_given: reviews_given(periods, viewer, reviewed),
+        oldest_open,
+        longest_request: longest_request(requests),
+    }
+}
+
+/// Values sorted into the period and the one before by their times (others dropped).
+fn split(periods: Periods, timed: impl IntoIterator<Item = (i64, i64)>) -> Compared<Vec<i64>> {
+    let mut split = Compared {
+        now: vec![],
+        before: vec![],
+    };
+    for (at, value) in timed {
+        if periods.in_current(at) {
+            split.now.push(value);
+        } else if periods.in_previous(at) {
+            split.before.push(value);
+        }
+    }
+    split
+}
+
+/// How many PRs were merged in each period, and the median time to merge.
+fn merges(periods: Periods, authored: &[AuthoredPr]) -> (Compared<u32>, Compared<Median>) {
+    let times = split(
+        periods,
+        authored.iter().filter_map(|pr| {
+            let merged_at = pr.merged_at?;
+            let time = ready_time(pr.created_at, pr.is_draft, &pr.draft_events, merged_at);
+            Some((merged_at, time))
+        }),
+    );
+    let counts = Compared {
+        now: times.now.len() as u32,
+        before: times.before.len() as u32,
+    };
+    let medians = Compared {
+        now: median(times.now),
+        before: median(times.before),
+    };
+    (counts, medians)
+}
+
+/// The median time to first review over the PRs that first became ready in each period, and how
+/// many of this period's open, non-draft ones nobody has reviewed yet. Only reviews by someone
+/// other than the user, and not a bot, submitted since the PR was first ready count.
+fn first_reviews(
+    periods: Periods,
+    viewer: &str,
+    authored: &[AuthoredPr],
+) -> (Compared<Median>, u32) {
+    let mut still_waiting = 0;
+    let mut waits = vec![];
+    for pr in authored {
+        let Some(ready) = first_ready(pr.created_at, pr.is_draft, &pr.draft_events) else {
+            continue;
+        };
+        let first = pr
+            .reviews
+            .iter()
+            .filter(|r| !r.bot && r.login != viewer && r.at >= ready)
+            .map(|r| r.at)
+            .min();
+        match first {
+            Some(at) => waits.push((ready, at - ready)),
+            None if pr.open && !pr.is_draft && periods.in_current(ready) => still_waiting += 1,
+            None => {}
+        }
+    }
+    let waits = split(periods, waits);
+    let medians = Compared {
+        now: median(waits.now),
+        before: median(waits.before),
+    };
+    (medians, still_waiting)
+}
+
+/// How many PRs by others the user reviewed in each period, each counted once per period.
+fn reviews_given(periods: Periods, viewer: &str, reviewed: &[ReviewedPr]) -> Compared<u32> {
+    let mut given = Compared { now: 0, before: 0 };
+    for pr in reviewed.iter().filter(|pr| pr.author != viewer) {
+        if pr.mine.iter().any(|&at| periods.in_current(at)) {
+            given.now += 1;
+        }
+        if pr.mine.iter().any(|&at| periods.in_previous(at)) {
+            given.before += 1;
+        }
+    }
+    given
+}
+
+/// The review request to the user asked longest ago (none says when: none).
+fn longest_request(requests: &[ReviewRequest]) -> Option<Waiting> {
+    requests
+        .iter()
+        .filter_map(|r| {
+            let since = r.requested_at.as_ref()?;
+            Some((parse_utc(since)?, r, since))
+        })
+        .min_by_key(|(at, ..)| *at)
+        .map(|(_, r, since)| Waiting {
+            number: r.number,
+            title: r.title.clone(),
+            since: since.clone(),
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,5 +452,207 @@ mod tests {
         let shuffled = [ready(80), ready(30), draft(60)];
         assert_eq!(first_ready(0, false, &shuffled), Some(30));
         assert_eq!(ready_time(0, false, &shuffled, 100), 50);
+    }
+
+    /// A week up to day 100.
+    const WEEK: Periods = Periods {
+        now: 100 * DAY,
+        days: 7,
+    };
+
+    fn pr(created_at: i64) -> AuthoredPr {
+        AuthoredPr {
+            created_at,
+            merged_at: None,
+            open: true,
+            is_draft: false,
+            draft_events: vec![],
+            reviews: vec![],
+        }
+    }
+
+    fn merged(created_at: i64, merged_at: i64) -> AuthoredPr {
+        AuthoredPr {
+            merged_at: Some(merged_at),
+            open: false,
+            ..pr(created_at)
+        }
+    }
+
+    fn by(login: &str, at: i64) -> Reviewed {
+        Reviewed {
+            at,
+            login: login.into(),
+            bot: false,
+        }
+    }
+
+    fn of(authored: &[AuthoredPr]) -> Statistics {
+        figures(WEEK, "me", authored, &[], None, &[])
+    }
+
+    #[test]
+    fn merged_prs_and_time_to_merge_per_period() {
+        let authored = [
+            merged(95 * DAY, 99 * DAY),
+            // Back to draft for a day, which doesn't count.
+            AuthoredPr {
+                draft_events: vec![
+                    DraftEvent {
+                        at: 95 * DAY,
+                        to_draft: true,
+                    },
+                    DraftEvent {
+                        at: 96 * DAY,
+                        to_draft: false,
+                    },
+                ],
+                ..merged(94 * DAY, 98 * DAY)
+            },
+            merged(88 * DAY, 90 * DAY),
+            merged(70 * DAY, 80 * DAY),
+            pr(99 * DAY),
+        ];
+        let stats = of(&authored);
+        assert_eq!(stats.days, 7);
+        assert_eq!(stats.merged, Compared { now: 2, before: 1 });
+        assert_eq!(
+            stats.time_to_merge,
+            Compared {
+                now: Median {
+                    seconds: Some(3 * DAY + DAY / 2),
+                    count: 2
+                },
+                before: Median {
+                    seconds: Some(2 * DAY),
+                    count: 1
+                },
+            }
+        );
+        let stats = of(&authored[..1]);
+        assert_eq!(stats.merged, Compared { now: 1, before: 0 });
+        assert_eq!(
+            stats.time_to_merge.before,
+            Median {
+                seconds: None,
+                count: 0
+            }
+        );
+    }
+
+    #[test]
+    fn first_review_leaves_out_bots_and_the_user() {
+        let authored = [
+            // A bot first, then ann: ann's review counts.
+            AuthoredPr {
+                reviews: vec![
+                    Reviewed {
+                        bot: true,
+                        ..by("dependabot[bot]", 95 * DAY + DAY / 2)
+                    },
+                    by("ann", 96 * DAY),
+                ],
+                ..merged(95 * DAY, 97 * DAY)
+            },
+            // Only a bot and the user: still waiting.
+            AuthoredPr {
+                reviews: vec![
+                    Reviewed {
+                        bot: true,
+                        ..by("ci", 96 * DAY + DAY / 2)
+                    },
+                    by("me", 97 * DAY),
+                ],
+                ..pr(96 * DAY)
+            },
+            // Reviewed only while a draft, ready since: still waiting.
+            AuthoredPr {
+                draft_events: vec![DraftEvent {
+                    at: 97 * DAY,
+                    to_draft: false,
+                }],
+                reviews: vec![by("ann", 95 * DAY)],
+                ..pr(94 * DAY)
+            },
+            // Merged with no review: not waiting.
+            merged(95 * DAY, 96 * DAY),
+            // Ready in the period before.
+            AuthoredPr {
+                reviews: vec![by("bob", 90 * DAY)],
+                ..merged(88 * DAY, 91 * DAY)
+            },
+        ];
+        let stats = of(&authored);
+        assert_eq!(
+            stats.time_to_first_review,
+            Compared {
+                now: Median {
+                    seconds: Some(DAY),
+                    count: 1
+                },
+                before: Median {
+                    seconds: Some(2 * DAY),
+                    count: 1
+                },
+            }
+        );
+        assert_eq!(stats.still_waiting, 2);
+    }
+
+    #[test]
+    fn reviews_given_count_each_pr_once_per_period() {
+        let reviewed = [
+            ReviewedPr {
+                author: "ann".into(),
+                mine: vec![95 * DAY, 96 * DAY, 97 * DAY],
+            },
+            ReviewedPr {
+                author: "bob".into(),
+                mine: vec![90 * DAY, 98 * DAY],
+            },
+            ReviewedPr {
+                author: "me".into(),
+                mine: vec![99 * DAY],
+            },
+        ];
+        let stats = figures(WEEK, "me", &[], &reviewed, None, &[]);
+        assert_eq!(stats.reviews_given, Compared { now: 2, before: 1 });
+    }
+
+    #[test]
+    fn the_oldest_open_pr_and_longest_request_are_found() {
+        let request = |number: u64, requested_at: Option<&str>| ReviewRequest {
+            number,
+            title: format!("PR {number}"),
+            url: format!("u{number}"),
+            author: "ann".into(),
+            head: "feat".into(),
+            checks: vec![],
+            requested_at: requested_at.map(str::to_owned),
+            re_requested: false,
+        };
+        let oldest = Waiting {
+            number: 4,
+            title: "Old one".into(),
+            since: "2026-09-01T09:00:00Z".into(),
+        };
+        let requests = [
+            request(7, Some("2026-10-05T09:00:00Z")),
+            request(9, Some("2026-10-01T09:00:00Z")),
+            request(11, None),
+        ];
+        let stats = figures(WEEK, "me", &[], &[], Some(oldest.clone()), &requests);
+        assert_eq!(stats.oldest_open, Some(oldest));
+        assert_eq!(
+            stats.longest_request,
+            Some(Waiting {
+                number: 9,
+                title: "PR 9".into(),
+                since: "2026-10-01T09:00:00Z".into(),
+            })
+        );
+        let stats = figures(WEEK, "me", &[], &[], None, &[]);
+        assert_eq!(stats.oldest_open, None);
+        assert_eq!(stats.longest_request, None);
     }
 }
