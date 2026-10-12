@@ -2,8 +2,9 @@
 // view a Workspace opens on. Statistics of the user's work over a chosen period (Statistics.tsx) in
 // a column on the left; on the right, fixed sections in this order: the Agent sessions that need the
 // user, reviews requested from them, their open PRs by stage, Worktrees that need attention,
-// Worktrees ready to clean up, how many sessions are Working and Idle. (In a narrow window it's one
-// column, the statistics last.) Each item leads to where it lives (the Workspace view
+// Worktrees ready to clean up, how many sessions are Working and Idle. The layout follows the
+// window's width: one column when narrow (statistics last), and on a very wide one the right side
+// splits in two, the sessions, reviews and PRs beside the Worktrees. Each item leads to where it lives (the Workspace view
 // decides how); a PR with failing checks or review feedback can start an Agent session on it. The
 // GitHub sections say when they were last read, and say so inline when `gh` can't be used, while
 // the local ones work as ever.
@@ -158,7 +159,7 @@ export function Dashboard(props: {
             </Show>
           </Section>
         </div>
-        <div class="dashboard-column">
+        <div class="dashboard-column dashboard-now-column">
           <Section icon={<Bell />} title="Needs you" count={needYou().length} needs empty="No sessions need you">
             <For each={needYou()}>
               {(s) => (
@@ -233,6 +234,8 @@ export function Dashboard(props: {
             </For>
           </Section>
 
+        </div>
+        <div class="dashboard-column dashboard-local-column">
           <Section icon={<GitBranch />} title="Worktrees that need attention" count={attention.list().length} empty="No Worktrees need attention" error={attention.error()}>
             <For each={attention.list()}>
               {(w: WorktreeAttention) => (

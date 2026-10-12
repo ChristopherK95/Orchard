@@ -896,14 +896,20 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 
 /* The Dashboard: where the Board sits, its sections one under another, each row leading to where
    its item lives (a Tab, the PR overlay, a Worktree). */
-/* Statistics in a column on the left, what needs the user on the right; one column (statistics last) when narrow. */
-.dashboard-sections { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 24px 32px; display: grid; grid-template-columns: minmax(280px, 360px) minmax(0, 980px); justify-content: center; align-items: start; gap: 22px 28px; }
+/* As wide as the window allows: one column when narrow (statistics last); from 1,000 px the
+   statistics on the left and the rest beside them; from 2,200 px the rest split in two, what needs
+   the user (sessions, reviews, PRs) and the Worktrees. The statistics' cards fill their column. */
+.dashboard-sections { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 24px 32px; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "now" "local" "stats"; align-items: start; align-content: start; gap: 22px 28px; }
 .dashboard-column { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
-.dashboard-stats-column .dashboard-stats { grid-template-columns: 1fr; }
-@media (max-width: 1000px) {
-  .dashboard-sections { grid-template-columns: minmax(0, 980px); }
-  .dashboard-stats-column { order: 1; }
-  .dashboard-stats-column .dashboard-stats { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.dashboard-stats-column { grid-area: stats; }
+.dashboard-now-column { grid-area: now; }
+.dashboard-local-column { grid-area: local; }
+.dashboard-stats-column .dashboard-stats { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+@media (min-width: 1000px) {
+  .dashboard-sections { grid-template-columns: minmax(280px, 1fr) minmax(0, 2.4fr); grid-template-areas: "stats now" "stats local"; grid-template-rows: auto 1fr; }
+}
+@media (min-width: 2200px) {
+  .dashboard-sections { grid-template-columns: minmax(320px, 1fr) minmax(0, 1.7fr) minmax(0, 1fr); grid-template-areas: "stats now local"; grid-template-rows: auto; }
 }
 .dashboard-section { display: flex; flex-direction: column; gap: 6px; width: 100%; }
 .dashboard-section-head { display: flex; align-items: center; gap: 8px; height: 26px; font-size: 13px; font-weight: 600; color: var(--fg-1); }
