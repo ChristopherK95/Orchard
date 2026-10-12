@@ -138,6 +138,62 @@ pub struct Compared<T> {
     pub before: T,
 }
 
+/// A PR going to draft (`ConvertToDraftEvent`) or becoming ready for review
+/// (`ReadyForReviewEvent`), from its timeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DraftEvent {
+    pub(crate) at: i64,
+    pub(crate) to_draft: bool,
+}
+
+fn sorted(events: &[DraftEvent]) -> Vec<DraftEvent> {
+    let mut events = events.to_vec();
+    events.sort_by_key(|e| e.at);
+    events
+}
+
+/// When a PR first became ready for review: when it was opened, unless it was opened as a draft
+/// (its first event makes it ready), then that event's; `None` if it never has been.
+pub(crate) fn first_ready(created: i64, is_draft_now: bool, events: &[DraftEvent]) -> Option<i64> {
+    match sorted(events).first() {
+        Some(first) if !first.to_draft => Some(first.at),
+        Some(_) => Some(created),
+        None => (!is_draft_now).then_some(created),
+    }
+}
+
+/// How long a PR was ready for review from when it first was to `until`: every spell it spent as
+/// a draft in between is left out. 0 if it never was ready.
+pub(crate) fn ready_time(
+    created: i64,
+    is_draft_now: bool,
+    events: &[DraftEvent],
+    until: i64,
+) -> i64 {
+    let Some(start) = first_ready(created, is_draft_now, events) else {
+        return 0;
+    };
+    let mut total = 0;
+    let mut ready_since = Some(start);
+    for event in sorted(events) {
+        if event.at < start || event.at >= until {
+            continue;
+        }
+        match (event.to_draft, ready_since) {
+            (true, Some(since)) => {
+                total += event.at - since;
+                ready_since = None;
+            }
+            (false, None) => ready_since = Some(event.at),
+            _ => {}
+        }
+    }
+    if let Some(since) = ready_since {
+        total += until - since;
+    }
+    total.max(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +240,34 @@ mod tests {
                 count: 0
             }
         );
+    }
+
+    #[test]
+    fn draft_spells_are_left_out_of_a_prs_time() {
+        let ready = |at| DraftEvent {
+            at,
+            to_draft: false,
+        };
+        let draft = |at| DraftEvent { at, to_draft: true };
+        // Opened ready, merged.
+        assert_eq!(first_ready(0, false, &[]), Some(0));
+        assert_eq!(ready_time(0, false, &[], 100), 100);
+        // Opened as a draft, ready later.
+        assert_eq!(first_ready(0, false, &[ready(30)]), Some(30));
+        assert_eq!(ready_time(0, false, &[ready(30)], 100), 70);
+        // Opened ready, back to draft for a spell.
+        let spell = [draft(20), ready(50)];
+        assert_eq!(first_ready(0, false, &spell), Some(0));
+        assert_eq!(ready_time(0, false, &spell, 100), 70);
+        // Opened as a draft and still one: never ready.
+        assert_eq!(first_ready(0, true, &[]), None);
+        assert_eq!(ready_time(0, true, &[], 100), 0);
+        // Events out of order give the same answers.
+        let shuffled = [ready(50), draft(20)];
+        assert_eq!(first_ready(0, false, &shuffled), Some(0));
+        assert_eq!(ready_time(0, false, &shuffled, 100), 70);
+        let shuffled = [ready(80), ready(30), draft(60)];
+        assert_eq!(first_ready(0, false, &shuffled), Some(30));
+        assert_eq!(ready_time(0, false, &shuffled, 100), 50);
     }
 }

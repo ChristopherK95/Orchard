@@ -85,7 +85,7 @@ Checkpoint:
 - Commit: `Statistics: times, periods and medians`
 
 ## Task 3: Draft time doesn't count
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 2
 Files:
