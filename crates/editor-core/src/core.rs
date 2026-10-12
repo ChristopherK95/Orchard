@@ -32,6 +32,7 @@ use crate::git_status::{
     PushOutcome,
 };
 use crate::merged::{self, WorktreeMerge};
+use crate::names;
 use crate::permissions;
 use crate::pull_request::{
     CommitChanges, MyPullRequest, OpenPullRequest, PullRequestDetails, PullRequestOutcome,
@@ -163,6 +164,27 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
 async fn close_acp(connection: &Connection, acp_id: &str) -> Option<Result<Value, AcpError>> {
     let close = connection.request("session/close", json!({ "sessionId": acp_id }));
     tokio::time::timeout(CLOSE_TIMEOUT, close).await.ok()
+}
+
+/// The model a `configOptions` list says the session runs on, by the name the Agent gives it. Its
+/// "Default" option names the model it stands for in its description ("Opus 4.8").
+fn model_of(config_options: &Value) -> Option<String> {
+    let option = config_options
+        .as_array()?
+        .iter()
+        .find(|o| o["category"] == "model" || o["id"] == "model")?;
+    let current = &option["currentValue"];
+    let chosen = option["options"]
+        .as_array()
+        .and_then(|options| options.iter().find(|o| o["value"] == *current));
+    let name = match chosen {
+        Some(o) if o["value"] == "default" => o["description"].as_str().or(o["name"].as_str()),
+        Some(o) => o["name"].as_str(),
+        None => current.as_str(),
+    };
+    name.map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_owned)
 }
 
 /// Puts the Agent's ACP session in `mode`.
@@ -470,6 +492,18 @@ pub enum CoreEvent {
         session_id: SessionId,
         state: SessionState,
     },
+    /// The model the session runs on changed (or the Agent first said which it is).
+    #[serde(rename_all = "camelCase")]
+    SessionModelChanged {
+        session_id: SessionId,
+        model: String,
+    },
+    /// The session started or finished a turn, at `at` (ms since the Unix epoch).
+    #[serde(rename_all = "camelCase")]
+    SessionActivityChanged {
+        session_id: SessionId,
+        at: u64,
+    },
     #[serde(rename_all = "camelCase")]
     PermissionModeChanged {
         session_id: SessionId,
@@ -684,7 +718,7 @@ struct State {
     removing: std::collections::HashSet<PathBuf>,
     /// Closed Tabs, most recently closed first (Recent sessions, all Worktrees).
     recent: Vec<SavedSession>,
-    /// The highest `Session N` name given so far.
+    /// How many character names have been given so far (`names::character_name`).
     last_name: u64,
     /// The ACP id of the Tab last shown.
     active: Option<String>,
@@ -704,15 +738,15 @@ struct State {
 }
 
 impl State {
-    /// The next `Session N` name.
+    /// The next character name ("Bramble", "Clementine", …).
     fn new_name(&mut self) -> String {
         self.last_name += 1;
-        format!("Session {}", self.last_name)
+        names::character_name(self.last_name)
     }
 
     /// Keeps `new_name` clear of a remembered name.
     fn note_name(&mut self, name: &str) {
-        if let Some(n) = name.strip_prefix("Session ").and_then(|n| n.parse().ok()) {
+        if let Some(n) = names::character_number(name) {
             self.last_name = self.last_name.max(n);
         }
     }
@@ -2278,6 +2312,8 @@ impl Core {
                     permission_mode: PermissionMode::AskForEdits,
                     files: vec![],
                     started: false,
+                    model: model_of(&created["configOptions"]),
+                    last_active: None,
                 };
                 Some(
                     self.inner
@@ -3749,6 +3785,8 @@ impl Core {
                     permission_mode: PermissionMode::AskForEdits,
                     files: vec![],
                     started: true,
+                    model: None,
+                    last_active: None,
                 },
             }
         };
@@ -4394,6 +4432,7 @@ impl Inner {
                 session.queued_changed(None);
                 Some(next)
             });
+            inner.persist(); // (when it was last active)
             if let Some(next) = next {
                 inner.dispatch(session, connection, &next.text, &next.attachments);
             }
@@ -4759,6 +4798,8 @@ impl Inner {
             },
             permission_mode: saved.permission_mode,
             unread: 0,
+            model: saved.model,
+            last_active: saved.last_active,
         };
         // (Only a session the Agent just created comes with a connection: reopened and restored
         // ones start Suspended.)
@@ -5099,6 +5140,7 @@ impl Inner {
             session.update(|control| control.loaded = true);
             replayed
         };
+        session.set_model(&resumed["configOptions"]);
         let mut current = resumed["modes"]["currentModeId"]
             .as_str()
             .and_then(PermissionMode::from_acp_id);
@@ -5499,6 +5541,12 @@ impl Inner {
                     Some("usage_update") => {
                         session.change_usage(|usage| usage.apply_update(update));
                     }
+                    // E.g. `/model`, or the Agent falling back to another model.
+                    Some("config_option_update") => {
+                        if session.set_model(&update["configOptions"]) {
+                            self.persist();
+                        }
+                    }
                     // The Agent can change mode itself, e.g. when leaving plan mode.
                     // (A replayed mode change is history: the Tab's own mode is applied after.)
                     Some("current_mode_update") if !session.replaying.load(Ordering::SeqCst) => {
@@ -5574,6 +5622,8 @@ impl Session {
             worktree: info.worktree.clone(),
             permission_mode: info.permission_mode,
             started: self.started.load(Ordering::SeqCst),
+            model: info.model.clone(),
+            last_active: info.last_active,
             files: {
                 let mut files: Vec<PathBuf> = self
                     .files
@@ -5648,6 +5698,15 @@ impl Session {
                 let _ = self.events.send(CoreEvent::GitStatusChanged {
                     worktree: info.worktree.clone(),
                 });
+                // A turn started or ended (a replayed one is history, not activity).
+                if !self.replaying.load(Ordering::SeqCst) {
+                    let at = unix_millis();
+                    info.last_active = Some(at);
+                    let _ = self.events.send(CoreEvent::SessionActivityChanged {
+                        session_id: info.id,
+                        at,
+                    });
+                }
             }
             info.state = state;
             let mut idle_since = self.idle_since.lock().expect("idle lock");
@@ -5670,6 +5729,23 @@ impl Session {
             });
         }
         result
+    }
+
+    /// Takes in the model a `configOptions` list names: true if it changed.
+    fn set_model(&self, config_options: &Value) -> bool {
+        let Some(model) = model_of(config_options) else {
+            return false;
+        };
+        let mut info = self.info.lock().expect("info lock");
+        if info.model.as_ref() == Some(&model) {
+            return false;
+        }
+        info.model = Some(model.clone());
+        let _ = self.events.send(CoreEvent::SessionModelChanged {
+            session_id: info.id,
+            model,
+        });
+        true
     }
 
     fn set_mode(&self, mode: PermissionMode) {

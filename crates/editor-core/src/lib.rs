@@ -16,6 +16,7 @@ mod fonts;
 mod git;
 mod git_status;
 mod merged;
+mod names;
 mod permissions;
 mod prerequisites;
 mod process;

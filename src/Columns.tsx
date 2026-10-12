@@ -6,10 +6,12 @@
 // Worktree's shell, in place of the transcript. Dragging the gap between two columns moves width
 // from one to the other (ticket 36).
 import { createEffect, createSignal, For, lazy, Match, onCleanup, Show, Switch } from "solid-js";
+import { Avatar } from "./Avatar";
 import { Banner, Composer, FindOtherConversations, RecentList } from "./Chat";
 import type { OtherConversation, PermissionRequest, RecentSession, SessionId, SessionInfo } from "./core";
 import { ChevronDown, CirclePause, CirclePlay, Ellipsis, GitBranch, Pin, Plus, Sparkles, SquareTerminal, Trash2, X } from "./icons";
 import { PrButton } from "./PrOverlay";
+import { useSessionFacts } from "./sessionFacts";
 import { Setup, type SetupView } from "./Setup";
 import { shellRunning } from "./shells";
 import { StateBadge } from "./StateDot";
@@ -217,6 +219,7 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
             {(s) => (
               <span class="trigger-wrap" classList={{ on: s.id === view.shown() && !terminal() }}>
                 <button class="trigger" onClick={() => showSession(s.id)} onAuxClick={(e) => e.button === 1 && props.onCloseTab(s.id)}>
+                  <Avatar name={s.name} colour={worktreeColour(path)} size={16} />
                   {s.name}
                   <Show when={s.state === "needsYou"}>
                     <span class="needs-dot" title="Needs you" />
@@ -250,6 +253,10 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
             </span>
           </Show>
         </div>
+        <span class="grow" />
+        <Show when={!terminal() && session()} keyed>
+          {(s) => <SessionFacts session={s} />}
+        </Show>
         <button
           class="ghost icon"
           onClick={() => props.onNewSession(path)}
@@ -425,6 +432,24 @@ function ColumnHeader(props: ColumnsProps & { worktree: WorktreeTab; isFocused: 
         )}
       </Show>
     </div>
+  );
+}
+
+/** The shown session's model, how long since it was active, and its cost, beside the tabs. */
+function SessionFacts(props: { session: SessionInfo }) {
+  const facts = useSessionFacts(() => props.session);
+  return (
+    <span class="column-facts" title={facts.title()}>
+      <Show when={facts.model()}>
+        <span class="model">{facts.model()}</span>
+      </Show>
+      <Show when={facts.active()}>
+        <span>{facts.active()}</span>
+      </Show>
+      <Show when={facts.cost()}>
+        <span>{facts.cost()}</span>
+      </Show>
+    </span>
   );
 }
 

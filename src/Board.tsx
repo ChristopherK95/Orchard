@@ -4,10 +4,12 @@
 // drawn from the same session store as the Tabs.
 import { createMemo, createResource, createSignal, For, type JSX, Show } from "solid-js";
 import { core, type SessionInfo, type SessionState } from "./core";
-import { CirclePause, CirclePlay, GitBranch, Sparkles } from "./icons";
+import { Avatar } from "./Avatar";
+import { CirclePause, CirclePlay, GitBranch } from "./icons";
 import { noOption, yesOption } from "./PermissionCard";
 import { PrButton } from "./PrOverlay";
 import { settleProposal } from "./proposals";
+import { ContextBar, useSessionFacts } from "./sessionFacts";
 import { StateDot } from "./StateDot";
 import { worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 
@@ -107,6 +109,7 @@ function Card(props: { session: SessionInfo; worktree: string; onOpen: () => voi
     () => (props.session.state === "needsYou" ? props.session.id : null),
     (id) => core.pendingPermission(id),
   );
+  const facts = useSessionFacts(() => props.session);
   const [answering, setAnswering] = createSignal(false);
   const [error, setError] = createSignal("");
   const act = (action: Promise<void>) => action.catch((err) => setError(String(err)));
@@ -132,23 +135,36 @@ function Card(props: { session: SessionInfo; worktree: string; onOpen: () => voi
         <span class="wt">{props.worktree}</span>
         <PrButton worktree={props.session.worktree} class="ghost" compact onOpen={props.onOpenPr} />
       </div>
-      <div class="board-card-head">
-        <Sparkles />
-        <button
-          class="board-card-open"
-          onClick={(e) => {
-            e.stopPropagation();
-            props.onOpen();
-          }}
-          title="Open its Tab"
-        >
-          {props.session.name}
-        </button>
-        <span class="end">
-          <Show when={props.session.unread > 0}>
-            <span class="badge">{props.session.unread}</span>
-          </Show>
-          <StateDot state={props.session.state} />
+      <div class="board-card-head" title={facts.title()}>
+        <Avatar name={props.session.name} colour={worktreeColour(props.session.worktree)} size={36} />
+        <span class="who">
+          <span class="name-line">
+            <button
+              class="board-card-open"
+              onClick={(e) => {
+                e.stopPropagation();
+                props.onOpen();
+              }}
+              title="Open its Tab"
+            >
+              {props.session.name}
+            </button>
+            <Show when={props.session.unread > 0}>
+              <span class="badge">{props.session.unread}</span>
+            </Show>
+            <ContextBar context={facts.context()} />
+          </span>
+          <span class="facts">
+            <Show when={facts.model()}>
+              <span class="model">{facts.model()}</span>
+            </Show>
+            <Show when={facts.active()}>
+              <span>{facts.active()}</span>
+            </Show>
+            <Show when={facts.cost()}>
+              <span>{facts.cost()}</span>
+            </Show>
+          </span>
         </span>
       </div>
       <Show when={SUMMARY[props.session.state]}>{(text) => <span class="summary">{text()}</span>}</Show>

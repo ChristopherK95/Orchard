@@ -61,7 +61,7 @@ async fn closing_a_tab_stops_it_and_lists_it_under_recent_sessions() {
     );
     let recent = core.recent_sessions(&root);
     assert_eq!(recent.len(), 1);
-    assert_eq!(recent[0].name, "Session 1");
+    assert_eq!(recent[0].name, "Bramble");
     assert_eq!(recent[0].acp_id, acp_id.as_str().unwrap());
     assert!(
         core.worktrees().iter().any(|w| w.path == root),
@@ -82,7 +82,7 @@ async fn reopening_from_recent_sessions_resumes_the_conversation() {
 
     let reopened = core.reopen_session(&recent[0].acp_id).await.unwrap();
     let info = core.session_info(reopened).unwrap();
-    assert_eq!(info.name, "Session 1");
+    assert_eq!(info.name, "Bramble");
     assert_eq!(info.state, SessionState::Idle);
     assert_eq!(
         core.transcript(reopened).unwrap(),
@@ -112,9 +112,9 @@ async fn reopen_last_closed_brings_back_the_most_recent_close() {
     core.close_tab(first).await.unwrap();
 
     let reopened = core.reopen_last_closed().await.unwrap().unwrap();
-    assert_eq!(core.session_info(reopened).unwrap().name, "Session 1");
+    assert_eq!(core.session_info(reopened).unwrap().name, "Bramble");
     let again = core.reopen_last_closed().await.unwrap().unwrap();
-    assert_eq!(core.session_info(again).unwrap().name, "Session 2");
+    assert_eq!(core.session_info(again).unwrap().name, "Clementine");
     assert_eq!(
         core.reopen_last_closed().await.unwrap(),
         None,
@@ -176,13 +176,13 @@ async fn a_restart_restores_every_open_tab_as_suspended() {
         summary,
         [
             (
-                "Session 1",
+                "Bramble",
                 root.clone(),
                 SessionState::Suspended,
                 PermissionMode::AskForEdits
             ),
             (
-                "Session 2",
+                "Clementine",
                 worktree.clone(),
                 SessionState::Suspended,
                 PermissionMode::Plan
@@ -190,7 +190,7 @@ async fn a_restart_restores_every_open_tab_as_suspended() {
         ],
         "same names, order, Worktrees and modes"
     );
-    assert_eq!(core.recent_sessions(&root)[0].name, "Session 3");
+    assert_eq!(core.recent_sessions(&root)[0].name, "Juniper");
     assert_eq!(fake.starts(), started_before, "restoring starts no Agent");
 
     // Opening a restored Tab shows its conversation, and it stays Suspended.
@@ -305,7 +305,7 @@ async fn a_tab_never_sent_a_prompt_is_neither_restored_nor_kept_in_recent_sessio
     let names: Vec<_> = core.sessions().into_iter().map(|s| s.name).collect();
     assert_eq!(
         names,
-        ["Session 1"],
+        ["Bramble"],
         "Claude Code has no conversation for the others"
     );
     assert!(core.recent_sessions(&root).is_empty());

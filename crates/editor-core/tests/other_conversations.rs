@@ -147,7 +147,7 @@ async fn a_long_or_missing_title_still_makes_a_tab_name() {
         .open_conversation(&root, "untitled", None)
         .await
         .unwrap();
-    assert_eq!(core.session_info(untitled).unwrap().name, "Session 1");
+    assert_eq!(core.session_info(untitled).unwrap().name, "Bramble");
 }
 
 #[tokio::test(flavor = "multi_thread")]

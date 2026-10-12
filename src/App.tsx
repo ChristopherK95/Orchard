@@ -794,6 +794,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       } else if (!sessions[event.sessionId]) return;
       else if (event.kind === "sessionStateChanged") onStateChanged(event.sessionId, event.state);
       else if (event.kind === "permissionModeChanged") setSessions(event.sessionId, "permissionMode", event.mode);
+      else if (event.kind === "sessionModelChanged") setSessions(event.sessionId, "model", event.model);
+      else if (event.kind === "sessionActivityChanged") setSessions(event.sessionId, "lastActive", event.at);
       else setSessions(event.sessionId, "unread", event.unread);
     });
     untilGone(unlisten);
@@ -1001,9 +1003,11 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         onShowSession={(id) => void show(id)}
         onCloseSession={(id) => void closeTab(id)}
         onNewSession={(path) => void newSession(path)}
-        onRecent={(r) => {
+        onRecent={(path, r) => {
+          const toggle = recentOpen() && path === activeWorktree();
+          if (path !== activeWorktree()) selectWorktree(path); // (the menu lists the active Worktree's)
           setRecentAt({ left: r.left, top: r.bottom + 4 });
-          setRecentOpen((open) => !open);
+          setRecentOpen(!toggle);
         }}
         onNewWorktree={() => setCreatingWorktree(true)}
         onOverview={() => setOverviewOpen(true)}

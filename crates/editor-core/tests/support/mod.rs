@@ -188,10 +188,12 @@ impl FakeAgent {
         self.dir.path().join("log.jsonl")
     }
 
-    /// Every JSON message the fake agent received (plus its `{"started": pid}` lines).
+    /// Every JSON message the fake agent received (plus its `{"started": pid}` lines). A last line
+    /// it's still writing (no newline yet) isn't one yet.
     pub fn log(&self) -> Vec<serde_json::Value> {
-        std::fs::read_to_string(self.log_path())
-            .unwrap_or_default()
+        let text = std::fs::read_to_string(self.log_path()).unwrap_or_default();
+        let finished = text.rfind('\n').map_or("", |end| &text[..end]);
+        finished
             .lines()
             .map(|l| serde_json::from_str(l).expect("log line is JSON"))
             .collect()

@@ -17,26 +17,33 @@ function tokens(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
-export function ContextMeter(props: { session: SessionId }) {
+/** A session's usage, kept current (asked for once, then followed); undefined until it's known. */
+export function useUsage(session: () => SessionId): () => SessionUsage | undefined {
   if (!listening) {
     listening = true;
     void core.onEvent((event) => event.kind === "usageChanged" && setBySession(event.sessionId, event.usage));
   }
   createEffect(() => {
-    const id = props.session;
+    const id = session();
     if (bySession[id]) return;
     void core
       .sessionUsage(id)
       .then((usage) => !bySession[id] && setBySession(id, usage))
       .catch(() => {});
   });
-  const usage = () => bySession[props.session];
-  const context = () => {
-    const u = usage();
-    if (u?.contextUsed == null || !u.contextSize) return null;
-    const used = Math.min(u.contextUsed, u.contextSize);
-    return { used, size: u.contextSize, left: u.contextSize - used, percent: Math.round((used / u.contextSize) * 100) };
-  };
+  return () => bySession[session()];
+}
+
+/** How full the context window is, if the Agent has said. */
+export function contextOf(u: SessionUsage | undefined) {
+  if (u?.contextUsed == null || !u.contextSize) return null;
+  const used = Math.min(u.contextUsed, u.contextSize);
+  return { used, size: u.contextSize, left: u.contextSize - used, percent: Math.round((used / u.contextSize) * 100) };
+}
+
+export function ContextMeter(props: { session: SessionId }) {
+  const usage = useUsage(() => props.session);
+  const context = () => contextOf(usage());
   const spent = () => {
     const u = usage();
     return u ? u.inputTokens + u.outputTokens + u.cacheReadTokens + u.cacheWriteTokens : 0;

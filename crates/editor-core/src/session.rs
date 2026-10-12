@@ -67,6 +67,10 @@ pub struct SessionInfo {
     pub permission_mode: PermissionMode,
     /// New transcript items (Agent messages, cards, notices) since the Tab was last shown.
     pub unread: usize,
+    /// The model the Agent runs it on, as the Agent names it ("Opus 4.8"); None until it's said.
+    pub model: Option<String>,
+    /// When it last started or finished a turn (ms since the Unix epoch); None if it never has.
+    pub last_active: Option<u64>,
 }
 
 /// How many transcript items a Tab gets when it's shown, and per `transcript_page_before`.
