@@ -958,6 +958,16 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .palette-item .hit { color: var(--fg-1); font-weight: 600; text-decoration: underline; text-decoration-color: var(--fg-dim); text-underline-offset: 2px; }
 .palette-item .end { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; padding-left: 10px; font-size: 11.5px; color: var(--fg-dim); }
 .palette-empty { padding: 10px 14px; margin: 0; }
+/* Ctrl+K: the Agent picker, Ctrl+P's look with a session per row. */
+.agent-picker .palette-item .hit { color: var(--fg-1); }
+.agent-picker .state-dot { flex: none; }
+.agent-picker-worktree { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font: 12px var(--mono); color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; }
+.agent-picker .palette-item .agent-picker-worktree .lucide { flex: none; width: 12px; height: 12px; color: var(--c, var(--fg-3)); }
+.agent-picker-state { color: var(--suspended-text); }
+.agent-picker-state.working { color: var(--working-text); }
+.agent-picker-state.needsYou { color: var(--needs-text); }
+.agent-picker-state.idle { color: var(--idle-text); }
+.agent-picker-state.exited { color: var(--exited-text); }
 
 /* The Board: over the Tabs, which stay mounted underneath (dialogs and the palette, at
    z-index 50, still come on top). */

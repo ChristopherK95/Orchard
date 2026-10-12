@@ -23,6 +23,7 @@ import { answerByKey } from "./PermissionCard";
 import { NewWorktreeDialog } from "./NewWorktreeDialog";
 import { RemoveWorktreeDialog } from "./RemoveWorktreeDialog";
 import { WorktreesOverview } from "./WorktreesOverview";
+import { AgentPicker } from "./AgentPicker";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
 import { FilesDrawer } from "./FilesDrawer";
 import { type BranchPopover, BranchSwitcher, popoverUnder } from "./BranchPicker";
@@ -368,6 +369,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     setDrawer((now) => (now === which ? null : which));
   };
   const [paletteOpen, setPaletteOpen] = createSignal(false);
+  /** Ctrl+K: the Agent picker, for hopping to another session. */
+  const [agentPickerOpen, setAgentPickerOpen] = createSignal(false);
   /** The Worktree being reviewed for a PR (ticket 42), over everything else. */
   const [reviewing, setReviewing] = createSignal<string | null>(null);
   const review = () => {
@@ -420,6 +423,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         ? review()
         : command.kind === "newSessionHere"
         ? void newSession()
+        : command.kind === "switchSession"
+          ? setAgentPickerOpen(true)
         : command.kind === "switchWorkspace"
           ? setSwitching(true)
           : setCreatingWorktree(true);
@@ -807,20 +812,26 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       // (Ctrl+P is never the browser's print, even with a dialog open.)
       if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !switching() && !settingsAt() && !reviewing() && !prOf()) setPaletteOpen(true);
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !agentPickerOpen() && !switching() && !settingsAt() && !reviewing() && !prOf()) setPaletteOpen(true);
         return;
       }
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "o") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !settingsAt() && !reviewing() && !prOf()) setSwitching(true);
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !agentPickerOpen() && !settingsAt() && !reviewing() && !prOf()) setSwitching(true);
+        return;
+      }
+      // (Not when the Manual editor or the Terminal took it: there it's theirs.)
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k" && !e.defaultPrevented && !document.activeElement?.closest(".terminal-panel")) {
+        e.preventDefault();
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !switching() && !settingsAt() && !reviewing() && !prOf()) setAgentPickerOpen(true);
         return;
       }
       if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ",") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !switching() && !reviewing() && !prOf()) openSettingsPage();
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !agentPickerOpen() && !switching() && !reviewing() && !prOf()) openSettingsPage();
         return;
       }
-      if (removing() || overviewOpen() || creatingWorktree() || paletteOpen() || switching() || settingsAt() || reviewing() || prOf()) return; // a dialog is open over the Tab
+      if (removing() || overviewOpen() || creatingWorktree() || paletteOpen() || agentPickerOpen() || switching() || settingsAt() || reviewing() || prOf()) return; // a dialog is open over the Tab
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
         return void toggleDrawer("files");
@@ -1315,6 +1326,19 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           revision={filesRevision[activeWorktree()] ?? 0}
           onCommand={runCommand}
           onClose={() => setPaletteOpen(false)}
+        />
+      </Show>
+      <Show when={agentPickerOpen()}>
+        <AgentPicker
+          sessions={order().map((id) => sessions[id])}
+          current={mainView() === "columns" ? shownIn(activeWorktree()) : (activeId() ?? undefined)}
+          label={(path) => {
+            const w = rowWorktrees().find((w) => w.path === path);
+            return w ? worktreeLabel(w) : path.split(/[\\/]/).pop() ?? path;
+          }}
+          colour={worktreeColour}
+          onPick={(id) => void show(id)}
+          onClose={() => setAgentPickerOpen(false)}
         />
       </Show>
       <Show when={overviewOpen()}>
