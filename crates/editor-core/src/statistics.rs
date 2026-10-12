@@ -16,6 +16,9 @@ const DAY: i64 = 86_400;
 /// The periods the statistics can cover, in days.
 pub(crate) const PERIODS: [u32; 3] = [7, 30, 90];
 
+/// The period they cover unless the Workspace has another.
+pub(crate) const DEFAULT_PERIOD: u32 = 30;
+
 /// Reads GitHub's `YYYY-MM-DDTHH:MM:SSZ` (fractional seconds ignored) into seconds since the Unix
 /// epoch; anything else is `None`.
 pub(crate) fn parse_utc(text: &str) -> Option<i64> {

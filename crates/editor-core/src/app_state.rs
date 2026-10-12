@@ -38,6 +38,9 @@ pub(crate) struct WorkspaceState {
     /// The columns' widths, as shares (see `Core::column_shares`), where they aren't even.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) column_shares: BTreeMap<PathBuf, u32>,
+    /// The days the Dashboard's statistics cover, where it isn't the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) statistics_days: Option<u32>,
     /// When it was last opened, in milliseconds since the Unix epoch (none for Workspaces saved
     /// before this was recorded).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -189,6 +192,7 @@ mod tests {
                 PathBuf::from("C:/repo.worktrees/x"),
             ],
             column_shares: [(PathBuf::from("C:/repo"), 1400)].into(),
+            statistics_days: Some(7),
             opened: Some(1_700_000_000_000),
             hidden: true,
         };

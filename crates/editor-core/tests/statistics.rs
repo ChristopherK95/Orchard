@@ -2,7 +2,6 @@
 
 mod support;
 
-#[cfg(unix)]
 use editor_core::CoreError;
 use support::*;
 
@@ -137,4 +136,31 @@ async fn statistics_say_when_gh_cant_be_used() {
     let error = core.statistics(&root, 30).await.unwrap_err().to_string();
     assert!(error.contains("gh auth login"), "{error}");
     assert!(!error.contains("Creating a PR"), "{error}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_statistics_period_is_remembered_per_workspace() {
+    let (a, b) = (git_repo(), git_repo());
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let core = core_with_state(&fake);
+    core.open_workspace(a.path()).await.unwrap();
+    assert_eq!(core.statistics_period(), 30);
+    core.set_statistics_period(7).unwrap();
+    assert_eq!(core.statistics_period(), 7);
+    core.open_workspace(b.path()).await.unwrap();
+    assert_eq!(core.statistics_period(), 30);
+    core.set_statistics_period(90).unwrap();
+    assert!(matches!(
+        core.set_statistics_period(14),
+        Err(CoreError::UnknownPeriod(14))
+    ));
+    assert_eq!(core.statistics_period(), 90);
+    drop(core);
+
+    // The editor after a restart.
+    let core = core_with_state(&fake);
+    core.open_workspace(a.path()).await.unwrap();
+    assert_eq!(core.statistics_period(), 7);
+    core.open_workspace(b.path()).await.unwrap();
+    assert_eq!(core.statistics_period(), 90);
 }

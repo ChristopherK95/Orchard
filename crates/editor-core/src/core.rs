@@ -627,6 +627,8 @@ struct State {
     pinned: Vec<PathBuf>,
     /// The pinned Worktrees' column widths, as shares; none while they're even.
     column_shares: BTreeMap<PathBuf, u32>,
+    /// The days the Dashboard's statistics cover; none for the default.
+    statistics_days: Option<u32>,
     /// When the Workspace was opened (ms since the Unix epoch), for the Recent Workspaces.
     opened: Option<u64>,
     sessions: HashMap<SessionId, Arc<Session>>,
@@ -2879,6 +2881,32 @@ impl Core {
             .map_err(|e| CoreError::Git(crate::pull_request::not_about_creating(e)))
     }
 
+    /// The days the open Workspace's statistics cover (30 unless another was chosen).
+    pub fn statistics_period(&self) -> u32 {
+        let state = self.inner.state.lock().expect("state lock");
+        match &state.workspace {
+            Some(_) => state.statistics_days.unwrap_or(statistics::DEFAULT_PERIOD),
+            None => statistics::DEFAULT_PERIOD,
+        }
+    }
+
+    /// Chooses the days the open Workspace's statistics cover (7, 30 or 90); remembered across
+    /// restarts.
+    pub fn set_statistics_period(&self, days: u32) -> Result<(), CoreError> {
+        if !statistics::PERIODS.contains(&days) {
+            return Err(CoreError::UnknownPeriod(days));
+        }
+        {
+            let mut state = self.inner.state.lock().expect("state lock");
+            if state.workspace.is_none() {
+                return Err(CoreError::NoWorkspace);
+            }
+            state.statistics_days = Some(days);
+        }
+        self.inner.persist();
+        Ok(())
+    }
+
     /// The Dashboard's statistics for the Worktree's repo over the last `days` days (7, 30 or 90),
     /// each against the `days` before.
     pub async fn statistics(&self, worktree: &Path, days: u32) -> Result<Statistics, CoreError> {
@@ -4720,6 +4748,7 @@ impl Inner {
                 bases: state.bases.clone(),
                 pinned: state.pinned.clone(),
                 column_shares: state.column_shares.clone(),
+                statistics_days: state.statistics_days,
                 opened: state.opened,
                 // (Opening a Workspace lists it again.)
                 hidden: false,
@@ -4787,6 +4816,7 @@ impl Inner {
                     listing_failed || state.worktrees.iter().any(|w| &w.path == worktree)
                 })
                 .collect();
+            state.statistics_days = saved.statistics_days;
             state.column_shares = saved
                 .column_shares
                 .into_iter()

@@ -252,7 +252,7 @@ Checkpoint:
 - Commit: `Statistics: read from gh for the period and the one before`
 
 ## Task 7: The period, remembered per Workspace
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 6
 Files:
