@@ -414,7 +414,7 @@ Checkpoint:
 - Commit: `Statistics: commands for the frontend; the session log in the app data folder`
 
 ## Task 11: Frontend statistics data, kept an hour
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 10
 Files:

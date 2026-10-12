@@ -28,7 +28,7 @@ import { FilesDrawer } from "./FilesDrawer";
 import { type BranchPopover, BranchSwitcher, popoverUnder } from "./BranchPicker";
 import { GitDrawer } from "./GitDrawer";
 import { myPrs, PrBoard, watchMyPrs } from "./PrBoard";
-import { cleanUp, reviewRequests, watchAttention, watchCleanUp, watchReviewRequests } from "./dashboardData";
+import { cleanUp, reviewRequests, statistics, watchAttention, watchCleanUp, watchReviewRequests, watchStatistics } from "./dashboardData";
 import { PrButton, PrOverlay } from "./PrOverlay";
 import { ReviewOverlay } from "./ReviewOverlay";
 import type { OpenRequest } from "./ManualEditor";
@@ -503,6 +503,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   watchReviewRequests(mainWorktree);
   watchAttention();
   watchCleanUp();
+  // (The statistics, though, only while it's showing.)
+  watchStatistics(mainWorktree, () => view() === "dashboard");
   /** The Dashboard entry's badge: what waits on the user (not Worktree hygiene). */
   const dashboardBadge = () =>
     needYou() +
@@ -510,12 +512,15 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     myPrs.prs().filter((p) => p.state === "open" && (p.stage === "changesRequested" || p.stage === "checksFailing")).length;
   // The Workspace opened on the Dashboard: the watchers above just asked GitHub.
   let openedOnDashboard = false;
-  // Showing the Dashboard asks GitHub again, and reads the Worktrees ready to clean up.
+  // Showing the Dashboard asks GitHub again, and reads the Worktrees ready to clean up. The
+  // statistics are read only when there are none, or they're an hour old: even when the Workspace
+  // opened on it, as the watchers don't ask for them unless the Dashboard is up.
   createEffect(
     on(
       view,
       (now) => {
         if (now !== "dashboard") return;
+        statistics.shown();
         if (openedOnDashboard) {
           openedOnDashboard = false;
           return;
