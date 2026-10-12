@@ -481,7 +481,7 @@ Checkpoint:
 - Commit: `Statistics: six cards at the bottom of the Dashboard`
 
 ## Task 13: Final verification; issue 47 done
-Status: pending
+Status: completed
 Risk: low
 Dependencies: Task 12
 Files:
