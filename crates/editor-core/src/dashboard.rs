@@ -245,11 +245,12 @@ const LOG_TAIL: usize = 200;
 
 /// The prompt that starts an Agent session on a PR's failing checks: each failed check by name,
 /// with the last `LOG_TAIL` lines of its failed job's log (`None`: it has none, as for a check
-/// that isn't a GitHub Actions job, which is named with its link instead).
+/// that isn't a GitHub Actions job, which is named with its link instead; `Err`: it couldn't be
+/// read, as while its run is still going or once it's expired, named with its link and why).
 pub(crate) fn failing_check_text(
     number: u64,
     title: &str,
-    failed: &[(Check, Option<String>)],
+    failed: &[(Check, Result<Option<String>, String>)],
 ) -> String {
     let mut text = format!(
         "The checks of PR #{number} ({title}) are failing. Find the cause of each failure below \
@@ -262,7 +263,7 @@ pub(crate) fn failing_check_text(
         };
         text.push_str(&format!("\n## {name}\n"));
         match log {
-            Some(log) => {
+            Ok(Some(log)) => {
                 let lines: Vec<&str> = log.lines().collect();
                 let tail = &lines[lines.len().saturating_sub(LOG_TAIL)..];
                 text.push_str(&format!(
@@ -271,9 +272,13 @@ pub(crate) fn failing_check_text(
                 ));
                 fenced(&mut text, &tail.join("\n"));
             }
-            None => {
+            Ok(None) | Err(_) => {
                 if let Some(url) = &check.url {
                     text.push_str(&format!("\n{url}\n"));
+                }
+                if let Err(why) = log {
+                    let why = why.lines().next().unwrap_or_default();
+                    text.push_str(&format!("\nIts log couldn't be read: {why}\n"));
                 }
             }
         }
@@ -601,8 +606,8 @@ mod tests {
             12,
             "Fix the parser",
             &[
-                (check("test", job), Some(log)),
-                (check("external", None), None),
+                (check("test", job), Ok(Some(log))),
+                (check("external", None), Ok(None)),
             ],
         );
         assert!(prompt.contains("#12"), "{prompt}");

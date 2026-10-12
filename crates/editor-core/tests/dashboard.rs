@@ -221,3 +221,55 @@ esac"#,
     assert!(args.iter().any(|a| a == "number=12"), "{args:?}");
     assert!(args.iter().any(|a| a.contains("isResolved")), "{args:?}");
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failing_check_whose_log_cant_be_read_is_named_without_it() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    // The run is still going: its jobs are there, its failed log isn't yet.
+    let gh = FakeGh::new(
+        r#"case "$1 $2" in
+"pr view") cat <<'JSON'
+{"title":"Fix the parser","statusCheckRollup":[
+  {"__typename":"CheckRun","name":"test","workflowName":"CI","status":"COMPLETED","conclusion":"FAILURE",
+   "detailsUrl":"https://github.com/o/r/actions/runs/55/job/1","startedAt":"2026-10-08T12:00:00Z"}]}
+JSON
+;;
+"run view")
+  case "$*" in
+  *--log-failed*) echo 'run 55 is still in progress; logs will be available when it is complete' >&2; exit 1 ;;
+  *) printf '1\ttest\n' ;;
+  esac
+;;
+esac"#,
+    );
+    let core = core_with_gh(&fake, &gh);
+    let root = core.open_workspace(&setup.repo()).await.unwrap().root;
+
+    let prompt = core.failing_check_prompt(&root, 12).await.unwrap();
+    assert!(prompt.contains("CI / test"), "{prompt}");
+    assert!(
+        prompt.contains("https://github.com/o/r/actions/runs/55/job/1"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("still in progress"), "{prompt}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_worktree_whose_folder_is_gone_doesnt_hide_the_others() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let core = core_with(&fake);
+    core.open_workspace(&setup.repo()).await.unwrap();
+
+    let gone = new_worktree(&core, "gone").await;
+    let kept = new_worktree(&core, "kept").await;
+    commit(&kept, "only here");
+    // Deleted outside the editor, so git still has it.
+    std::fs::remove_dir_all(&gone).unwrap();
+
+    let listed = core.worktree_attention().await.unwrap();
+    assert!(listed.iter().any(|w| w.path == kept), "{listed:?}");
+    assert!(!listed.iter().any(|w| w.path == gone), "{listed:?}");
+}

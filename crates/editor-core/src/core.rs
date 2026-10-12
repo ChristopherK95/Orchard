@@ -2022,7 +2022,10 @@ impl Core {
         self.workspace()?;
         let mut listed = vec![];
         for info in self.worktrees() {
-            let status = git::status(&info.path).await.map_err(CoreError::Git)?;
+            // One git can't read (its folder deleted outside the editor) is left out.
+            let Ok(status) = git::status(&info.path).await else {
+                continue;
+            };
             let since_base = if status.branch.is_some() && status.upstream.is_none() {
                 let (base, _) = self.base_of(&info.path).await;
                 git::count_not_in(&info.path, &base, "HEAD").await
@@ -2966,19 +2969,21 @@ impl Core {
                 if check.outcome != CheckOutcome::Failure {
                     continue;
                 }
+                // One whose log can't be read (its run still going, the log expired) is named
+                // without it, with why, rather than failing the whole prompt.
                 let log = match check.job {
                     Some(job) => {
                         let run = job.run.to_string();
-                        match job_in(&gh, &worktree, &run, job.job, &check.name).await? {
-                            Some(id) => {
+                        match job_in(&gh, &worktree, &run, job.job, &check.name).await {
+                            Ok(Some(id)) => {
                                 let id = id.to_string();
                                 let args = ["run", "view", &run, "--job", &id, "--log-failed"];
-                                Some(gh_text(&gh, &worktree, &args).await?)
+                                gh_text(&gh, &worktree, &args).await.map(Some)
                             }
-                            None => None,
+                            not_found => not_found.map(|_| None),
                         }
                     }
-                    None => None,
+                    None => Ok(None),
                 };
                 failed.push((check, log));
             }
