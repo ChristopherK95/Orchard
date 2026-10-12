@@ -5,6 +5,7 @@ export { default as ArrowUp } from "lucide-solid/icons/arrow-up";
 export { default as Ban } from "lucide-solid/icons/ban";
 export { default as BookOpen } from "lucide-solid/icons/book-open";
 export { default as Brain } from "lucide-solid/icons/brain";
+export { default as ChartLine } from "lucide-solid/icons/chart-line";
 export { default as Check } from "lucide-solid/icons/check";
 export { default as ChevronLeft } from "lucide-solid/icons/chevron-left";
 export { default as ChevronDown } from "lucide-solid/icons/chevron-down";

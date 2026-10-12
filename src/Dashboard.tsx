@@ -15,6 +15,7 @@ import { attention, cleanUp, reviewRequests, statistics } from "./dashboardData"
 import {
   Bell,
   ChevronRight,
+  ChartLine,
   CircleCheck,
   CircleX,
   Clock,
@@ -22,7 +23,6 @@ import {
   GitBranch,
   GitPullRequestArrow,
   GitPullRequestDraft,
-  History,
   Loader,
   MessageSquare,
   MessageSquareCode,
@@ -129,7 +129,7 @@ export function Dashboard(props: {
       <div class="dashboard-sections">
         <div class="dashboard-column dashboard-stats-column">
           <Section
-            icon={<History />}
+            icon={<ChartLine />}
             title="Statistics"
             github={{ refreshed: since(statistics.refreshedAt()), loading: statistics.loading(), error: statistics.error().replace(PR_HINT, GH_HINT), onRefresh: statistics.refresh }}
             action={
