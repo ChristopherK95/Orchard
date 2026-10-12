@@ -166,6 +166,20 @@ impl FakeAgent {
         self.dir.path().join("state.json")
     }
 
+    /// Where a core made with `core_with_session_log` records its sessions.
+    pub fn session_log_path(&self) -> PathBuf {
+        self.dir.path().join("sessions.jsonl")
+    }
+
+    /// The lines of the session log, each a JSON value (none before anything is recorded).
+    pub fn session_log(&self) -> Vec<serde_json::Value> {
+        std::fs::read_to_string(self.session_log_path())
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("session log line is JSON"))
+            .collect()
+    }
+
     pub fn settings_path(&self) -> PathBuf {
         self.dir.path().join("settings.toml")
     }
@@ -283,6 +297,16 @@ pub fn core_with_memory(
 pub fn core_with_state(agent: &FakeAgent) -> Core {
     Core::new(CoreConfig {
         state_path: Some(agent.state_path()),
+        ..CoreConfig::new(agent.command())
+    })
+}
+
+/// A core keeping its app state and its session log in the fake agent's temp folder; a second one
+/// made the same way is the editor after a restart.
+pub fn core_with_session_log(agent: &FakeAgent) -> Core {
+    Core::new(CoreConfig {
+        state_path: Some(agent.state_path()),
+        session_log_path: Some(agent.session_log_path()),
         ..CoreConfig::new(agent.command())
     })
 }

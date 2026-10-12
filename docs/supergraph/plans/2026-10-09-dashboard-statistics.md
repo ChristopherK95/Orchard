@@ -332,7 +332,7 @@ Checkpoint:
 - Commit: `Session log: an append-only record, a year long`
 
 ## Task 9: Record each Agent session's start and state changes
-Status: pending
+Status: completed
 Risk: high
 Dependencies: Task 8
 Files:

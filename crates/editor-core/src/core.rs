@@ -43,6 +43,7 @@ use crate::session::{
     PermissionMode, PermissionOutcome, SessionId, SessionInfo, SessionState, Transcript,
     TranscriptDelta, TranscriptItem, TranscriptPage,
 };
+use crate::session_log::{self, SessionLog};
 use crate::settings::{self, LoadedSettings, RepoSettings, SettingChange, WindowsShell};
 use crate::setup::{self, SetupInfo, SetupStatus};
 use crate::statistics::{self, Statistics};
@@ -206,6 +207,9 @@ pub struct CoreConfig {
     pub file_watch: FileWatchConfig,
     /// The GitHub CLI that opens pull requests; `None` runs `gh` from `PATH`.
     pub gh: Option<PathBuf>,
+    /// Where each Agent session's start and state changes are recorded (issue 47, for 46); `None`
+    /// records nothing.
+    pub session_log_path: Option<PathBuf>,
 }
 
 impl CoreConfig {
@@ -219,6 +223,7 @@ impl CoreConfig {
             clock: None,
             file_watch: FileWatchConfig::default(),
             gh: None,
+            session_log_path: None,
         }
     }
 }
@@ -605,6 +610,8 @@ struct Inner {
     terminals: Mutex<HashMap<TerminalId, Arc<Terminal>>>,
     /// Numbers each terminal (`Terminal::id`).
     next_terminal: AtomicU64,
+    /// Where each Agent session's start, state changes and close are recorded.
+    session_log: Option<Arc<SessionLog>>,
 }
 
 #[derive(Default)]
@@ -709,6 +716,11 @@ struct Session {
     /// It has been sent a prompt, so Claude Code has a conversation for it (see `SavedSession`).
     started: AtomicBool,
     control: Mutex<Control>,
+    /// Where its start, state changes and close are recorded.
+    log: Option<Arc<SessionLog>>,
+    /// Its start, to record once the state lock it was registered under is released (or before its
+    /// first state change, whichever comes first).
+    opened: Mutex<Option<session_log::Entry>>,
 }
 
 /// A tool call as merged from the Agent's announcements, and its transcript row once added.
@@ -811,6 +823,10 @@ impl Core {
             Some(path) => settings::apply(&LoadedSettings::default(), settings::read(path)),
             None => LoadedSettings::default(),
         };
+        let session_log = config
+            .session_log_path
+            .clone()
+            .map(|path| Arc::new(SessionLog::open(path, unix_millis())));
         let inner = Arc::new(Inner {
             config,
             events,
@@ -842,6 +858,7 @@ impl Core {
             fonts: tokio::sync::OnceCell::new(),
             terminals: Mutex::default(),
             next_terminal: AtomicU64::new(0),
+            session_log,
         });
         if let Some(path) = &inner.config.settings_path {
             let weak = Arc::downgrade(&inner);
@@ -2203,11 +2220,12 @@ impl Core {
                 )
             }
         };
-        let Some(info) = added else {
+        let Some((info, session)) = added else {
             // Removal began while the Agent was starting it: it mustn't outlive the folder.
             let _ = close_acp(&connection, &acp_id).await;
             return Err(CoreError::BeingRemoved);
         };
+        session.log_opened();
         let id = info.id;
         let _ = self
             .inner
@@ -3674,12 +3692,12 @@ impl Core {
         let worktree = saved.worktree.clone();
         let (info, session) = {
             let mut state = self.inner.state.lock().expect("state lock");
-            let info = self.inner.register_session(&mut state, saved, None);
-            let session = state.sessions[&info.id].clone();
+            let (_, session) = self.inner.register_session(&mut state, saved, None);
             session.update(|control| control.resuming = true);
             let info = session.info.lock().expect("info lock").clone(); // now showing it resuming
             (info, session)
         };
+        session.log_opened();
         let id = info.id;
         let _ = self
             .inner
@@ -4328,6 +4346,10 @@ impl Inner {
     /// list it by the time `SessionClosed` goes out.
     fn forget_session(self: &Arc<Self>, session: &Arc<Session>) {
         let id = session.info.lock().expect("info lock").id;
+        session.log(session_log::Entry::Closed {
+            at: unix_millis(),
+            session: session.acp_id.clone(),
+        });
         {
             let mut state = self.state.lock().expect("state lock");
             state.sessions.remove(&id);
@@ -4638,13 +4660,14 @@ impl Inner {
     }
 
     /// Adds a Tab's session: running on `connection`, or (with none) Suspended until resumed, its
-    /// conversation to be loaded then. Call with the state lock held.
+    /// conversation to be loaded then. Call with the state lock held; once it's released, call
+    /// `Session::log_opened` on the session to record its start.
     fn register_session(
         &self,
         state: &mut State,
         saved: SavedSession,
         connection: Option<Arc<Connection>>,
-    ) -> SessionInfo {
+    ) -> (SessionInfo, Arc<Session>) {
         state.next_session += 1;
         let id = SessionId(state.next_session);
         let stopped = connection.is_none();
@@ -4660,6 +4683,23 @@ impl Inner {
             permission_mode: saved.permission_mode,
             unread: 0,
         };
+        // (Only a session the Agent just created comes with a connection: reopened and restored
+        // ones start Suspended.)
+        let opened = self
+            .session_log
+            .as_ref()
+            .map(|_| session_log::Entry::Opened {
+                at: unix_millis(),
+                session: saved.acp_id.clone(),
+                workspace: state
+                    .workspace
+                    .as_ref()
+                    .map(|w| w.root.clone())
+                    .unwrap_or_default(),
+                worktree: info.worktree.clone(),
+                new: !stopped,
+                state: info.state,
+            });
         let (deltas, _) = broadcast::channel(4096);
         let session = Arc::new(Session {
             info: Mutex::new(info.clone()),
@@ -4689,10 +4729,12 @@ impl Inner {
                 loaded: !stopped,
                 ..Control::default()
             }),
+            log: self.session_log.clone(),
+            opened: Mutex::new(opened),
         });
-        state.sessions.insert(id, session);
+        state.sessions.insert(id, session.clone());
         state.by_acp_id.insert(saved.acp_id, id);
-        info
+        (info, session)
     }
 
     fn recent_in(&self, worktree: &Path) -> Vec<RecentSession> {
@@ -4830,7 +4872,8 @@ impl Inner {
                 })
                 .collect();
         }
-        for info in created {
+        for (info, session) in created {
+            session.log_opened();
             let _ = self
                 .events
                 .send(CoreEvent::SessionCreated { session: info });
@@ -5474,8 +5517,28 @@ impl Session {
         });
     }
 
+    /// Records its start (registered, see `Inner::register_session`), if that isn't yet.
+    fn log_opened(&self) {
+        let opened = self.opened.lock().expect("opened lock").take();
+        if let Some(entry) = opened {
+            self.log(entry);
+        }
+    }
+
+    /// Appends to the session log, if there is one (and records its start first).
+    fn log(&self, entry: session_log::Entry) {
+        if let Some(log) = &self.log {
+            if !matches!(entry, session_log::Entry::Opened { .. }) {
+                self.log_opened();
+            }
+            log.append(entry);
+        }
+    }
+
     /// Changes the facts behind the session's state under one lock, then publishes the state they
-    /// now imply. Lock order: control, then transcript, then info.
+    /// now imply. Lock order: control, then transcript, then info. A change of state is recorded
+    /// in the session log while the control lock is still held, so its lines keep the order the
+    /// changes happened in (the log's own lock is the innermost).
     fn update<R>(&self, change: impl FnOnce(&mut Control) -> R) -> R {
         let mut control = self.control.lock().expect("control lock");
         let suspending_before = control.suspending;
@@ -5485,7 +5548,8 @@ impl Session {
         }
         let state = control.state();
         let mut info = self.info.lock().expect("info lock");
-        if info.state != state {
+        let changed = info.state != state;
+        if changed {
             let mid_turn = |s| matches!(s, SessionState::Working | SessionState::NeedsYou);
             if mid_turn(info.state) != mid_turn(state) {
                 // (The Git drawer's "a session is mid-turn here", for switching branches.)
@@ -5502,6 +5566,14 @@ impl Session {
             } // (a suspend in progress, or one that failed, leaves its Idle time as it was)
             let _ = self.events.send(CoreEvent::SessionStateChanged {
                 session_id: info.id,
+                state,
+            });
+        }
+        drop(info);
+        if changed {
+            self.log(session_log::Entry::State {
+                at: unix_millis(),
+                session: self.acp_id.clone(),
                 state,
             });
         }
