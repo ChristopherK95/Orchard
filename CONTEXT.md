@@ -71,7 +71,7 @@ _Avoid_: Split view, panes
 A Worktree that has a column in the Columns view (choosing it in the sidebar adds one, "Close column" in the column's menu closes it). Pins are kept per Workspace across restarts; the columns follow the sidebar's order.
 
 **Focused column**:
-The one column of the Columns view that takes input: the next prompt, Y / N, the Files/Git drawer and Ctrl+P all go to its Worktree. Only it has the full composer.
+The one column of the Columns view that takes input: the next prompt, Y / N, the Files/Git drawer and Ctrl+P all go to its Worktree. Only its composer takes the keyboard.
 
 **Manual editor**:
 Where the user views and hand-edits a file in a Worktree (or the settings file, or an unsaved snippet copied from a chat code block). It opens as a pane beside the chat, with a file tab per file, and can be popped out into its own window. When a file it has open changes on disk, a file tab with no unsaved changes reloads; one with unsaved changes asks (show the diff, reload and drop mine, or keep mine and overwrite on the next save).

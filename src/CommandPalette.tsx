@@ -40,7 +40,9 @@ export function CommandPalette(props: {
   const [files, setFiles] = createSignal<FileMatch[]>([]);
   const [selected, setSelected] = createSignal(0);
   const [actions, setActions] = createSignal<string[]>([]);
-  void core.repoSettings().then((repo) => setActions(repo.actions.map((a) => a.name)), () => {});
+  const actionsRead = core.repoSettings().then((repo) => setActions(repo.actions.map((a) => a.name)), () => {});
+  // The list shows once the files and actions are in, all at once, not growing in steps as it opens.
+  const [ready, setReady] = createSignal(false);
   let input!: HTMLInputElement;
   let asked = 0;
 
@@ -78,7 +80,7 @@ export function CommandPalette(props: {
 
   onMount(() => {
     input.focus();
-    void search("");
+    void Promise.all([search(""), actionsRead]).then(() => setReady(true));
   });
   createEffect(on(() => props.revision, () => void search(query()), { defer: true }));
   const onKey = (e: KeyboardEvent) => e.key === "Escape" && props.onClose();
@@ -116,50 +118,52 @@ export function CommandPalette(props: {
             {props.label}
           </span>
         </div>
-        <div class="palette-list">
-          <For each={items()} fallback={<p class="muted small palette-empty">No files match {query().trim() ? `“${query().trim()}”` : ""} in {props.label}.</p>}>
-            {(item, i) => (
-              <>
-                <Show when={i() === 0 || items()[i() - 1]?.kind !== item.kind}>
-                  <div class="palette-group">{item.kind === "command" ? "Commands" : `Files in ${props.label}`}</div>
-                </Show>
-                <button
-                  class="palette-item"
-                  classList={{ on: i() === selected() }}
-                  ref={(row) => createEffect(() => i() === selected() && row.scrollIntoView({ block: "nearest" }))}
-                  onMouseEnter={() => setSelected(i())}
-                  onClick={() => pick(item)}
-                >
-                  <Show
-                    when={item.kind === "file" ? item.file : null}
-                    fallback={
-                      <>
-                        {(() => {
-                          const command = (item as { command: PaletteCommand }).command;
-                          if (command.kind !== "runAction") return <Sparkles />;
-                          return shellsIn(props.worktree).some((t) => t.action === command.name) ? <RefreshCw /> : <Play />;
-                        })()}
-                        <span class="file">{(item as { label: string }).label}</span>
-                      </>
-                    }
-                  >
-                    {(file) => (
-                      <>
-                        <FileIcon />
-                        <Highlighted text={file().path} indices={file().indices} />
-                      </>
-                    )}
+        <Show when={ready()}>
+          <div class="palette-list">
+            <For each={items()} fallback={<p class="muted small palette-empty">No files match {query().trim() ? `“${query().trim()}”` : ""} in {props.label}.</p>}>
+              {(item, i) => (
+                <>
+                  <Show when={i() === 0 || items()[i() - 1]?.kind !== item.kind}>
+                    <div class="palette-group">{item.kind === "command" ? "Commands" : `Files in ${props.label}`}</div>
                   </Show>
-                  <span class="end">
-                    <Show when={i() === selected()}>
-                      <kbd>Enter</kbd>
+                  <button
+                    class="palette-item"
+                    classList={{ on: i() === selected() }}
+                    ref={(row) => createEffect(() => i() === selected() && row.scrollIntoView({ block: "nearest" }))}
+                    onMouseEnter={() => setSelected(i())}
+                    onClick={() => pick(item)}
+                  >
+                    <Show
+                      when={item.kind === "file" ? item.file : null}
+                      fallback={
+                        <>
+                          {(() => {
+                            const command = (item as { command: PaletteCommand }).command;
+                            if (command.kind !== "runAction") return <Sparkles />;
+                            return shellsIn(props.worktree).some((t) => t.action === command.name) ? <RefreshCw /> : <Play />;
+                          })()}
+                          <span class="file">{(item as { label: string }).label}</span>
+                        </>
+                      }
+                    >
+                      {(file) => (
+                        <>
+                          <FileIcon />
+                          <Highlighted text={file().path} indices={file().indices} />
+                        </>
+                      )}
                     </Show>
-                  </span>
-                </button>
-              </>
-            )}
-          </For>
-        </div>
+                    <span class="end">
+                      <Show when={i() === selected()}>
+                        <kbd>Enter</kbd>
+                      </Show>
+                    </span>
+                  </button>
+                </>
+              )}
+            </For>
+          </div>
+        </Show>
       </div>
     </div>
   );
