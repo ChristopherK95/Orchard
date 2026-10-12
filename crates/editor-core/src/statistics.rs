@@ -2,13 +2,19 @@
 //! over a period, and the period before it, worked out from what `gh` answers. Times are GitHub's
 //! ISO strings read by hand into seconds since the Unix epoch (no date crate).
 
+use std::path::Path;
+
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::dashboard::{Login, Nodes, ReviewRequest};
+use crate::dashboard::{self, Login, Nodes, ReviewRequest};
+use crate::pull_request::gh_text;
 
 /// A day in seconds.
 const DAY: i64 = 86_400;
+
+/// The periods the statistics can cover, in days.
+pub(crate) const PERIODS: [u32; 3] = [7, 30, 90];
 
 /// Reads GitHub's `YYYY-MM-DDTHH:MM:SSZ` (fractional seconds ignored) into seconds since the Unix
 /// epoch; anything else is `None`.
@@ -614,6 +620,85 @@ pub(crate) fn oldest_open(stdout: &str) -> Result<Option<Waiting>, String> {
     .items
     .into_iter()
     .next())
+}
+
+/// How many pages of a search are read at most: GitHub's search stops at 1,000 results.
+const SEARCH_PAGES: usize = 10;
+
+/// Every page of a paged search (`query` with `$q` = `search`), each read by `read`: who the user
+/// is, and everything found.
+async fn search_all<T>(
+    gh: &Path,
+    worktree: &Path,
+    query: &str,
+    search: &str,
+    read: fn(&str) -> Result<Page<T>, String>,
+) -> Result<(String, Vec<T>), String> {
+    let search = format!("q={search}");
+    let query = format!("query={query}");
+    let (mut viewer, mut items, mut after) = (String::new(), vec![], None::<String>);
+    for _ in 0..SEARCH_PAGES {
+        let cursor = after.as_ref().map(|cursor| format!("after={cursor}"));
+        let mut args = vec!["api", "graphql", "-F", &search, "-f", &query];
+        if let Some(cursor) = &cursor {
+            args.extend(["-f", cursor]);
+        }
+        let page = read(&gh_text(gh, worktree, &args).await?)?;
+        viewer = page.viewer;
+        items.extend(page.items);
+        after = page.next;
+        if after.is_none() {
+            break;
+        }
+    }
+    Ok((viewer, items))
+}
+
+/// Asks `gh` (in `worktree`, so for its repo) for everything the figures are worked out from, all
+/// at once, and works them out.
+pub(crate) async fn read(
+    gh: &Path,
+    worktree: &Path,
+    periods: Periods,
+) -> Result<Statistics, String> {
+    let from = periods.search_from();
+    let (authored_search, reviewed_search) = (authored_search(&from), reviewed_search(&from));
+    let ask = |query: &'static str, search: &'static str| async move {
+        let search = format!("q={search}");
+        let query = format!("query={query}");
+        gh_text(
+            gh,
+            worktree,
+            &["api", "graphql", "-F", &search, "-f", &query],
+        )
+        .await
+    };
+    let ((viewer, authored), (_, reviewed), open, requests) = tokio::try_join!(
+        search_all(
+            gh,
+            worktree,
+            AUTHORED_QUERY,
+            &authored_search,
+            authored_page
+        ),
+        search_all(
+            gh,
+            worktree,
+            REVIEWED_QUERY,
+            &reviewed_search,
+            reviewed_page
+        ),
+        ask(OPEN_QUERY, OPEN_SEARCH),
+        ask(dashboard::REVIEW_QUERY, dashboard::REVIEW_SEARCH),
+    )?;
+    Ok(figures(
+        periods,
+        &viewer,
+        &authored,
+        &reviewed,
+        oldest_open(&open)?,
+        &dashboard::review_requests_listed(&requests)?,
+    ))
 }
 
 #[cfg(test)]

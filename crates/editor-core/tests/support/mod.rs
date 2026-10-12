@@ -509,3 +509,35 @@ pub fn core_with_gh(fake: &FakeAgent, gh: &FakeGh) -> Core {
 pub fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).expect("canonicalize")
 }
+
+/// GitHub's `YYYY-MM-DDTHH:MM:SSZ` for `secs` seconds ago (a copy of the core's arithmetic, which
+/// is crate-private).
+pub fn utc_ago(secs: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let at = (now - secs) as i64;
+    let (days, of_day) = (at.div_euclid(86_400), at.rem_euclid(86_400));
+    // Days since the epoch to a civil date (days-from-civil, inverted).
+    let days = days + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        of_day / 3600,
+        of_day % 3600 / 60,
+        of_day % 60
+    )
+}

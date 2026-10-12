@@ -45,6 +45,7 @@ use crate::session::{
 };
 use crate::settings::{self, LoadedSettings, RepoSettings, SettingChange, WindowsShell};
 use crate::setup::{self, SetupInfo, SetupStatus};
+use crate::statistics::{self, Statistics};
 use crate::terminal::{self, ActionShell, Terminal, TerminalId, TerminalInfo, TerminalStream};
 use crate::worktrees::{self, Discovery, WorktreeInfo};
 
@@ -364,6 +365,8 @@ pub enum CoreError {
     NoTerminal,
     #[error("{0}")]
     Terminal(String),
+    #[error("statistics cover 7, 30 or 90 days, not {0}")]
+    UnknownPeriod(u32),
     #[error(transparent)]
     Acp(#[from] AcpError),
 }
@@ -2873,6 +2876,22 @@ impl Core {
         crate::pull_request::gh_text(&gh, &worktree, &args)
             .await
             .and_then(|out| dashboard::review_requests_listed(&out))
+            .map_err(|e| CoreError::Git(crate::pull_request::not_about_creating(e)))
+    }
+
+    /// The Dashboard's statistics for the Worktree's repo over the last `days` days (7, 30 or 90),
+    /// each against the `days` before.
+    pub async fn statistics(&self, worktree: &Path, days: u32) -> Result<Statistics, CoreError> {
+        if !statistics::PERIODS.contains(&days) {
+            return Err(CoreError::UnknownPeriod(days));
+        }
+        let worktree = self.known_worktree(worktree)?;
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs() as i64);
+        statistics::read(&gh, &worktree, statistics::Periods { now, days })
+            .await
             .map_err(|e| CoreError::Git(crate::pull_request::not_about_creating(e)))
     }
 

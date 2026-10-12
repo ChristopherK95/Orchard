@@ -208,7 +208,7 @@ Checkpoint:
 - Commit: `Statistics: what GitHub is asked, and its answers read`
 
 ## Task 6: `Core::statistics`
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 1, Task 5
 Files:
