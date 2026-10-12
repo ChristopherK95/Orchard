@@ -961,6 +961,7 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 /* Ctrl+K: the Agent picker, Ctrl+P's look with a session per row. */
 .agent-picker .palette-item .hit { color: var(--fg-1); }
 .agent-picker .palette-item { min-height: 40px; }
+.agent-picker .palette-list { padding-top: 4px; } /* (no group heading above the first row, as in Ctrl+P) */
 /* The session's face, with its state dot on its corner. */
 .agent-picker-face { position: relative; flex: none; display: inline-flex; }
 .agent-picker-face .avatar { border-radius: var(--r-md); background: color-mix(in srgb, var(--c) 22%, var(--bg-1)); }
