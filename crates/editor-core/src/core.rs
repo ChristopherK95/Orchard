@@ -916,7 +916,11 @@ impl Core {
             None => (AppState::default(), false),
         };
         let loaded = match &config.settings_path {
-            Some(path) => settings::apply(&LoadedSettings::default(), settings::read(path)),
+            Some(path) => {
+                let loaded = settings::apply(&LoadedSettings::default(), settings::read(path));
+                crate::node::choose(loaded.settings.agents.node.as_deref());
+                loaded
+            }
             None => LoadedSettings::default(),
         };
         let session_log = config
@@ -998,6 +1002,11 @@ impl Core {
             })
             .await;
         found.clone()
+    }
+
+    /// The Node.js installs on this machine, for the settings page.
+    pub async fn installed_node(&self) -> Vec<crate::node::NodeInstall> {
+        crate::node::installed().await
     }
 
     /// The open repo's settings (its defaults if the file has no section for it).
@@ -5005,17 +5014,25 @@ impl Inner {
         if let Some(connection) = slot.as_ref().filter(|c| !c.is_closed()) {
             return Ok(connection.clone());
         }
+        // On the Node picked in the settings (else the login shell's), which the Agent's own
+        // commands then find first on `PATH` too.
+        let mut adapter = self.config.adapter.clone();
+        if let Some(path) = crate::node::path().await {
+            adapter.env.retain(|(key, _)| key != "PATH");
+            adapter
+                .env
+                .push(("PATH".into(), path.to_string_lossy().into_owned()));
+        }
+        if let (Some(node), true) = (crate::node::chosen(), adapter.program == Path::new("node")) {
+            adapter.program = node;
+        }
         let weak = Arc::downgrade(self);
         let generation = self.generations.fetch_add(1, Ordering::Relaxed);
-        let connection = Arc::new(Connection::spawn(
-            &self.config.adapter,
-            generation,
-            move |incoming| {
-                if let Some(inner) = Weak::upgrade(&weak) {
-                    inner.handle(incoming, generation);
-                }
-            },
-        )?);
+        let connection = Arc::new(Connection::spawn(&adapter, generation, move |incoming| {
+            if let Some(inner) = Weak::upgrade(&weak) {
+                inner.handle(incoming, generation);
+            }
+        })?);
         let init = connection
             .request(
                 "initialize",
@@ -5313,6 +5330,7 @@ impl Inner {
         let mut loaded = self.settings.lock().expect("settings lock");
         let next = settings::apply(&loaded, settings::read(path));
         if *loaded != next {
+            crate::node::choose(next.settings.agents.node.as_deref());
             *loaded = next.clone();
             let _ = self
                 .events

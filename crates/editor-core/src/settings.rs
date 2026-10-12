@@ -110,6 +110,9 @@ pub struct AgentSettings {
     pub idle_suspend: bool,
     /// How long a session may be Idle before idle auto-suspend takes it (0: never).
     pub idle_suspend_minutes: u64,
+    /// The `node` executable the Agents (and setup, git hooks, the Terminal panel) run on, put
+    /// first on their `PATH`; none: the one on the login shell's `PATH` (`node.rs`).
+    pub node: Option<String>,
 }
 
 impl Default for AgentSettings {
@@ -118,6 +121,7 @@ impl Default for AgentSettings {
             memory_limit_mb: 4096,
             idle_suspend: false,
             idle_suspend_minutes: 30,
+            node: None,
         }
     }
 }
@@ -230,6 +234,10 @@ pub enum SettingChange {
     IdleSuspendMinutes {
         minutes: u64,
     },
+    /// `None`: automatic.
+    Node {
+        path: Option<String>,
+    },
     Setup {
         commands: Vec<String>,
     },
@@ -267,16 +275,15 @@ impl SettingChange {
         let list = |commands: &[String]| value(commands.iter().collect::<toml_edit::Array>());
         let app = |table: &str| vec![table.to_owned()];
         let repo = || vec!["repos".to_owned(), repo.unwrap_or_default().to_owned()];
-        let font = |family: &Option<String>| {
-            family
-                .as_deref()
+        let text = |text: &Option<String>| {
+            text.as_deref()
                 .map(str::trim)
                 .filter(|f| !f.is_empty())
                 .map(value)
         };
         match self {
-            Self::UiFont { family } => (app("appearance"), "ui_font", font(family)),
-            Self::CodeFont { family } => (app("appearance"), "code_font", font(family)),
+            Self::UiFont { family } => (app("appearance"), "ui_font", text(family)),
+            Self::CodeFont { family } => (app("appearance"), "code_font", text(family)),
             Self::CodeFontSize { px } => (
                 app("appearance"),
                 "code_font_size",
@@ -311,6 +318,7 @@ impl SettingChange {
                 "idle_suspend_minutes",
                 Some(value(*minutes as i64)),
             ),
+            Self::Node { path } => (app("agents"), "node", text(path)),
             Self::Setup { commands } => (repo(), "setup", Some(list(commands))),
             Self::SetupWindows { commands } => {
                 (repo(), "setup_windows", commands.as_deref().map(list))
