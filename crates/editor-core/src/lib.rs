@@ -34,7 +34,8 @@ pub use crate::attachments::Attachment;
 pub use crate::auto_suspend::{AutoSuspendReason, Clock, MemoryProbe, MemorySample};
 pub use crate::core::{
     AutoSuspension, Core, CoreConfig, CoreError, CoreEvent, OtherConversation, QueuedPrompt,
-    RecentSession, RecentWorkspace, SlashCommand, TranscriptStream, WorkspaceInfo, TABS_SLOT,
+    RecentSession, RecentWorkspace, SessionUsage, SlashCommand, TranscriptStream, WorkspaceInfo,
+    TABS_SLOT,
 };
 pub use crate::create_worktree::{BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 pub use crate::dashboard::{AttentionReason, ReviewRequest, WorktreeAttention};

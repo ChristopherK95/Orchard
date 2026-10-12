@@ -3,6 +3,7 @@
 import { createEffect, createResource, createSignal, For, type JSX, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { type Attachment, core, type OtherConversation, type PermissionMode, type QueuedPrompt, type RecentSession, type SessionId, type SessionInfo } from "./core";
+import { ContextMeter } from "./ContextMeter";
 import { EditNotes } from "./EditNotes";
 import { createSlashMenu, SlashMenu, useSlashCommands } from "./SlashCommands";
 import {
@@ -592,6 +593,7 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
               </span>
             </Show>
             <span class="grow" />
+            <ContextMeter session={props.session.id} />
             <Show when={busy()}>
               <button class="stop" onClick={() => void stop()} title="Stop the Agent's turn (Esc)">
                 <Square />

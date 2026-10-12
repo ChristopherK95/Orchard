@@ -786,6 +786,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         event.kind === "documentsChanged" ||
         event.kind === "editNotesChanged" ||
         event.kind === "availableCommandsChanged" ||
+        event.kind === "usageChanged" ||
         event.kind === "queuedPromptChanged" ||
         event.kind === "gitStatusChanged"
       ) {
