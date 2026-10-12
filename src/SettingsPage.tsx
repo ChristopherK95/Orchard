@@ -286,7 +286,7 @@ const SHORTCUTS: { title: string; keys: [string, string][] }[] = [
       ["Ctrl B", "Open or close the Board"],
       ["Ctrl `", "The Terminal (in the Columns view: the focused column's)"],
       ["Ctrl Shift E", "The Files drawer"],
-      ["Ctrl Shift G", "The Changes drawer"],
+      ["Ctrl Shift G", "The Git drawer"],
       ["Ctrl Shift T", "Reopen the last closed session"],
       ["Alt ↑ / Alt ↓", "The previous / next session in the Worktree"],
       ["Alt ← / Alt →", "The column on the left / right (Columns view)"],
@@ -312,7 +312,7 @@ const SHORTCUTS: { title: string; keys: [string, string][] }[] = [
     ],
   },
   {
-    title: "Changes",
+    title: "Git",
     keys: [["Ctrl Enter", "Commit (in the commit message)"]],
   },
   {

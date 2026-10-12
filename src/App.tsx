@@ -1132,7 +1132,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         </button>
         <button class="outline changes-button" classList={{ on: gitOpen() }} onClick={() => toggleDrawer("git")} title="This Worktree's changes, commits and branches (Ctrl+Shift+G)">
           <GitCompareArrows />
-          <span class="label">Changes</span>
+          <span class="label">Git</span>
         </button>
         <button
           class="outline review-button"
