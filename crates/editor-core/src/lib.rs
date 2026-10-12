@@ -24,6 +24,7 @@ mod remove_worktree;
 mod session;
 mod settings;
 mod setup;
+mod statistics;
 mod terminal;
 mod worktrees;
 

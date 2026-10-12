@@ -46,7 +46,7 @@ Checkpoint:
 - Commit: `Tests: the fake gh remembers every call, not only the last`
 
 ## Task 2: Times, periods and medians
-Status: pending
+Status: completed
 Risk: low
 Dependencies: none
 Files:
