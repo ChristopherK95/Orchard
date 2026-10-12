@@ -41,9 +41,12 @@ pub struct ReviewCommit {
     pub id: String,
     pub short_id: String,
     pub subject: String,
+    /// A merge commit: what it changed is only its conflicts' resolutions (`commit_changes`).
+    pub merge: bool,
 }
 
-/// What one commit changed on its own: its files, and the parent their diffs run from.
+/// What one commit changed on its own: its files, and the parent their diffs run from (for a merge,
+/// the tree git makes merging its parents again, conflict markers and all).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitChanges {

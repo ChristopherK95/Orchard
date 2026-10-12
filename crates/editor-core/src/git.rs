@@ -1309,22 +1309,28 @@ async fn name_status(
     Ok(changes)
 }
 
-/// The commits HEAD has since `split`, oldest first: `(full id, short id, subject)`.
-pub(crate) async fn commits_since(worktree: &Path, split: &str) -> Vec<(String, String, String)> {
+/// The commits HEAD has since `split`, oldest first: `(full id, short id, subject, is a merge)`.
+pub(crate) async fn commits_since(
+    worktree: &Path,
+    split: &str,
+) -> Vec<(String, String, String, bool)> {
     let range = format!("{split}..HEAD");
     output(
         worktree,
-        &["log", "--reverse", "--format=%H%x00%h%x00%s", &range],
+        &["log", "--reverse", "--format=%H%x00%h%x00%P%x00%s", &range],
     )
     .await
     .unwrap_or_default()
     .lines()
     .filter_map(|line| {
-        let mut parts = line.splitn(3, '\0');
+        let mut parts = line.splitn(4, '\0');
+        let (id, short_id) = (parts.next()?.to_owned(), parts.next()?.to_owned());
+        let merge = parts.next()?.split(' ').count() > 1;
         Some((
-            parts.next()?.to_owned(),
-            parts.next()?.to_owned(),
+            id,
+            short_id,
             parts.next().unwrap_or_default().to_owned(),
+            merge,
         ))
     })
     .collect()
@@ -1334,16 +1340,49 @@ pub(crate) async fn commits_since(worktree: &Path, split: &str) -> Vec<(String, 
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 /// What `commit` changed on its own (against its first parent, or nothing for a root commit):
-/// the parent it's measured from, and its files as `changes_since` gives them.
+/// the parent it's measured from, and its files as `changes_since` gives them. A merge of two
+/// parents is measured from git's own redo of it instead (`remerge`), so only what was done by
+/// hand shows: its conflicts' resolutions, and any other change made in the merge.
 pub(crate) async fn commit_changes(
     worktree: &Path,
     commit: &str,
 ) -> Result<(String, Vec<(char, String, Option<String>)>), String> {
-    let parent = resolve_commit(worktree, &format!("{commit}^"))
-        .await
-        .unwrap_or_else(|| EMPTY_TREE.to_owned());
+    let parent = match remerge(worktree, commit).await {
+        Some(tree) => tree,
+        None => resolve_commit(worktree, &format!("{commit}^"))
+            .await
+            .unwrap_or_else(|| EMPTY_TREE.to_owned()),
+    };
     let changes = name_status(worktree, &[&parent, commit]).await?;
     Ok((parent, changes))
+}
+
+/// The tree git makes when it merges a merge commit's two parents again, conflict markers left in
+/// (as `git show --remerge-diff` diffs against). None if `commit` isn't a merge of two parents.
+/// (`merge-tree` touches no index or folder; it exits 1 when there are conflicts.)
+async fn remerge(worktree: &Path, commit: &str) -> Option<String> {
+    let parents = output(
+        worktree,
+        &["rev-list", "--parents", "-n", "1", commit, "--"],
+    )
+    .await?;
+    let [_, ours, theirs] = parents.split_whitespace().collect::<Vec<_>>()[..] else {
+        return None;
+    };
+    let out = git(worktree)
+        .args(["merge-tree", "--write-tree", "--no-messages", ours, theirs])
+        .output()
+        .await
+        .ok()?;
+    if !matches!(out.status.code(), Some(0 | 1)) {
+        return None;
+    }
+    let tree = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()?
+        .trim()
+        .to_owned();
+    (!tree.is_empty()).then_some(tree)
 }
 
 /// A file's bytes at `rev` (None if it isn't there).
