@@ -445,7 +445,7 @@ Checkpoint:
 - Commit: `Statistics: read when the Dashboard is shown, kept an hour`
 
 ## Task 12: The Statistics section and its cards
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 11
 Files:

@@ -1,14 +1,15 @@
 // The Dashboard (ticket 43): the live status wall of the user's own work in the Workspace, and the
 // view a Workspace opens on. Fixed sections, in this order: the Agent sessions that need the user,
 // reviews requested from them, their open PRs by stage, Worktrees that need attention, Worktrees
-// ready to clean up, and how many sessions are Working and Idle. Each item leads to where it lives
-// (the Workspace view decides how); a PR with failing checks or review feedback can start an Agent
-// session on it. The GitHub sections say when they were last read, and say so inline when `gh`
-// can't be used, while the local ones work as ever.
+// ready to clean up, how many sessions are Working and Idle, and, last, statistics of the user's work
+// over a chosen period (Statistics.tsx). Each item leads to where it lives (the Workspace view
+// decides how); a PR with failing checks or review feedback can start an Agent session on it. The
+// GitHub sections say when they were last read, and say so inline when `gh` can't be used, while
+// the local ones work as ever.
 import { createSignal, For, type JSX, onCleanup, Show } from "solid-js";
 import { ago } from "./Chat";
-import type { AttentionReason, Check, MergeState, MyPullRequest, PullRequestStage, ReviewRequest, SessionInfo, WorktreeAttention, WorktreeMerge } from "./core";
-import { attention, cleanUp, reviewRequests } from "./dashboardData";
+import type { AttentionReason, Check, MergeState, MyPullRequest, PullRequestStage, ReviewRequest, SessionInfo, StatisticsDays, WorktreeAttention, WorktreeMerge } from "./core";
+import { attention, cleanUp, reviewRequests, statistics } from "./dashboardData";
 import {
   Bell,
   ChevronRight,
@@ -19,6 +20,7 @@ import {
   GitBranch,
   GitPullRequestArrow,
   GitPullRequestDraft,
+  History,
   Loader,
   MessageSquare,
   MessageSquareCode,
@@ -28,6 +30,7 @@ import {
 } from "./icons";
 import { myPrs } from "./PrBoard";
 import { StateDot } from "./StateDot";
+import { StatisticsCards } from "./Statistics";
 import { worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 
 /** The core's `gh` hint for the PR list speaks of creating a PR; the Dashboard's sections say this instead. */
@@ -42,6 +45,9 @@ const STAGES: { title: string; stage: PullRequestStage; icon: () => JSX.Element 
   { title: "Waiting for review", stage: "waitingForReview", icon: () => <Clock /> },
   { title: "Draft", stage: "draft", icon: () => <GitPullRequestDraft /> },
 ];
+
+/** The periods the statistics can cover. */
+const PERIODS: StatisticsDays[] = [7, 30, 90];
 
 const plural = (n: number, thing: string) => `${n} ${thing}${n === 1 ? "" : "s"}`;
 
@@ -228,6 +234,37 @@ export function Dashboard(props: {
               {count("idle", "suspended")} Idle
             </span>
           </p>
+        </Section>
+
+        <Section
+          icon={<History />}
+          title="Statistics"
+          github={{ refreshed: since(statistics.refreshedAt()), loading: statistics.loading(), error: statistics.error().replace(PR_HINT, GH_HINT), onRefresh: statistics.refresh }}
+          action={
+            <div class="segmented dashboard-period">
+              <For each={PERIODS}>
+                {(d) => (
+                  <button classList={{ on: statistics.days() === d }} aria-pressed={statistics.days() === d} onClick={() => statistics.setDays(d)} title={`The last ${d} days`}>
+                    {d}d
+                  </button>
+                )}
+              </For>
+            </div>
+          }
+        >
+          <Show
+            when={statistics.figures()}
+            fallback={
+              <Show when={!statistics.error()}>
+                <p class="dashboard-line muted">
+                  <Loader class="spin" />
+                  Asking GitHub…
+                </p>
+              </Show>
+            }
+          >
+            {(figures) => <StatisticsCards figures={figures()} now={now()} />}
+          </Show>
         </Section>
       </div>
     </section>
