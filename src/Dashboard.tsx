@@ -8,7 +8,7 @@
 // decides how); a PR with failing checks or review feedback can start an Agent session on it. The
 // GitHub sections say when they were last read, and say so inline when `gh` can't be used, while
 // the local ones work as ever.
-import { createSignal, For, type JSX, onCleanup, Show } from "solid-js";
+import { createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
 import { ago } from "./Chat";
 import type { AttentionReason, Check, MergeState, MyPullRequest, PullRequestStage, ReviewRequest, SessionInfo, StatisticsDays, WorktreeAttention, WorktreeMerge } from "./core";
 import { attention, cleanUp, reviewRequests, statistics } from "./dashboardData";
@@ -77,6 +77,9 @@ function reasonText(r: AttentionReason): string {
   }
 }
 
+/** Where a PR's "Start an Agent session" stands: under way, or what went wrong. */
+export type PrStart = { starting: boolean; error: string };
+
 /** Why a Worktree can go, as its clean-up row says it. */
 function mergeText(m: MergeState | null): string {
   if (m?.kind === "merged") return `merged into ${m.into}`;
@@ -100,8 +103,10 @@ export function Dashboard(props: {
   onCleanUp: () => void;
   /** The PR board. */
   onAllPrs: () => void;
-  /** Starts an Agent session on the PR with its prompt in the composer; a failure is shown on its row. */
-  onStartSession: (pr: MyPullRequest) => Promise<void>;
+  /** Starts an Agent session on the PR with its prompt in the composer. */
+  onStartSession: (pr: MyPullRequest) => void;
+  /** Where each PR's start stands, by number (kept outside the rows, which each refresh makes anew). */
+  starts: Record<number, PrStart | undefined>;
 }) {
   // "Refreshed 2 min ago" and "asked 3 h ago" move on while the Dashboard is showing.
   const [now, setNow] = createSignal(Date.now());
@@ -119,8 +124,12 @@ export function Dashboard(props: {
   // A suspended session counts as Idle, as in the sidebar: it's only been put to sleep while idle.
   const count = (...states: SessionInfo["state"][]) => props.sessions.filter((s) => states.includes(s.state)).length;
 
+  // Typing goes here once it's shown, not to the composer hidden under it.
+  let root!: HTMLElement;
+  onMount(() => root.focus());
+
   return (
-    <section class="board dashboard" style={{ top: `${props.top}px` }}>
+    <section ref={root} class="board dashboard" tabindex={-1} style={{ top: `${props.top}px` }}>
       {props.banners}
       <div class="board-head">
         <span class="pr-board-title">Dashboard</span>
@@ -227,7 +236,7 @@ export function Dashboard(props: {
                       {group.title}
                       <span class="badge">{here().length}</span>
                     </div>
-                    <For each={here()}>{(pr) => <PrRow pr={pr} worktree={worktreeOn(pr.head)} onOpen={() => props.onPr(pr)} onStartSession={() => props.onStartSession(pr)} />}</For>
+                    <For each={here()}>{(pr) => <PrRow pr={pr} worktree={worktreeOn(pr.head)} start={props.starts[pr.number]} onOpen={() => props.onPr(pr)} onStartSession={() => props.onStartSession(pr)} />}</For>
                   </Show>
                 );
               }}
@@ -368,22 +377,11 @@ function Row(props: { colour?: string; title: string; onOpen: () => void; childr
 }
 
 /** One of the user's PRs; one with failing checks or changes requested can start an Agent session on it. */
-function PrRow(props: { pr: MyPullRequest; worktree?: WorktreeTab; onOpen: () => void; onStartSession: () => Promise<void> }) {
+function PrRow(props: { pr: MyPullRequest; worktree?: WorktreeTab; start?: PrStart; onOpen: () => void; onStartSession: () => void }) {
   const p = () => props.pr;
-  const [starting, setStarting] = createSignal(false);
-  const [failed, setFailed] = createSignal("");
+  const starting = () => !!props.start?.starting;
+  const failed = () => props.start?.error ?? "";
   const canStart = () => p().stage === "checksFailing" || p().stage === "changesRequested";
-  const start = async () => {
-    setStarting(true);
-    setFailed("");
-    try {
-      await props.onStartSession();
-    } catch (err) {
-      setFailed(String(err));
-    } finally {
-      setStarting(false);
-    }
-  };
   return (
     <Row
       colour={props.worktree ? worktreeColour(props.worktree.path) : undefined}
@@ -394,7 +392,7 @@ function PrRow(props: { pr: MyPullRequest; worktree?: WorktreeTab; onOpen: () =>
           <div class="dashboard-row-actions" onClick={(e) => e.stopPropagation()}>
             <Show when={canStart()}>
               <button
-                onClick={() => void start()}
+                onClick={() => props.onStartSession()}
                 disabled={starting()}
                 title={
                   p().stage === "checksFailing"

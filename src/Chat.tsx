@@ -172,9 +172,15 @@ const MODE_LABEL: Record<PermissionMode, string> = {
 /** Unsent composer text and attachments by session. */
 const drafts = new Map<SessionId, { text: string; attachments: Attachment[] }>();
 
-/** Puts `text` in a session's composer, unsent (read when its composer is next shown). */
+/** The composers showing now, by session: each takes a draft put in while it's up. */
+const shownComposers = new Map<SessionId, Set<(text: string) => void>>();
+
+/** Puts `text` in a session's composer, unsent: read when its composer is next shown, or put in
+ *  the one showing now if nothing's been typed there yet (what has been is kept). */
 export function setDraft(session: SessionId, text: string) {
-  drafts.set(session, { text, attachments: drafts.get(session)?.attachments ?? [] });
+  const shown = shownComposers.get(session);
+  if (shown?.size) shown.forEach((take) => take(text));
+  else drafts.set(session, { text, attachments: drafts.get(session)?.attachments ?? [] });
 }
 
 /** Reports an element's height as it changes (the floating composer's, for the transcript). */
@@ -202,6 +208,10 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
     setRawAttachments(list);
     keepDraft();
   };
+  const takeDraft = (value: string) => !text().trim() && setText(value);
+  const shown = shownComposers.get(props.session.id) ?? new Set();
+  shownComposers.set(props.session.id, shown.add(takeDraft));
+  onCleanup(() => shown.delete(takeDraft) && !shown.size && shownComposers.delete(props.session.id));
   const [error, setError] = createSignal("");
   // Typing `/` lists the Agent's slash commands and skills.
   const commands = useSlashCommands(() => props.session);
@@ -218,9 +228,11 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
   const disabled = () => props.session.state !== "idle" && props.session.state !== "suspended" && !working();
   let input!: HTMLTextAreaElement;
   let root!: HTMLDivElement;
-  onMount(() => input.focus());
+  // (Not while the Dashboard or a Board over it has the keyboard.)
+  const focus = () => !document.activeElement?.closest(".board") && input.focus();
+  onMount(focus);
   // Back to the composer once a turn (or a permission question) is over.
-  createEffect(() => props.session.state === "idle" && input.focus());
+  createEffect(() => props.session.state === "idle" && focus());
 
   // The queued message lives in the core (it outlives this composer); this shows it.
   const [queued, setQueued] = createSignal<QueuedPrompt | null>(null);

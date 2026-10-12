@@ -37,7 +37,7 @@ const ManualEditor = lazy(() => import("./ManualEditor").then((m) => ({ default:
 // (xterm.js loads with the panel, the first time it opens.)
 const TerminalPanel = lazy(() => import("./TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 import { Board } from "./Board";
-import { Dashboard } from "./Dashboard";
+import { Dashboard, type PrStart } from "./Dashboard";
 import { Transcript } from "./Transcript";
 import { ContextStrip, removedWorktree, Sidebar, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 import { notify, onNotificationClicked } from "./notify";
@@ -55,6 +55,9 @@ import { applyAppearance } from "./appearance";
 // overhang its box, and an <img> would clip them.
 import orchardMark from "./assets/orchard-mark-small.svg?raw";
 import { Bell, ChevronDown, ChevronRight, GitBranch, GitCompareArrows, GitPullRequest, Loader, PanelLeft, PanelRight, Search, Sparkles, SquareTerminal, X } from "./icons";
+
+/** The PRs and review requests read this lately aren't asked for again when the window gets focus. */
+const FOCUS_FRESH_MS = 60_000;
 
 export function App() {
   const [problems, setProblems] = createSignal<MissingPrerequisite[] | null>(null);
@@ -512,6 +515,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     myPrs.prs().filter((p) => p.state === "open" && (p.stage === "changesRequested" || p.stage === "checksFailing")).length;
   // The Workspace opened on the Dashboard: the watchers above just asked GitHub.
   let openedOnDashboard = false;
+  // The view has changed since the Workspace opened (the user's choice, the open-on-start one stands down).
+  let viewChosen = false;
   // Showing the Dashboard asks GitHub again, and reads the Worktrees ready to clean up. The
   // statistics are read only when there are none, or they're an hour old: even when the Workspace
   // opened on it, as the watchers don't ask for them unless the Dashboard is up.
@@ -519,6 +524,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     on(
       view,
       (now) => {
+        viewChosen = true;
         if (now !== "dashboard") return;
         statistics.shown();
         if (openedOnDashboard) {
@@ -591,6 +597,21 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       return id;
     } catch (err) {
       setError(String(err));
+    }
+  };
+
+  /** Where each PR's "Start an Agent session" stands, by number: kept here, as the Dashboard's rows
+   *  are made anew with each refresh of the PRs (and the Dashboard goes once the session shows). */
+  const [prStarts, setPrStarts] = createStore<Record<number, PrStart | undefined>>({});
+  /** Starts one, unless one is already under way for that PR; what went wrong stays on its row. */
+  const startOnPr = async (pr: MyPullRequest) => {
+    if (prStarts[pr.number]?.starting) return;
+    setPrStarts(pr.number, { starting: true, error: "" });
+    try {
+      await startSessionOn(pr);
+      setPrStarts(pr.number, undefined);
+    } catch (err) {
+      setPrStarts(pr.number, { starting: false, error: String(err) });
     }
   };
 
@@ -862,11 +883,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     untilGone(() => window.removeEventListener("click", onClick));
     // Worktrees may have changed while the editor was in the background (the watcher covers the rest),
     // and they're fetched if it's due (the core keeps it to every 5 minutes at most). The PRs and
-    // review requests are asked for again too.
+    // review requests are asked for again too, unless they were read under a minute ago.
     const onFocus = () => {
       void core.windowFocused().catch(() => {});
-      myPrs.refresh();
-      reviewRequests.refresh();
+      const stale = (at: number | null) => at === null || Date.now() - at >= FOCUS_FRESH_MS;
+      if (stale(myPrs.refreshedAt())) myPrs.refresh();
+      if (stale(reviewRequests.refreshedAt())) reviewRequests.refresh();
     };
     window.addEventListener("focus", onFocus);
     untilGone(() => window.removeEventListener("focus", onFocus));
@@ -875,8 +897,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     const loaded = await core.settings();
     if (disposed) return;
     if (!sawSettingsEvent) setSettings(loaded);
-    // Every Workspace opens on the Dashboard, unless the settings say not to.
-    if ((settings() ?? loaded).settings.dashboard.openOnStart) {
+    // Every Workspace opens on the Dashboard, unless the settings say not to, or the user has
+    // changed the view while they were being read.
+    if (!viewChosen && (settings() ?? loaded).settings.dashboard.openOnStart) {
       openedOnDashboard = true;
       setDashboardOpen(true);
     }
@@ -1153,7 +1176,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           }}
           onCleanUp={() => setOverviewOpen(true)}
           onAllPrs={() => openBoard("prs")}
-          onStartSession={startSessionOn}
+          onStartSession={(pr) => void startOnPr(pr)}
+          starts={prStarts}
         />
       </Show>
       <Show when={view() === "board" && boardOf() === "prs"}>

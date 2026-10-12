@@ -896,6 +896,8 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 
 /* The Dashboard: where the Board sits, its sections one under another, each row leading to where
    its item lives (a Tab, the PR overlay, a Worktree). */
+/* Focused when it's shown, so typing doesn't go to the composer under it: no ring for that. */
+.dashboard:focus-visible { outline: none; }
 /* As wide as the window allows: one column when narrow (statistics last); from 1,000 px the
    statistics on the left and the rest beside them; from 2,200 px the rest split in two, what needs
    the user (sessions, reviews, PRs) and the Worktrees. The statistics' cards fill their column. */
