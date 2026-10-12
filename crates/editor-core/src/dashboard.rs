@@ -108,9 +108,9 @@ pub(crate) const REVIEW_SEARCH: &str =
 
 /// A GraphQL connection's `nodes`.
 #[derive(Deserialize)]
-struct Nodes<T> {
+pub(crate) struct Nodes<T> {
     #[serde(default = "Vec::new")]
-    nodes: Vec<T>,
+    pub(crate) nodes: Vec<T>,
 }
 
 impl<T> Default for Nodes<T> {
@@ -121,8 +121,8 @@ impl<T> Default for Nodes<T> {
 
 #[derive(Deserialize, Default)]
 #[serde(default)]
-struct Login {
-    login: Option<String>,
+pub(crate) struct Login {
+    pub(crate) login: Option<String>,
 }
 
 /// Reads `REVIEW_QUERY`'s answer: the review requests, the most recently asked first.

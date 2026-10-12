@@ -168,7 +168,7 @@ Checkpoint:
 - Commit: `Statistics: the six figures, against the period before`
 
 ## Task 5: What GitHub is asked, and reading its answers
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 4
 Files:

@@ -2,9 +2,10 @@
 //! over a period, and the period before it, worked out from what `gh` answers. Times are GitHub's
 //! ISO strings read by hand into seconds since the Unix epoch (no date crate).
 
-use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
-use crate::dashboard::ReviewRequest;
+use crate::dashboard::{Login, Nodes, ReviewRequest};
 
 /// A day in seconds.
 const DAY: i64 = 86_400;
@@ -377,6 +378,244 @@ fn longest_request(requests: &[ReviewRequest]) -> Option<Waiting> {
         })
 }
 
+/// What `gh api graphql` is asked for the user's PRs: `$q` is `authored_search`, `$after` the
+/// page's cursor.
+pub(crate) const AUTHORED_QUERY: &str = "query($q: String!, $after: String) {
+  viewer { login }
+  search(query: $q, type: ISSUE, first: 100, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      ... on PullRequest {
+        createdAt mergedAt isDraft state
+        timelineItems(itemTypes: [READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT], first: 50) {
+          nodes { __typename ... on ReadyForReviewEvent { createdAt } ... on ConvertToDraftEvent { createdAt } }
+        }
+        reviews(first: 50) { nodes { submittedAt author { __typename login } } }
+      }
+    }
+  }
+}";
+
+/// The search for the user's PRs (`gh` fills in the Worktree's repo): any PR merged or readied
+/// since `from` has been updated since.
+pub(crate) fn authored_search(from: &str) -> String {
+    format!("repo:{{owner}}/{{repo}} is:pr author:@me updated:>={from}")
+}
+
+/// What `gh api graphql` is asked for the PRs the user reviewed (`$q`: `reviewed_search`).
+pub(crate) const REVIEWED_QUERY: &str = "query($q: String!, $after: String) {
+  viewer { login }
+  search(query: $q, type: ISSUE, first: 100, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      ... on PullRequest {
+        author { login }
+        reviews(last: 100) { nodes { submittedAt author { login } } }
+      }
+    }
+  }
+}";
+
+/// The search for others' PRs the user reviewed.
+pub(crate) fn reviewed_search(from: &str) -> String {
+    format!("repo:{{owner}}/{{repo}} is:pr reviewed-by:@me -author:@me updated:>={from}")
+}
+
+/// What `gh api graphql` is asked for the user's oldest open PR (`$q`: `OPEN_SEARCH`). Only `$q`:
+/// GitHub rejects a variable the query doesn't use.
+pub(crate) const OPEN_QUERY: &str = "query($q: String!) {
+  search(query: $q, type: ISSUE, first: 1) {
+    nodes { ... on PullRequest { number title createdAt } }
+  }
+}";
+
+/// The search for the user's open PRs, the oldest first (drafts too: they're open).
+pub(crate) const OPEN_SEARCH: &str =
+    "repo:{owner}/{repo} is:pr is:open author:@me sort:created-asc";
+
+/// A page of a search's answer: who the user is, what it found, and the next page's cursor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Page<T> {
+    pub(crate) viewer: String,
+    pub(crate) items: Vec<T>,
+    pub(crate) next: Option<String>,
+}
+
+/// Reads a paged search's answer, each node through `item` (`None` drops it).
+fn page<N: DeserializeOwned, T>(
+    stdout: &str,
+    mut item: impl FnMut(N, &str) -> Option<T>,
+) -> Result<Page<T>, String> {
+    #[derive(Deserialize)]
+    struct Answer<N> {
+        data: Data<N>,
+    }
+    #[derive(Deserialize)]
+    struct Data<N> {
+        #[serde(default)]
+        viewer: Login,
+        search: Search<N>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Search<N> {
+        #[serde(default)]
+        page_info: PageInfo,
+        #[serde(default = "Vec::new")]
+        nodes: Vec<N>,
+    }
+    #[derive(Deserialize, Default)]
+    #[serde(default, rename_all = "camelCase")]
+    struct PageInfo {
+        has_next_page: bool,
+        end_cursor: Option<String>,
+    }
+    let answer: Answer<N> = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("gh said something unexpected: {e}"))?;
+    let viewer = answer.data.viewer.login.unwrap_or_default();
+    let search = answer.data.search;
+    let items = search
+        .nodes
+        .into_iter()
+        .filter_map(|node| item(node, &viewer))
+        .collect();
+    let next = search
+        .page_info
+        .end_cursor
+        .filter(|_| search.page_info.has_next_page);
+    Ok(Page {
+        viewer,
+        items,
+        next,
+    })
+}
+
+/// A review's author with what they are: a bot (`__typename` "Bot", or a login ending `[bot]`) or
+/// a person.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct Author {
+    #[serde(rename = "__typename")]
+    typename: Option<String>,
+    login: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewNode<A> {
+    submitted_at: Option<String>,
+    author: Option<A>,
+}
+
+/// Reads an `AUTHORED_QUERY` page. Pending reviews (not submitted) are skipped; a deleted user's
+/// review counts as someone else's.
+pub(crate) fn authored_page(stdout: &str) -> Result<Page<AuthoredPr>, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Pr {
+        created_at: String,
+        merged_at: Option<String>,
+        #[serde(default)]
+        is_draft: bool,
+        #[serde(default)]
+        state: String,
+        #[serde(default)]
+        timeline_items: Nodes<Event>,
+        #[serde(default)]
+        reviews: Nodes<ReviewNode<Author>>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Event {
+        #[serde(rename = "__typename")]
+        typename: String,
+        created_at: Option<String>,
+    }
+    page(stdout, |pr: Pr, _| {
+        Some(AuthoredPr {
+            created_at: parse_utc(&pr.created_at)?,
+            merged_at: pr.merged_at.as_deref().and_then(parse_utc),
+            open: pr.state == "OPEN",
+            is_draft: pr.is_draft,
+            draft_events: pr
+                .timeline_items
+                .nodes
+                .into_iter()
+                .filter_map(|event| {
+                    let to_draft = match event.typename.as_str() {
+                        "ConvertToDraftEvent" => true,
+                        "ReadyForReviewEvent" => false,
+                        _ => return None,
+                    };
+                    let at = parse_utc(event.created_at.as_deref()?)?;
+                    Some(DraftEvent { at, to_draft })
+                })
+                .collect(),
+            reviews: pr
+                .reviews
+                .nodes
+                .into_iter()
+                .filter_map(|review| {
+                    let at = parse_utc(review.submitted_at.as_deref()?)?;
+                    let author = review.author.unwrap_or_default();
+                    let login = author.login.unwrap_or_else(|| "ghost".into());
+                    let bot = author.typename.as_deref() == Some("Bot") || login.ends_with("[bot]");
+                    Some(Reviewed { at, login, bot })
+                })
+                .collect(),
+        })
+    })
+}
+
+/// Reads a `REVIEWED_QUERY` page: each PR's author, and when the user's own reviews of it were
+/// submitted.
+pub(crate) fn reviewed_page(stdout: &str) -> Result<Page<ReviewedPr>, String> {
+    #[derive(Deserialize)]
+    struct Pr {
+        author: Option<Login>,
+        #[serde(default)]
+        reviews: Nodes<ReviewNode<Login>>,
+    }
+    page(stdout, |pr: Pr, viewer| {
+        Some(ReviewedPr {
+            author: pr
+                .author
+                .and_then(|a| a.login)
+                .unwrap_or_else(|| "ghost".into()),
+            mine: pr
+                .reviews
+                .nodes
+                .into_iter()
+                .filter(|review| {
+                    review.author.as_ref().and_then(|a| a.login.as_deref()) == Some(viewer)
+                })
+                .filter_map(|review| parse_utc(review.submitted_at.as_deref()?))
+                .collect(),
+        })
+    })
+}
+
+/// Reads `OPEN_QUERY`'s answer: the user's oldest open PR, if they have one.
+pub(crate) fn oldest_open(stdout: &str) -> Result<Option<Waiting>, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Pr {
+        number: u64,
+        title: String,
+        created_at: String,
+    }
+    Ok(page(stdout, |pr: Pr, _| {
+        Some(Waiting {
+            number: pr.number,
+            title: pr.title,
+            since: pr.created_at,
+        })
+    })?
+    .items
+    .into_iter()
+    .next())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -654,5 +893,99 @@ mod tests {
         let stats = figures(WEEK, "me", &[], &[], None, &[]);
         assert_eq!(stats.oldest_open, None);
         assert_eq!(stats.longest_request, None);
+    }
+
+    #[test]
+    fn githubs_answers_are_read_into_prs_and_reviews() {
+        let authored = authored_page(
+            r#"{"data":{"viewer":{"login":"me"},"search":{
+              "pageInfo":{"hasNextPage":true,"endCursor":"c1"},
+              "nodes":[{"createdAt":"1970-01-01T00:00:10Z","mergedAt":"1970-01-01T00:01:40Z",
+                "isDraft":false,"state":"MERGED",
+                "timelineItems":{"nodes":[
+                  {"__typename":"ConvertToDraftEvent","createdAt":"1970-01-01T00:00:20Z"},
+                  {"__typename":"ReadyForReviewEvent","createdAt":"1970-01-01T00:00:50Z"}]},
+                "reviews":{"nodes":[
+                  {"submittedAt":"1970-01-01T00:00:30Z","author":{"__typename":"Bot","login":"ci"}},
+                  {"submittedAt":"1970-01-01T00:00:40Z","author":{"__typename":"User","login":"renovate[bot]"}},
+                  {"submittedAt":"1970-01-01T00:01:00Z","author":{"__typename":"User","login":"ann"}},
+                  {"submittedAt":"1970-01-01T00:01:10Z","author":null},
+                  {"submittedAt":null,"author":{"__typename":"User","login":"bob"}}]}}]}}}"#,
+        )
+        .unwrap();
+        assert_eq!(authored.viewer, "me");
+        assert_eq!(authored.next.as_deref(), Some("c1"));
+        assert_eq!(
+            authored.items,
+            [AuthoredPr {
+                created_at: 10,
+                merged_at: Some(100),
+                open: false,
+                is_draft: false,
+                draft_events: vec![
+                    DraftEvent {
+                        at: 20,
+                        to_draft: true
+                    },
+                    DraftEvent {
+                        at: 50,
+                        to_draft: false
+                    },
+                ],
+                reviews: vec![
+                    Reviewed {
+                        bot: true,
+                        ..by("ci", 30)
+                    },
+                    Reviewed {
+                        bot: true,
+                        ..by("renovate[bot]", 40)
+                    },
+                    by("ann", 60),
+                    by("ghost", 70),
+                ],
+            }]
+        );
+
+        let reviewed = reviewed_page(
+            r#"{"data":{"viewer":{"login":"me"},"search":{
+              "pageInfo":{"hasNextPage":false,"endCursor":"c9"},
+              "nodes":[{"author":{"login":"ann"},"reviews":{"nodes":[
+                {"submittedAt":"1970-01-01T00:00:05Z","author":{"login":"me"}},
+                {"submittedAt":"1970-01-01T00:00:06Z","author":{"login":"bob"}},
+                {"submittedAt":null,"author":{"login":"me"}},
+                {"submittedAt":"1970-01-01T00:00:07Z","author":{"login":"me"}}]}}]}}}"#,
+        )
+        .unwrap();
+        assert_eq!(reviewed.viewer, "me");
+        assert_eq!(reviewed.next, None);
+        assert_eq!(
+            reviewed.items,
+            [ReviewedPr {
+                author: "ann".into(),
+                mine: vec![5, 7]
+            }]
+        );
+
+        let open = oldest_open(
+            r#"{"data":{"search":{"nodes":[
+              {"number":4,"title":"Old one","createdAt":"2026-09-01T09:00:00Z"}]}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            open,
+            Some(Waiting {
+                number: 4,
+                title: "Old one".into(),
+                since: "2026-09-01T09:00:00Z".into(),
+            })
+        );
+        assert_eq!(
+            oldest_open(r#"{"data":{"search":{"nodes":[]}}}"#).unwrap(),
+            None
+        );
+        assert!(authored_page("not json")
+            .unwrap_err()
+            .starts_with("gh said something unexpected"));
     }
 }
