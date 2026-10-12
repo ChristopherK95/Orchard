@@ -177,6 +177,9 @@ impl Terminal {
                 None => shell.env_remove(key),
             }
         }
+        if let Some(path) = crate::node::terminal_path() {
+            shell.env("PATH", path);
+        }
         if !cfg!(windows) {
             shell.env("TERM", "xterm-256color");
         }

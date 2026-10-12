@@ -3,7 +3,7 @@
 // layout: toggles apply at once, fields when they lose focus or on Enter. While the file doesn't
 // parse, the controls are locked (nothing is written over it) and the error says why.
 import { createEffect, createSignal, For, type JSX, on, onCleanup, onMount, Show } from "solid-js";
-import { type Action, BUBBLE_COLORS, core, type FontFamily, type LoadedSettings, type RepoSettings, type SettingChange } from "./core";
+import { type Action, BUBBLE_COLORS, core, type FontFamily, type LoadedSettings, type NodeInstall, type RepoSettings, type SettingChange } from "./core";
 import { CODE_FONT_SIZES } from "./appearance";
 import { ArrowDown, ArrowUp, ChevronDown, Plus, TriangleAlert, X } from "./icons";
 
@@ -27,6 +27,9 @@ export function SettingsPage(props: {
   /** The installed fonts, once the core has found them. */
   const [fonts, setFonts] = createSignal<FontFamily[] | null>(null);
   onMount(() => void core.installedFonts().then(setFonts, () => setFonts([])));
+  /** The Node.js installs found, once the core has looked. */
+  const [nodes, setNodes] = createSignal<NodeInstall[] | null>(null);
+  onMount(() => void core.installedNode().then(setNodes, () => setNodes([])));
   const app = () => props.settings?.settings;
 
   const loadRepo = async () => {
@@ -223,6 +226,12 @@ export function SettingsPage(props: {
                     disabled={!app()?.agents.idleSuspend}
                     onCommit={(minutes) => void change({ kind: "idleSuspendMinutes", minutes })}
                   />
+                </Row>
+                <Row
+                  label="Node.js"
+                  hint="What the Agents run on (and their commands, Worktree setup and git hooks find first on PATH). Automatic: the one your login shell finds. Sessions already running keep theirs until Orchard restarts."
+                >
+                  <NodePicker value={app()?.agents.node ?? null} installs={nodes()} onChange={(path) => void change({ kind: "node", path })} />
                 </Row>
               </Show>
               <Show when={section() === "repo"}>
@@ -504,6 +513,41 @@ function CommandList(props: { commands: string[]; placeholder?: string; onCommit
         <Plus />
         Add command
       </button>
+    </div>
+  );
+}
+
+/** A Node.js found on this machine, or automatic (`null`: the login shell's), with the path of the
+ *  one in use below. A path in the file that wasn't found is still offered, marked. */
+function NodePicker(props: { value: string | null; installs: NodeInstall[] | null; onChange: (path: string | null) => void }) {
+  const automatic = () => props.installs?.find((n) => n.automatic);
+  const label = (n: NodeInstall) => `v${n.version} · ${n.source}`;
+  const missing = () => !!props.value && !!props.installs && !props.installs.some((n) => n.path === props.value);
+  const path = () => props.value ?? automatic()?.path;
+  return (
+    <div class="node-picker">
+      <select disabled={!props.installs} onChange={(e) => props.onChange(e.currentTarget.value || null)}>
+        <option value="" selected={!props.value}>
+          {!props.installs ? "Looking for Node.js…" : automatic() ? `Automatic (${label(automatic()!)})` : "Automatic"}
+        </option>
+        <For each={props.installs ?? []}>
+          {(n) => (
+            <option value={n.path} selected={n.path === props.value}>
+              {label(n)}
+            </option>
+          )}
+        </For>
+        <Show when={missing()}>
+          <option value={props.value!} selected>
+            Not found: {props.value}
+          </option>
+        </Show>
+      </select>
+      <Show when={path()}>
+        <div class="muted small mono path" title={path()}>
+          {path()}
+        </div>
+      </Show>
     </div>
   );
 }

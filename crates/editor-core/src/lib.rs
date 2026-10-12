@@ -17,6 +17,7 @@ mod git;
 mod git_status;
 mod merged;
 mod names;
+mod node;
 mod permissions;
 mod prerequisites;
 mod process;
@@ -49,6 +50,7 @@ pub use crate::git_status::{
     GitStatus, LastCommit, PullOutcome, PushOutcome,
 };
 pub use crate::merged::{MergeState, WorktreeMerge};
+pub use crate::node::NodeInstall;
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};
 pub use crate::process::host_env;
 pub use crate::pull_request::{

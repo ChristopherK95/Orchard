@@ -30,6 +30,9 @@ async fn git_with_profile(cwd: &Path) -> Command {
             .iter()
             .map(|(key, value)| (key, value)),
     );
+    if let Some(path) = crate::node::path().await {
+        cmd.env("PATH", path);
+    }
     configure(cmd, cwd)
 }
 

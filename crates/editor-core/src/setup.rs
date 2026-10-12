@@ -81,6 +81,9 @@ pub(crate) async fn run(
     let mut cmd = crate::process::command(&program);
     #[cfg(unix)]
     cmd.envs(shell_env().await.iter().map(|(key, value)| (key, value)));
+    if let Some(path) = crate::node::path().await {
+        cmd.env("PATH", path);
+    }
     cmd.args(&args)
         .current_dir(cwd)
         .stdin(Stdio::null())

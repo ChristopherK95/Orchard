@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use editor_core::{
     check_prerequisites, AdapterCommand, Attachment, BranchList, Core, CoreConfig, CoreError,
     CreatedWorktree, DirEntry, FileMatch, FontFamily, LoadedSettings, MissingPrerequisite,
-    NewWorktree, OpenedFile, OtherConversation, PermissionMode, PoppedOutFile, QueuedPrompt,
-    RecentSession, RecentWorkspace, RemovalCheck, RemoveWorktree, RemovedWorktree, RepoSettings,
-    SaveOver, SessionId, SessionInfo, SessionUsage, SettingChange, SetupInfo, SlashCommand,
-    TerminalId, TerminalInfo, TerminalOutput, TerminalStream, Tools, TranscriptDelta,
+    NewWorktree, NodeInstall, OpenedFile, OtherConversation, PermissionMode, PoppedOutFile,
+    QueuedPrompt, RecentSession, RecentWorkspace, RemovalCheck, RemoveWorktree, RemovedWorktree,
+    RepoSettings, SaveOver, SessionId, SessionInfo, SessionUsage, SettingChange, SetupInfo,
+    SlashCommand, TerminalId, TerminalInfo, TerminalOutput, TerminalStream, Tools, TranscriptDelta,
     TranscriptPage, WorkspaceInfo, WorktreeInfo, WorktreeMerge,
 };
 use tauri::ipc::Channel;
@@ -309,6 +309,12 @@ async fn open_repo_settings(core: State<'_, Core>) -> CommandResult<String> {
 #[tauri::command]
 async fn installed_fonts(core: State<'_, Core>) -> CommandResult<Vec<FontFamily>> {
     Ok(core.installed_fonts().await)
+}
+
+/// The Node.js installs on this machine, for the settings page's Node picker.
+#[tauri::command]
+async fn installed_node(core: State<'_, Core>) -> CommandResult<Vec<NodeInstall>> {
+    Ok(core.installed_node().await)
 }
 
 /// The settings page's view of the open repo's settings.
@@ -1543,6 +1549,7 @@ fn main() {
             open_repo_settings,
             repo_settings,
             installed_fonts,
+            installed_node,
             change_setting,
             read_file,
             document_opened,

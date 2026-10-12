@@ -278,12 +278,29 @@ export interface FontFamily {
   monospace: boolean;
 }
 
+/** A Node.js found on this machine. */
+export interface NodeInstall {
+  /** Without the "v" (24.1.0). */
+  version: string;
+  path: string;
+  /** nvm, fnm, volta, asdf, mise, n or system. */
+  source: string;
+  /** Used when none is picked. */
+  automatic: boolean;
+}
+
 export interface Settings {
   appearance: Appearance;
   editor: { vim: boolean };
   notifications: { turnFinished: boolean };
   dashboard: { openOnStart: boolean };
-  agents: { memoryLimitMb: number; idleSuspend: boolean; idleSuspendMinutes: number };
+  agents: {
+    memoryLimitMb: number;
+    idleSuspend: boolean;
+    idleSuspendMinutes: number;
+    /** The `node` executable the Agents run on; null: the one on the login shell's PATH. */
+    node: string | null;
+  };
 }
 
 export type WindowsShell = "powershell" | "git-bash";
@@ -319,6 +336,7 @@ export type SettingChange =
   | { kind: "memoryLimitMb"; mb: number }
   | { kind: "idleSuspend"; on: boolean }
   | { kind: "idleSuspendMinutes"; minutes: number }
+  | { kind: "node"; path: string | null }
   | { kind: "setup"; commands: string[] }
   | { kind: "setupWindows"; commands: string[] | null }
   | { kind: "setupLinux"; commands: string[] | null }
@@ -883,6 +901,8 @@ export const core = {
   openRepoSettings: () => invoke<string>("open_repo_settings"),
   /** The fonts installed on this machine (found once per run). */
   installedFonts: () => invoke<FontFamily[]>("installed_fonts"),
+  /** The Node.js installs on this machine, newest first. */
+  installedNode: () => invoke<NodeInstall[]>("installed_node"),
   /** The open repo's settings (its defaults if the file has no section for it). */
   repoSettings: () => invoke<RepoSettings>("repo_settings"),
   /** Writes one change from the settings page to the settings file; the settings now in force. */
