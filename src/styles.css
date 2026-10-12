@@ -552,6 +552,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .markdown p, .markdown ul, .markdown ol { margin: 0 0 10px; }
 .markdown h1, .markdown h2, .markdown h3, .markdown h4 { margin: 16px 0 8px; font-size: 15px; line-height: 1.4; font-weight: 600; letter-spacing: -0.01em; color: var(--fg-1); }
 .markdown h1 { font-size: 17px; }
+.markdown h1, .markdown h2, .markdown h3 { padding-bottom: 6px; border-bottom: 1px solid var(--line); }
 .markdown ul, .markdown ol { padding-left: 20px; }
 .markdown li { margin: 3px 0; }
 .markdown li::marker { color: var(--fg-3); }
@@ -565,6 +566,47 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .markdown th, .markdown td { padding: 8px 12px; }
 .markdown tr + tr td, .markdown thead + tbody td { border-top: 1px solid var(--line); }
 .markdown hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
+
+/* A question the Agent asks (see markdown.ts): a card whose options answer it into the composer. */
+.qcard { border: 1px solid var(--line); border-radius: var(--r-xl); background: var(--card); margin: 4px 0 12px; overflow: hidden; }
+.qcard-head { display: flex; align-items: baseline; gap: 10px; padding: 12px 16px 0; }
+.qcard-n { flex: none; display: grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: var(--r-md); background: var(--bg-4); font: 600 12px var(--mono); color: var(--fg-2); transform: translateY(-1px); }
+.qcard-title { font-weight: 600; color: var(--fg-1); }
+.qcard-lead { margin: 6px 16px 0 !important; color: var(--fg-2); }
+.qcard-body { margin: 8px 16px 0; color: var(--fg-2); }
+.qcard-body > :last-child { margin-bottom: 0; }
+.qcard-options { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px 0; }
+.qcard-option { justify-content: flex-start; gap: 10px; min-height: 36px; padding: 6px 10px; background: var(--bg-1); border-color: var(--line); color: var(--fg-prose); font-size: 13.5px; font-weight: 400; line-height: 1.5; white-space: normal; text-align: left; }
+.qcard-option:hover:not(:disabled) { background: var(--bg-3); border-color: var(--line-strong); }
+.qcard-option.recommended { border-color: rgba(34, 197, 94, 0.35); background: var(--ok-tint); }
+.qcard-letter { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: var(--r-sm); background: var(--bg-4); font: 600 11.5px var(--mono); color: var(--fg-2); }
+.qcard-option.recommended .qcard-letter { background: rgba(34, 197, 94, 0.18); color: var(--idle-text); }
+.qcard-text { flex: 1; min-width: 0; }
+.qcard-badge { flex: none; font-size: 11.5px; font-weight: 500; color: var(--idle-text); }
+.qcard-rec { display: flex; align-items: flex-start; gap: 12px; margin-top: 12px; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--bg-2); font-size: 13.5px; color: var(--fg-2); }
+.qcard-rec-text { flex: 1; min-width: 0; }
+.qcard-rec-text > p, .qcard-rec-text > ul, .qcard-rec-text > ol { margin: 6px 0 0; }
+.qcard-rec-text > :is(ul, ol) + p { margin-top: 8px; }
+.qcard-rec-label { display: block; margin-bottom: 2px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-3); }
+.qcard-rec button { flex: none; margin-top: 2px; }
+.qcard > :last-child:not(.qcard-rec) { margin-bottom: 14px; }
+
+/* A list of bold-led items (see markdown.ts): rows with a title, the text under it, and a number. */
+.markdown .steps { list-style: none; padding: 0; border: 1px solid var(--line); border-radius: var(--r-xl); background: var(--card); overflow: hidden; }
+.markdown .steps > li { display: grid; grid-template-columns: 1fr; column-gap: 12px; margin: 0; padding: 10px 16px; }
+.markdown ol.steps > li { grid-template-columns: auto 1fr; }
+.markdown ol.steps > li > :not(.step-n) { grid-column: 2; }
+.markdown .steps > li + li { border-top: 1px solid var(--line); }
+.markdown .steps .steps { margin: 8px 0 0; }
+.step-n { display: grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; margin-top: 1px; border-radius: var(--r-md); background: var(--bg-4); font: 600 12px var(--mono); color: var(--fg-2); }
+.step-title { font-weight: 600; color: var(--fg-1); }
+.step-text { color: var(--fg-2); }
+.step-tag { display: inline-block; margin-right: 8px; padding: 0 6px; border-radius: var(--r-sm); font-size: 11.5px; font-weight: 500; line-height: 20px; vertical-align: 1px; }
+.step-tag.c0 { background: rgba(59, 130, 246, 0.14); color: var(--working-text); }
+.step-tag.c1 { background: rgba(167, 139, 250, 0.14); color: #c4b5fd; }
+.step-tag.c2 { background: rgba(34, 197, 94, 0.12); color: var(--idle-text); }
+.step-tag.c3 { background: rgba(245, 158, 11, 0.12); color: var(--needs-text); }
+.step-tag.c4 { background: var(--info-tint); color: var(--info); }
 
 /* Code blocks: a file-ish header (language, Copy, Open in editor) and numbered lines. */
 .cb { border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; background: var(--code-bg); margin: 4px 0 12px; }

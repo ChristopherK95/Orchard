@@ -220,6 +220,7 @@ export function PrOverlay(props: {
         props.onClose();
         props.onOpenSnippet(code, label);
       },
+      () => {},
       setError,
     );
 
