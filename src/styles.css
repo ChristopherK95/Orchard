@@ -818,10 +818,14 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 }
 .composer-box.dropping { border-color: var(--ring); border-style: dashed; }
 /* The context meter: how full the context window is; the token figures open on hover or focus. */
-.context-meter { position: relative; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 7px; border-radius: var(--r-md); color: var(--fg-3); font-size: 12px; font-variant-numeric: tabular-nums; cursor: default; }
+.context-meter { position: relative; display: inline-flex; align-items: center; gap: 10px; height: 24px; padding: 0 7px; border-radius: var(--r-md); color: var(--fg-3); font-size: 12px; font-variant-numeric: tabular-nums; cursor: default; }
 .context-meter:hover, .context-meter:focus-visible { background: var(--bg-3); color: var(--fg-2); outline: none; }
-.context-meter svg { width: 14px; height: 14px; transform: rotate(-90deg); }
-.context-meter circle { fill: none; stroke-width: 2.5; }
+.context-meter .stat { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.context-meter .stat .lucide { width: 13px; height: 13px; stroke-width: 2; }
+.context-meter .tokens .lucide { color: var(--info); }
+.context-meter .cost .lucide { color: var(--ok); }
+.context-meter .context svg { width: 14px; height: 14px; transform: rotate(-90deg); }
+.context-meter .context circle { fill: none; stroke-width: 2.5; }
 .context-meter .track { stroke: var(--line-strong); }
 .context-meter .fill { stroke: var(--fg-3); stroke-linecap: round; transition: stroke-dasharray 200ms; }
 .context-meter.high .fill { stroke: var(--warn); }

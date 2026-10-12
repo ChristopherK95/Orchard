@@ -15,6 +15,8 @@ export { default as CirclePause } from "lucide-solid/icons/circle-pause";
 export { default as CirclePlay } from "lucide-solid/icons/circle-play";
 export { default as CirclePlus } from "lucide-solid/icons/circle-plus";
 export { default as CircleCheck } from "lucide-solid/icons/circle-check";
+export { default as DollarSign } from "lucide-solid/icons/dollar-sign";
+export { default as Coins } from "lucide-solid/icons/coins";
 export { default as Clock } from "lucide-solid/icons/clock";
 export { default as Columns2 } from "lucide-solid/icons/columns-2";
 export { default as Copy } from "lucide-solid/icons/copy";
