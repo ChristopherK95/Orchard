@@ -32,6 +32,10 @@
 //! A top-level `"commands": [{ "name": "review", "description": "…", "input": { "hint": "[pr]" } }]`
 //! is sent as an `available_commands_update` after each `session/new`, like the real adapter's.
 //!
+//! A turn's `"usage": {"used": 1200, "size": 200000, "cost": {…}}` is sent as a `usage_update` (after
+//! its chunks), and its `"promptUsage": {"inputTokens": 3, …}` goes in its `session/prompt` result,
+//! like the real adapter's.
+//!
 //! Each `session/prompt` consumes the next turn (across all sessions); once the script runs out, the
 //! agent echoes the prompt. A `permission` turn first announces the tool call, then asks
 //! `session/request_permission` (id `"perm-1"`, `"perm-2"`, …) and waits for the answer, which it
@@ -127,6 +131,10 @@ struct Turn {
     /// whatever the answer, before sending `chunks`: the Agent editing a file.
     #[serde(default)]
     write: Vec<WriteScript>,
+    /// Sent as a `usage_update` after the chunks (its fields, without `sessionUpdate`).
+    usage: Option<Value>,
+    /// The `usage` of its `session/prompt` result.
+    prompt_usage: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -415,6 +423,14 @@ impl Agent {
                         "content": { "type": "text", "text": message } }),
             );
         }
+        if let Some(Value::Object(fields)) = &turn.usage {
+            let mut update = json!({ "sessionUpdate": "usage_update" });
+            update
+                .as_object_mut()
+                .expect("object")
+                .extend(fields.clone());
+            notify_update(&session_id, update);
+        }
         if turn.exit {
             std::process::exit(1);
         }
@@ -435,7 +451,10 @@ impl Agent {
         if let Ok(path) = std::env::var("FAKE_ACP_HISTORY") {
             std::fs::write(path, history.to_string()).expect("write FAKE_ACP_HISTORY");
         }
-        json!({ "stopReason": "end_turn" })
+        match &turn.prompt_usage {
+            Some(usage) => json!({ "stopReason": "end_turn", "usage": usage }),
+            None => json!({ "stopReason": "end_turn" }),
+        }
     }
 
     /// Announces each tool call (pending), then updates it to its final status.

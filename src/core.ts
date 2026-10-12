@@ -756,6 +756,21 @@ export interface SlashCommand {
   hint: string | null;
 }
 
+/** How much of its context window a session fills, and the tokens it has spent (none of it is
+ *  kept across restarts). */
+export interface SessionUsage {
+  /** Tokens in the context window now; null until the Agent has said. */
+  contextUsed: number | null;
+  /** The model's context window. */
+  contextSize: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  /** In US dollars, since the Agent last picked the conversation up. */
+  costUsd: number | null;
+}
+
 export type CoreEvent =
   | { kind: "sessionCreated"; session: SessionInfo }
   | { kind: "sessionStateChanged"; sessionId: SessionId; state: SessionState }
@@ -763,6 +778,8 @@ export type CoreEvent =
   | { kind: "sessionUnreadChanged"; sessionId: SessionId; unread: number }
   /** The slash commands (and skills) the session's Agent offers: the whole list. */
   | { kind: "availableCommandsChanged"; sessionId: SessionId; commands: SlashCommand[] }
+  /** The session's context window use or tokens spent changed. */
+  | { kind: "usageChanged"; sessionId: SessionId; usage: SessionUsage }
   | { kind: "worktreesChanged"; worktrees: WorktreeInfo[] }
   /** A shell started or went: every running shell, oldest first. */
   | { kind: "terminalsChanged"; terminals: TerminalInfo[] }
@@ -1003,6 +1020,8 @@ export const core = {
   pinnedWorktrees: () => invoke<string[]>("pinned_worktrees"),
   /** The slash commands the session's Agent last said it offers (none before its process starts). */
   availableCommands: (sessionId: SessionId) => invoke<SlashCommand[]>("available_commands", { sessionId }),
+  /** How much of its context window the session fills and the tokens it has spent. */
+  sessionUsage: (sessionId: SessionId) => invoke<SessionUsage>("session_usage", { sessionId }),
   /** Pins or unpins a Worktree as a column; resolves to the pinned Worktrees now. */
   setPinned: (worktree: string, pinned: boolean) => invoke<string[]>("set_pinned", { worktree, pinned }),
   /** The columns' widths, as shares of the row (1000 each when even); a column without one has

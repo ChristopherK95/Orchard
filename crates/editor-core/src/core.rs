@@ -61,6 +61,60 @@ pub struct SlashCommand {
     pub hint: Option<String>,
 }
 
+/// How much of its context window an Agent session fills, and the tokens it has spent, for the
+/// composer's meter. The context and cost come from the adapter's `usage_update`s; the token
+/// counts are its turns' `session/prompt` results added up. None of it is saved: a session restored
+/// after a restart has none until its next turn.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionUsage {
+    /// Tokens in the context window now (the last request's input and output).
+    pub context_used: Option<u64>,
+    /// The model's context window.
+    pub context_size: Option<u64>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    /// What the conversation has cost, in US dollars, since the Agent last picked it up.
+    pub cost_usd: Option<f64>,
+}
+
+impl SessionUsage {
+    /// Takes in a `usage_update`: true if anything changed.
+    fn apply_update(&mut self, update: &Value) -> bool {
+        let before = self.clone();
+        if let Some(used) = update["used"].as_u64() {
+            self.context_used = Some(used);
+        }
+        if let Some(size) = update["size"].as_u64().filter(|&s| s > 0) {
+            self.context_size = Some(size);
+        }
+        if update["cost"]["currency"] == "USD" {
+            if let Some(amount) = update["cost"]["amount"].as_f64() {
+                self.cost_usd = Some(amount);
+            }
+        }
+        *self != before
+    }
+
+    /// Adds a turn's `usage` (from its `session/prompt` result): true if it had any.
+    fn add_turn(&mut self, usage: &Value) -> bool {
+        let count = |key: &str| usage[key].as_u64().unwrap_or(0);
+        let turn = [
+            count("inputTokens"),
+            count("outputTokens"),
+            count("cachedReadTokens"),
+            count("cachedWriteTokens"),
+        ];
+        self.input_tokens += turn[0];
+        self.output_tokens += turn[1];
+        self.cache_read_tokens += turn[2];
+        self.cache_write_tokens += turn[3];
+        turn.iter().any(|&n| n > 0)
+    }
+}
+
 /// A message written while the Agent was working, sent as the next prompt when the turn ends Idle
 /// (ticket 39). A session holds at most one; queuing more adds to it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -433,6 +487,12 @@ pub enum CoreEvent {
         session_id: SessionId,
         commands: Vec<SlashCommand>,
     },
+    /// How much of its context window the session fills, or the tokens it has spent, changed.
+    #[serde(rename_all = "camelCase")]
+    UsageChanged {
+        session_id: SessionId,
+        usage: SessionUsage,
+    },
     /// A shell started or went (exited, was stopped, or its Worktree or Workspace went): every
     /// Worktree's running shells, oldest first.
     TerminalsChanged {
@@ -713,6 +773,8 @@ struct Session {
     edit_notes: Mutex<EditNotes>,
     /// The slash commands the Agent last said it offers (none until its process has started).
     commands: Mutex<Vec<SlashCommand>>,
+    /// Its context window use and tokens spent (see `SessionUsage`).
+    usage: Mutex<SessionUsage>,
     /// It has been sent a prompt, so Claude Code has a conversation for it (see `SavedSession`).
     started: AtomicBool,
     control: Mutex<Control>,
@@ -4078,6 +4140,11 @@ impl Core {
             .clone())
     }
 
+    /// How much of its context window the session fills and the tokens it has spent.
+    pub fn session_usage(&self, id: SessionId) -> Result<SessionUsage, CoreError> {
+        Ok(self.session(id)?.usage.lock().expect("usage lock").clone())
+    }
+
     /// The whole transcript (mostly for tests; the frontend pages through `show_session` and
     /// `transcript_page`).
     pub fn transcript(&self, id: SessionId) -> Result<Vec<TranscriptItem>, CoreError> {
@@ -4267,6 +4334,9 @@ impl Inner {
         let inner = self.clone();
         tokio::spawn(async move {
             let result = reply.await;
+            if let Ok(reply) = &result {
+                session.change_usage(|usage| usage.add_turn(&reply["usage"]));
+            }
             if let (Err(_), Some(delivery)) = (&result, delivery) {
                 // It never got them (the adapter crashed, say): they wait for the next prompt.
                 let mut notes = session.edit_notes.lock().expect("edit notes lock");
@@ -4728,6 +4798,7 @@ impl Inner {
                     .remove(&saved.acp_id)
                     .unwrap_or_default(),
             ),
+            usage: Mutex::default(),
             started: AtomicBool::new(saved.started),
             control: Mutex::new(Control {
                 suspended: stopped,
@@ -5423,6 +5494,9 @@ impl Inner {
                             commands,
                         });
                     }
+                    Some("usage_update") => {
+                        session.change_usage(|usage| usage.apply_update(update));
+                    }
                     // The Agent can change mode itself, e.g. when leaving plan mode.
                     // (A replayed mode change is history: the Tab's own mode is applied after.)
                     Some("current_mode_update") if !session.replaying.load(Ordering::SeqCst) => {
@@ -5461,6 +5535,17 @@ impl Inner {
 }
 
 impl Session {
+    /// Changes its usage, announcing it if `change` says it changed.
+    fn change_usage(&self, change: impl FnOnce(&mut SessionUsage) -> bool) {
+        let mut usage = self.usage.lock().expect("usage lock");
+        if change(&mut usage) {
+            let _ = self.events.send(CoreEvent::UsageChanged {
+                session_id: self.id(),
+                usage: usage.clone(),
+            });
+        }
+    }
+
     /// Waits (a while, at most) for a suspend, resume or load in progress to settle, so a send or
     /// close right after one carries on instead of failing.
     async fn wait_settled(&self) {

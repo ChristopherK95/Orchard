@@ -9,9 +9,9 @@ use editor_core::{
     CreatedWorktree, DirEntry, FileMatch, FontFamily, LoadedSettings, MissingPrerequisite,
     NewWorktree, OpenedFile, OtherConversation, PermissionMode, PoppedOutFile, QueuedPrompt,
     RecentSession, RecentWorkspace, RemovalCheck, RemoveWorktree, RemovedWorktree, RepoSettings,
-    SaveOver, SessionId, SessionInfo, SettingChange, SetupInfo, SlashCommand, TerminalId,
-    TerminalInfo, TerminalOutput, TerminalStream, Tools, TranscriptDelta, TranscriptPage,
-    WorkspaceInfo, WorktreeInfo, WorktreeMerge,
+    SaveOver, SessionId, SessionInfo, SessionUsage, SettingChange, SetupInfo, SlashCommand,
+    TerminalId, TerminalInfo, TerminalOutput, TerminalStream, Tools, TranscriptDelta,
+    TranscriptPage, WorkspaceInfo, WorktreeInfo, WorktreeMerge,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -702,6 +702,12 @@ fn available_commands(
 ) -> CommandResult<Vec<SlashCommand>> {
     core.available_commands(session_id)
         .map_err(|e| e.to_string())
+}
+
+/// How much of its context window a session fills and the tokens it has spent, for the composer.
+#[tauri::command]
+fn session_usage(core: State<'_, Core>, session_id: SessionId) -> CommandResult<SessionUsage> {
+    core.session_usage(session_id).map_err(|e| e.to_string())
 }
 
 /// The Worktrees pinned as columns of the Columns view.
@@ -1622,6 +1628,7 @@ fn main() {
             column_shares,
             set_column_shares,
             available_commands,
+            session_usage,
             terminals,
             open_terminal,
             new_terminal,
