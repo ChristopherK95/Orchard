@@ -565,6 +565,45 @@ export interface ReviewRequest {
   reRequested: boolean;
 }
 
+/** A median time over some PRs (`seconds` null: nothing to count). */
+export interface Median {
+  seconds: number | null;
+  count: number;
+}
+
+/** A figure for the period and for the one before it. */
+export interface Compared<T> {
+  now: T;
+  before: T;
+}
+
+/** A PR that has waited since a time (ISO, as GitHub gave it). */
+export interface Waiting {
+  number: number;
+  title: string;
+  since: string;
+}
+
+/** The days the Dashboard's statistics can cover. */
+export type StatisticsDays = 7 | 30 | 90;
+
+/** The Dashboard's statistics of the user's work in the Worktree's repo, each against the period before. */
+export interface Statistics {
+  days: StatisticsDays;
+  /** The user's PRs merged, into any base branch. */
+  merged: Compared<number>;
+  /** From first ready for review to merged, draft time left out. */
+  timeToMerge: Compared<Median>;
+  /** From first ready to the first review by someone else (bots left out). */
+  timeToFirstReview: Compared<Median>;
+  /** The period's open, non-draft PRs nobody else has reviewed yet. */
+  stillWaiting: number;
+  /** PRs by others the user reviewed (several reviews of one count once). */
+  reviewsGiven: Compared<number>;
+  oldestOpen: Waiting | null;
+  longestRequest: Waiting | null;
+}
+
 export type PullRequestStage = "draft" | "waitingForReview" | "changesRequested" | "checksFailing" | "approved" | "merged" | "closed";
 
 export type ReviewerState = "requested" | "approved" | "changesRequested" | "commented" | "dismissed";
@@ -920,6 +959,12 @@ export const core = {
   worktreeAttention: () => invoke<WorktreeAttention[]>("worktree_attention"),
   /** The open, non-draft PRs in the Worktree's repo asking the user for a review, most recently asked first. */
   reviewRequests: (worktree: string) => invoke<ReviewRequest[]>("review_requests", { worktree }),
+  /** The Dashboard's statistics for the Worktree's repo over the last `days` days, each against the period before. */
+  statistics: (worktree: string, days: StatisticsDays) => invoke<Statistics>("statistics", { worktree, days }),
+  /** The days the open Workspace's statistics cover (30 unless another was chosen). */
+  statisticsPeriod: () => invoke<StatisticsDays>("statistics_period"),
+  /** Chooses the days the open Workspace's statistics cover; remembered across restarts. */
+  setStatisticsPeriod: (days: StatisticsDays) => invoke<void>("set_statistics_period", { days }),
   /** The prompt that starts an Agent session on PR `number`'s failing checks (with their logs' last lines). */
   failingCheckPrompt: (worktree: string, number: number) => invoke<string>("failing_check_prompt", { worktree, number }),
   /** The prompt that starts an Agent session on PR `number`'s requested changes and unresolved threads. */

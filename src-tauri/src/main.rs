@@ -1084,6 +1084,31 @@ async fn review_requests(
         .map_err(|e| e.to_string())
 }
 
+/// The Dashboard's statistics for the Worktree's repo over the last `days` days (7, 30 or 90),
+/// each against the period before.
+#[tauri::command]
+async fn statistics(
+    core: State<'_, Core>,
+    worktree: String,
+    days: u32,
+) -> CommandResult<editor_core::Statistics> {
+    core.statistics(worktree.as_ref(), days)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The days the open Workspace's statistics cover.
+#[tauri::command]
+fn statistics_period(core: State<'_, Core>) -> u32 {
+    core.statistics_period()
+}
+
+/// Chooses the days the open Workspace's statistics cover, remembered across restarts.
+#[tauri::command]
+fn set_statistics_period(core: State<'_, Core>, days: u32) -> CommandResult<()> {
+    core.set_statistics_period(days).map_err(|e| e.to_string())
+}
+
 /// The prompt that starts an Agent session on PR `number`'s failing checks.
 #[tauri::command]
 async fn failing_check_prompt(
@@ -1457,6 +1482,13 @@ fn main() {
                     .ok()
                     .filter(|_| !bench_mode())
                     .map(|dir| dir.join("state.json")),
+                // Next to it, each Agent session's start and state changes (issue 47, for 46).
+                session_log_path: app
+                    .path()
+                    .app_data_dir()
+                    .ok()
+                    .filter(|_| !bench_mode())
+                    .map(|dir| dir.join("sessions.jsonl")),
                 ..CoreConfig::new(adapter_command(app.path().app_data_dir().ok().as_deref()))
             });
             let mut events = core.subscribe();
@@ -1571,6 +1603,9 @@ fn main() {
             my_pull_requests,
             worktree_attention,
             review_requests,
+            statistics,
+            statistics_period,
+            set_statistics_period,
             failing_check_prompt,
             review_feedback_prompt,
             rerun_checks,

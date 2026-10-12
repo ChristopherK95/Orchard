@@ -381,7 +381,7 @@ Checkpoint:
 - Commit: `Session log: each Agent session's start and state changes are recorded`
 
 ## Task 10: Tauri commands and TypeScript bindings
-Status: pending
+Status: completed
 Risk: low
 Dependencies: Task 7, Task 9
 Files:
