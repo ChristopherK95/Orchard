@@ -313,8 +313,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         if (!overMain(now)) {
           // Nothing to go back to (the Workspace opened on the Dashboard, or what had focus is gone):
           // the composer that's showing, so typing works straight away.
-          const back = focusedBefore instanceof HTMLElement && focusedBefore.isConnected && !focusedBefore.closest(".board") ? focusedBefore : document.querySelector<HTMLTextAreaElement>(".composer textarea");
-          back?.focus();
+          const usable = (el: Element | null): el is HTMLElement =>
+            el instanceof HTMLElement && el !== document.body && el.isConnected && !el.closest(".board") && el.getClientRects().length > 0;
+          const composer = [...document.querySelectorAll<HTMLTextAreaElement>(".composer textarea")].find((el) => usable(el) && !el.disabled);
+          (usable(focusedBefore) ? focusedBefore : composer)?.focus();
         } else if (!overMain(viewBefore)) focusedBefore = document.activeElement;
         viewBefore = now;
       },
