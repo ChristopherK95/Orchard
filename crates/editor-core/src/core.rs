@@ -1329,7 +1329,7 @@ impl Core {
                 .iter()
                 .map(|(root, _)| root.to_string_lossy().into_owned())
                 .collect();
-            crate::files::find(&roots, query, RECENT_WORKSPACES)
+            crate::files::find(&roots, query, RECENT_WORKSPACES, true)
                 .into_iter()
                 .filter_map(|m| Some((roots.iter().position(|r| *r == m.path)?, m.indices)))
                 .collect()
@@ -2386,15 +2386,17 @@ impl Core {
         Ok(())
     }
 
-    /// Ctrl+P: the Worktree's files best matching `query` (typos allowed, ranked below exact
-    /// matches), at most `limit`. Empty until the Worktree has been shown.
+    /// Ctrl+P (and the composer's `@` menu): the Worktree's files best matching `query`, at most
+    /// `limit`. With `typos`, ones with a typo or two are found too, ranked below exact matches.
+    /// Empty until the Worktree has been shown.
     pub async fn find_files(
         &self,
         worktree: &Path,
         query: &str,
         limit: usize,
+        typos: bool,
     ) -> Result<Vec<FileMatch>, CoreError> {
-        Ok(self.actor(worktree).await?.find(query, limit))
+        Ok(self.actor(worktree).await?.find(query, limit, typos))
     }
 
     /// The Files drawer: a folder of the Worktree (relative, `""` for its root), folders first,

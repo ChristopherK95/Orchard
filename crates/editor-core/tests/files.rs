@@ -23,7 +23,7 @@ async fn until<F: Future<Output = bool>>(what: &str, mut check: impl FnMut() -> 
 }
 
 async fn has(core: &Core, worktree: &Path, path: &str) -> bool {
-    core.find_files(worktree, path, 50)
+    core.find_files(worktree, path, 50, true)
         .await
         .unwrap()
         .iter()
@@ -149,14 +149,14 @@ async fn ctrl_p_ranks_matches_and_tolerates_typos() {
     let (_fake, core, root) = shown(repo.path(), FileWatchConfig::default()).await;
     until("the new file", || has(&core, &root, "src/praser_old.rs")).await;
 
-    let found = core.find_files(&root, "parser", 10).await.unwrap();
+    let found = core.find_files(&root, "parser", 10, true).await.unwrap();
     assert_eq!(found[0].path, "src/parser.rs", "{found:?}");
     let typo_hit = found.iter().position(|m| m.path == "src/praser_old.rs");
     assert!(
         typo_hit.is_some_and(|at| at > 0),
         "a typo match, below: {found:?}"
     );
-    let typo = core.find_files(&root, "parsr", 10).await.unwrap();
+    let typo = core.find_files(&root, "parsr", 10, true).await.unwrap();
     assert!(typo.iter().any(|m| m.path == "src/parser.rs"), "{typo:?}");
 }
 
@@ -341,7 +341,10 @@ async fn a_large_repo_is_searched_quickly() {
     let (_fake, core, root) = shown(repo.path(), FileWatchConfig::default()).await;
     assert_eq!(core.file_index_stats(&root).await.unwrap().files, 5000);
     let started = std::time::Instant::now();
-    let found = core.find_files(&root, "pkg_42 module_7", 50).await.unwrap();
+    let found = core
+        .find_files(&root, "pkg_42 module_7", 50, true)
+        .await
+        .unwrap();
     assert!(
         found.iter().any(|m| m.path == "pkg_42/src/module_7.rs"),
         "{found:?}"

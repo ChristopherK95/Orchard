@@ -588,7 +588,7 @@ impl WorktreeActor {
     }
 
     /// The best `limit` matches for `query`, best first (with no query: changed files first).
-    pub(crate) fn find(&self, query: &str, limit: usize) -> Vec<FileMatch> {
+    pub(crate) fn find(&self, query: &str, limit: usize, typos: bool) -> Vec<FileMatch> {
         let empty = query.trim().is_empty();
         let (files, changed) = {
             let mut state = self.state.lock().expect("index lock");
@@ -625,7 +625,7 @@ impl WorktreeActor {
                 })
                 .collect();
         }
-        find(&files, query, limit)
+        find(&files, query, limit, typos)
     }
 
     /// The entries of folder `dir` (relative, `""` for the root): folders first, then files.
@@ -806,11 +806,16 @@ async fn poll(weak: Weak<WorktreeActor>, interval: Duration, news: NewsSink) {
     }
 }
 
-/// The best `limit` of `files` for `query`, best first. Typos are allowed in longer queries (one
-/// per four characters, up to two); a typo costs score, so exact matches rank above typo ones.
-pub(crate) fn find(files: &[String], query: &str, limit: usize) -> Vec<FileMatch> {
+/// The best `limit` of `files` for `query`, best first. With `typos`, longer queries may have some
+/// (one per four characters, up to two); a typo costs score, so exact matches rank above typo ones.
+/// Without, every file has all of the query's characters in order: typing more only narrows them.
+pub(crate) fn find(files: &[String], query: &str, limit: usize, typos: bool) -> Vec<FileMatch> {
     let query = query.trim();
-    let typos = (query.chars().count() / 4).min(2) as u16;
+    let typos = if typos {
+        (query.chars().count() / 4).min(2) as u16
+    } else {
+        0
+    };
     let config = frizbee::Config {
         max_typos: Some(typos),
         ..frizbee::Config::default()
@@ -849,16 +854,40 @@ mod tests {
     #[test]
     fn exact_matches_rank_above_typos_and_typos_still_match() {
         let all = files(&["src/praser.rs", "src/parser.rs", "docs/readme.md"]);
-        let found = find(&all, "parser", 10);
+        let found = find(&all, "parser", 10, true);
         assert_eq!(found[0].path, "src/parser.rs", "{found:?}");
-        let typo = find(&all, "parsr", 10);
+        let typo = find(&all, "parsr", 10, true);
         assert!(typo.iter().any(|m| m.path == "src/parser.rs"), "{typo:?}");
-        assert!(find(&all, "zzzzzz", 10).is_empty());
+        assert!(find(&all, "zzzzzz", 10, true).is_empty());
+    }
+
+    #[test]
+    fn without_typos_a_longer_query_only_narrows() {
+        let all = files(&[
+            "src/Chat.tsx",
+            "Cargo.toml",
+            "src/CommandPalette.tsx",
+            "src/dashboardData.ts",
+        ]);
+        let mut before = find(&all, "c", 10, false).len();
+        for query in [
+            "ch", "cha", "chat", "chat.", "chat.t", "chat.ts", "chat.tsx",
+        ] {
+            let found = find(&all, query, 10, false);
+            assert!(found.len() <= before, "{query}: {found:?}");
+            before = found.len();
+        }
+        let found = find(&all, "chat.tsx", 10, false);
+        assert_eq!(
+            found.iter().map(|m| m.path.as_str()).collect::<Vec<_>>(),
+            ["src/Chat.tsx"]
+        );
+        assert!(find(&all, "parsr", 10, false).is_empty());
     }
 
     #[test]
     fn matched_characters_are_marked() {
-        let found = find(&files(&["src/core.rs"]), "core", 10);
+        let found = find(&files(&["src/core.rs"]), "core", 10, true);
         assert_eq!(found[0].indices.len(), 4);
     }
 
@@ -868,7 +897,7 @@ mod tests {
             .map(|i| format!("crates/module_{}/src/file_{i}.rs", i % 300))
             .collect();
         let started = std::time::Instant::now();
-        let found = find(&all, "module_42 file_4242", 50);
+        let found = find(&all, "module_42 file_4242", 50, true);
         assert!(!found.is_empty());
         // Generous for a debug build; release is far faster.
         assert!(

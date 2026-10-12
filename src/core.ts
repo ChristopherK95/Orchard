@@ -830,7 +830,10 @@ export const core = {
   /** The Worktree being looked at (its files are indexed and watched). */
   showWorktree: (worktree: string) => invoke<void>("show_worktree", { worktree }),
   /** Ctrl+P: files best matching `query`, typos allowed. */
-  findFiles: (worktree: string, query: string, limit: number) => invoke<FileMatch[]>("find_files", { worktree, query, limit }),
+  /** With `typos`, files a typo or two away match too (Ctrl+P); without, only ones with all of the
+   *  query's characters in order (the `@` menu, which then narrows as more is typed). */
+  findFiles: (worktree: string, query: string, limit: number, typos = true) =>
+    invoke<FileMatch[]>("find_files", { worktree, query, limit, typos }),
   /** A folder (`""` = the Worktree's root) for the Files drawer. */
   listDir: (worktree: string, dir: string) => invoke<DirEntry[]>("list_dir", { worktree, dir }),
   /** The open Tabs in order (after a restart, the restored ones, Suspended). */

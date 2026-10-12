@@ -710,6 +710,11 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .composer-inner { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 .composer textarea { width: 100%; resize: none; height: 44px; min-height: 22px; padding: 0; background: transparent; border: 0; border-radius: 0; font-size: 14px; line-height: 1.5; }
 .composer textarea:focus { box-shadow: none; }
+/* Mentions of files: marked by a copy of the text behind the (transparent) input, laid out alike. */
+.composer-field { position: relative; display: flex; }
+.composer-field textarea { position: relative; scrollbar-gutter: stable; }
+.mention-marks { position: absolute; inset: 0; overflow: hidden; scrollbar-gutter: stable; pointer-events: none; font-size: 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: break-word; color: transparent; }
+.mention-marks mark { color: transparent; background: color-mix(in srgb, var(--info) 20%, transparent); border-radius: 4px; box-shadow: 0 0 0 2px color-mix(in srgb, var(--info) 20%, transparent); }
 .composer-resize { position: absolute; z-index: 1; top: -6px; left: 24px; right: 24px; height: 12px; display: grid; place-items: center; cursor: row-resize; touch-action: none; }
 .composer-resize .grip { width: 28px; height: 4px; border-radius: 2px; background: var(--line-strong); opacity: 0; transition: opacity 80ms; }
 body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-resize; }
@@ -1187,6 +1192,13 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .slash-item .hint { font: 11.5px var(--mono); color: var(--fg-dim); flex: none; }
 .slash-item .desc { font-size: 12.5px; color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .slash-empty { margin: 0; padding: 10px 12px; font-size: 12.5px; color: var(--fg-3); }
+/* The `@` menu: the Worktree's files, the name over its path (relative to the Worktree). */
+.mention-item { min-height: 40px; align-items: center; padding: 4px 8px; }
+.mention-item .lucide { flex: none; color: var(--fg-3); }
+.mention-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.mention-name { font: 12.5px var(--mono); color: var(--fg-1); }
+.mention-name .hit { font-weight: 600; text-decoration: underline; text-decoration-color: var(--fg-dim); text-underline-offset: 2px; }
+.mention-path { font-size: 11px; color: var(--fg-3); opacity: 0.75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* The composer floats over the bottom of the transcript, which runs on underneath and fades out
    behind it (the transcript keeps room below its last item; see Transcript's bottomInset). Only

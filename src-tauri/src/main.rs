@@ -657,15 +657,16 @@ async fn show_worktree(core: State<'_, Core>, worktree: String) -> CommandResult
         .map_err(|e| e.to_string())
 }
 
-/// Ctrl+P.
+/// Ctrl+P, and the composer's `@` menu.
 #[tauri::command]
 async fn find_files(
     core: State<'_, Core>,
     worktree: String,
     query: String,
     limit: usize,
+    typos: bool,
 ) -> CommandResult<Vec<FileMatch>> {
-    core.find_files(worktree.as_ref(), &query, limit)
+    core.find_files(worktree.as_ref(), &query, limit, typos)
         .await
         .map_err(|e| e.to_string())
 }
