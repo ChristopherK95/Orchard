@@ -8,7 +8,6 @@ import { createSlashMenu, SlashMenu, useSlashCommands } from "./SlashCommands";
 import {
   ArrowUp,
   BookOpen,
-  ChevronDown,
   CirclePlay,
   Clock,
   FileText,
@@ -169,6 +168,45 @@ const MODE_LABEL: Record<PermissionMode, string> = {
   auto: "Auto",
 };
 
+function ModeIcon(props: { mode: PermissionMode }) {
+  return (
+    <Switch fallback={<ShieldQuestion />}>
+      <Match when={props.mode === "acceptEdits"}>
+        <Zap />
+      </Match>
+      <Match when={props.mode === "plan"}>
+        <BookOpen />
+      </Match>
+      <Match when={props.mode === "auto"}>
+        <Sparkles />
+      </Match>
+    </Switch>
+  );
+}
+
+/** The permission modes as a row of icon tabs, the current one lit. */
+function ModeTabs(props: { mode: PermissionMode; onPick: (mode: PermissionMode) => void }) {
+  return (
+    <div class="mode-tabs" role="radiogroup" aria-label="Permission mode">
+      <For each={Object.keys(MODE_LABEL) as PermissionMode[]}>
+        {(mode) => (
+          <button
+            class={`mode-tab ${mode}`}
+            classList={{ on: mode === props.mode }}
+            role="radio"
+            aria-checked={mode === props.mode}
+            aria-label={MODE_LABEL[mode]}
+            title={MODE_LABEL[mode]}
+            onClick={() => mode !== props.mode && props.onPick(mode)}
+          >
+            <ModeIcon mode={mode} />
+          </button>
+        )}
+      </For>
+    </div>
+  );
+}
+
 /** Unsent composer text and attachments by session. */
 const drafts = new Map<SessionId, { text: string; attachments: Attachment[] }>();
 
@@ -182,6 +220,10 @@ export function setDraft(session: SessionId, text: string) {
   if (shown?.size) shown.forEach((take) => take(text));
   else drafts.set(session, { text, attachments: drafts.get(session)?.attachments ?? [] });
 }
+
+/** The input's height, set by dragging the composer's top edge: one for every composer. */
+const INPUT_HEIGHT = 44;
+const [inputHeight, setInputHeight] = createSignal(INPUT_HEIGHT);
 
 /** Reports an element's height as it changes (the floating composer's, for the transcript). */
 export function reportHeight(el: HTMLElement, onHeight?: (px: number) => void) {
@@ -330,13 +372,12 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
     }),
   );
 
-  const setMode = async (select: HTMLSelectElement) => {
+  const setMode = async (mode: PermissionMode) => {
     setError("");
     try {
-      await core.setPermissionMode(props.session.id, select.value as PermissionMode);
+      await core.setPermissionMode(props.session.id, mode);
     } catch (err) {
       setError(String(err));
-      select.value = props.session.permissionMode; // back to the mode it's really in
     }
   };
 
@@ -376,6 +417,31 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
   };
 
   const locked = () => props.session.state === "exited" || props.session.state === "needsYou";
+
+  /** Dragging the box's top edge sets the input's height (up to most of the window). */
+  const [resizing, setResizing] = createSignal(false);
+  const resize = (e: PointerEvent) => {
+    // Not a text selection across the page.
+    e.preventDefault();
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
+    const start = e.clientY;
+    const startHeight = input.offsetHeight;
+    const max = Math.max(INPUT_HEIGHT, window.innerHeight * 0.6);
+    setResizing(true);
+    document.body.classList.add("resizing-rows");
+    const move = (m: PointerEvent) => setInputHeight(Math.min(max, Math.max(INPUT_HEIGHT, startHeight + start - m.clientY)));
+    const up = () => {
+      setResizing(false);
+      document.body.classList.remove("resizing-rows");
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+  };
 
   return (
     <div class="composer" ref={(el) => ((root = el), reportHeight(el, props.onHeight))} style={{ "--c": worktreeColour(props.session.worktree) }}>
@@ -430,6 +496,15 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
         </p>
       </Show>
       <div class="composer-box" classList={{ locked: locked(), dropping: dropping(), working: working() }}>
+        <div
+          class="composer-resize"
+          classList={{ dragging: resizing() }}
+          onPointerDown={resize}
+          onDblClick={() => setInputHeight(INPUT_HEIGHT)}
+          title="Drag to resize; double-click to reset"
+        >
+          <span class="grip" />
+        </div>
         <Show when={slash.open() && !locked()}>
           <SlashMenu
             items={slash.items()}
@@ -442,6 +517,7 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
         <div class="composer-inner">
           <textarea
             ref={input}
+            style={{ height: `${inputHeight()}px` }}
             value={text()}
             onInput={(e) => setText(e.currentTarget.value)}
             onPaste={onPaste}
@@ -477,24 +553,7 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
             >
               <Paperclip />
             </button>
-            <label class={`mode-pill ${props.session.permissionMode}`} title="Permission mode">
-              <Switch fallback={<ShieldQuestion />}>
-                <Match when={props.session.permissionMode === "acceptEdits"}>
-                  <Zap />
-                </Match>
-                <Match when={props.session.permissionMode === "plan"}>
-                  <BookOpen />
-                </Match>
-                <Match when={props.session.permissionMode === "auto"}>
-                  <Sparkles />
-                </Match>
-              </Switch>
-              {MODE_LABEL[props.session.permissionMode]}
-              <ChevronDown class="chev" />
-              <select value={props.session.permissionMode} onChange={(e) => void setMode(e.currentTarget)}>
-                <For each={Object.keys(MODE_LABEL) as PermissionMode[]}>{(mode) => <option value={mode}>{MODE_LABEL[mode]}</option>}</For>
-              </select>
-            </label>
+            <ModeTabs mode={props.session.permissionMode} onPick={(mode) => void setMode(mode)} />
             <Show when={props.session.state === "suspended"}>
               <span class="hint">Sending resumes this session</span>
             </Show>

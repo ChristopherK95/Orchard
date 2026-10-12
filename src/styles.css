@@ -668,6 +668,10 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .composer-inner { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 .composer textarea { width: 100%; resize: none; height: 44px; min-height: 22px; padding: 0; background: transparent; border: 0; border-radius: 0; font-size: 14px; line-height: 1.5; }
 .composer textarea:focus { box-shadow: none; }
+.composer-resize { position: absolute; z-index: 1; top: -6px; left: 24px; right: 24px; height: 12px; display: grid; place-items: center; cursor: row-resize; touch-action: none; }
+.composer-resize .grip { width: 28px; height: 4px; border-radius: 2px; background: var(--line-strong); opacity: 0; transition: opacity 80ms; }
+body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-resize; }
+.composer-resize:hover .grip, .composer-resize.dragging .grip { opacity: 1; }
 .composer-bar { display: flex; align-items: center; gap: 6px; }
 .composer-bar .hint { font-size: 12px; color: var(--fg-3); }
 .composer-bar .send { min-height: 28px; padding: 0 10px; }
@@ -690,15 +694,13 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 }
 .composer-box.dropping { border-color: var(--ring); border-style: dashed; }
 /* The permission mode, as an outline button; the riskier mode is warm, Plan is cool. */
-.mode-pill { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-md); color: var(--fg-1); font-size: 13px; font-weight: 500; }
-.mode-pill:hover { background: var(--bg-3); }
-.mode-pill .lucide { width: 14px; height: 14px; }
-.mode-pill .chev { width: 12px; height: 12px; opacity: 0.6; }
-.mode-pill select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
-.mode-pill:focus-within { outline: 2px solid var(--ring); outline-offset: 2px; }
-.mode-pill.acceptEdits { border-color: var(--needs-border); color: var(--needs-text); }
-.mode-pill.plan { border-color: var(--info-border); color: var(--info); }
-.mode-pill.auto { border-color: var(--needs-border); color: var(--needs-text); }
+.mode-tabs { display: inline-flex; align-items: center; gap: 2px; padding: 2px; background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-md); }
+.mode-tab { min-height: 22px; width: 26px; padding: 0; background: transparent; border: 1px solid transparent; border-radius: var(--r-sm); color: var(--fg-3); }
+.mode-tab:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-2); }
+.mode-tab .lucide { width: 14px; height: 14px; }
+.mode-tab.on, .mode-tab.on:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-1); }
+.mode-tab.on.acceptEdits, .mode-tab.on.auto { border-color: var(--needs-border); color: var(--needs-text); }
+.mode-tab.on.plan { border-color: var(--info-border); color: var(--info); }
 
 /* Edit notes: chips above the composer, removable one by one. */
 .edit-notes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
