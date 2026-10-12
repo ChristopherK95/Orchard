@@ -209,6 +209,27 @@ function ModeTabs(props: { mode: PermissionMode; onPick: (mode: PermissionMode) 
 
 /** Unsent composer text and attachments by session. */
 const drafts = new Map<SessionId, { text: string; attachments: Attachment[] }>();
+/** The open composers, by session: what puts an answer into their draft. */
+const answerers = new Map<SessionId, (line: string) => void>();
+
+/** Puts "1: (a)" into a draft: in place of an earlier answer to question 1, or on a line of its own. */
+function withAnswer(text: string, line: string): string {
+  const [question, answer] = line.split(/(?<=^\d+:) /);
+  const earlier = new RegExp(`^${question} (\\([a-z]\\)|as recommended)`);
+  const lines = text ? text.split("\n") : [];
+  const at = lines.findIndex((l) => earlier.test(l));
+  if (at >= 0) lines[at] = lines[at].replace(earlier, `${question} ${answer}`);
+  else lines.push(line);
+  return lines.join("\n");
+}
+
+/** Answers a question card in the session's draft (its composer's, if one is open). */
+export function answerInDraft(sessionId: SessionId, line: string) {
+  const answerer = answerers.get(sessionId);
+  if (answerer) return answerer(line);
+  const draft = drafts.get(sessionId) ?? { text: "", attachments: [] };
+  drafts.set(sessionId, { ...draft, text: withAnswer(draft.text, line) });
+}
 
 /** The composers showing now, by session: each takes a draft put in while it's up. */
 const shownComposers = new Map<SessionId, Set<(text: string) => void>>();
@@ -273,6 +294,13 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
   // (Not while the Dashboard or a Board over it has the keyboard.)
   const focus = () => !document.activeElement?.closest(".board") && input.focus();
   onMount(focus);
+  const answerer = (line: string) => {
+    setText(withAnswer(text(), line));
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  };
+  answerers.set(props.session.id, answerer);
+  onCleanup(() => answerers.get(props.session.id) === answerer && answerers.delete(props.session.id));
   // Back to the composer once a turn (or a permission question) is over.
   createEffect(() => props.session.state === "idle" && focus());
 

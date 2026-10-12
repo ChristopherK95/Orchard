@@ -6,6 +6,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { createVirtualizer } from "@tanstack/solid-virtual";
 import { createEffect, createMemo, createSignal, For, type JSX, on, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
+import { answerInDraft } from "./Chat";
 import type { PermissionRequest, SessionId, TranscriptItem } from "./core";
 import { BookOpen, Brain, Check, ChevronRight, Globe, Loader, MoveRight, Paperclip, Pencil, Play, TextSearch, Trash2, Wrench } from "./icons";
 import { handleTranscriptClick, renderMarkdown } from "./markdown";
@@ -136,7 +137,7 @@ export function Transcript(props: {
       class="transcript"
       ref={scroller}
       onScroll={onScroll}
-      onClick={(e) => void handleTranscriptClick(e, openUrl, props.onOpenSnippet, props.onError)}
+      onClick={(e) => void handleTranscriptClick(e, openUrl, props.onOpenSnippet, (line) => answerInDraft(props.sessionId, line), props.onError)}
     >
       <div class="transcript-inner" style={{ height: `${virtualizer.getTotalSize()}px` }}>
         <For each={rowKeys()}>
