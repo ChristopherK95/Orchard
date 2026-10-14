@@ -1180,6 +1180,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             toMainView();
             if (mainView() === "columns" || id !== activeId()) void show(id);
           }}
+          onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })}
+          onOpenProposal={(sessionId, request) => openInEditor({ kind: "proposal", sessionId, request })}
+          onError={setError}
         />
       </Show>
       <Show when={view() === "dashboard"}>

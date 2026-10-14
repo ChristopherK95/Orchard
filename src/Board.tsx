@@ -1,16 +1,20 @@
 // The Board (ticket 22): every Agent session in the Workspace in columns by state (Needs you,
 // Working, Idle, Suspended/Exited), filterable by Worktree. A card waiting on a permission can be
-// allowed or denied from here; clicking a card opens its Tab. Cards move as states change: they're
-// drawn from the same session store as the Tabs.
-import { createMemo, createResource, createSignal, For, type JSX, Show } from "solid-js";
-import { core, type SessionInfo, type SessionState } from "./core";
+// allowed or denied from here; clicking a card expands it into its conversation and a composer, and a
+// button there opens its Tab. Cards move as states change (and are lit for a few seconds when they
+// do): they're drawn from the same session store as the Tabs.
+import { createEffect, createMemo, createResource, createSignal, For, type JSX, onCleanup, Show } from "solid-js";
+import { core, type PermissionRequest, type SessionId, type SessionInfo, type SessionState } from "./core";
 import { Avatar } from "./Avatar";
-import { CirclePause, CirclePlay, GitBranch } from "./icons";
+import { Composer } from "./Chat";
+import { CirclePause, CirclePlay, GitBranch, Search, X } from "./icons";
 import { noOption, yesOption } from "./PermissionCard";
 import { PrButton } from "./PrOverlay";
 import { settleProposal } from "./proposals";
 import { ContextBar, useSessionFacts } from "./sessionFacts";
 import { StateDot } from "./StateDot";
+import { createTabView } from "./TabView";
+import { Transcript } from "./Transcript";
 import { worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 
 const COLUMNS: { title: string; states: SessionState[] }[] = [
@@ -27,6 +31,10 @@ const SUMMARY: Partial<Record<SessionState, string>> = {
   exited: "The Agent process ended.",
 };
 
+/** How long a card that changed column stays lit. */
+const MOVED_FOR_MS = 6000;
+const BOARD_SLOT = "board";
+
 export function Board(props: {
   sessions: SessionInfo[];
   worktrees: WorktreeTab[];
@@ -39,8 +47,41 @@ export function Board(props: {
   top: number;
   /** The Workspace's error and notice banners, shown here too. */
   banners?: JSX.Element;
+  /** Opens the session's Tab. */
   onOpen: (id: number) => void;
+  /** "Open in editor" on a code block or a file edit's permission card in an expanded card. */
+  onOpenSnippet: (code: string, label: string) => void;
+  onOpenProposal: (sessionId: SessionId, request: PermissionRequest) => void;
+  onError: (message: string) => void;
 }) {
+  const [expanded, setExpanded] = createSignal<SessionId | null>(null);
+  const expandedSession = () => props.sessions.find((s) => s.id === expanded());
+  // A card that moves to another column is lit for a few seconds, so it's clear what changed.
+  const [moved, setMoved] = createSignal<ReadonlySet<SessionId>>(new Set());
+  const lastState = new Map<SessionId, SessionState>();
+  const timers = new Map<SessionId, ReturnType<typeof setTimeout>>();
+  const column = (state: SessionState) => COLUMNS.findIndex((c) => c.states.includes(state));
+  createEffect(() => {
+    for (const s of props.sessions) {
+      const before = lastState.get(s.id);
+      lastState.set(s.id, s.state);
+      if (before === undefined || column(before) === column(s.state)) continue;
+      setMoved((all) => new Set(all).add(s.id));
+      clearTimeout(timers.get(s.id));
+      timers.set(
+        s.id,
+        setTimeout(() => {
+          timers.delete(s.id);
+          setMoved((all) => {
+            const rest = new Set(all);
+            rest.delete(s.id);
+            return rest;
+          });
+        }, MOVED_FOR_MS),
+      );
+    }
+  });
+  onCleanup(() => timers.forEach(clearTimeout));
   const shown = createMemo(() => props.sessions.filter((s) => props.only === null || s.worktree === props.only));
   const label = (path: string) => {
     const w = props.worktrees.find((w) => w.path === path);
@@ -92,18 +133,107 @@ export function Board(props: {
                   </span>
                 </div>
                 <For each={cards()} fallback={<p class="board-empty">None</p>}>
-                  {(session) => <Card session={session} worktree={label(session.worktree) ?? ""} onOpen={() => props.onOpen(session.id)} onOpenPr={() => props.onOpenPr(session.worktree)} />}
+                  {(session) => (
+                    <Card
+                      session={session}
+                      worktree={label(session.worktree) ?? ""}
+                      moved={moved().has(session.id)}
+                      onExpand={() => setExpanded(session.id)}
+                      onOpen={() => props.onOpen(session.id)}
+                      onOpenPr={() => props.onOpenPr(session.worktree)}
+                    />
+                  )}
                 </For>
               </div>
             );
           }}
         </For>
       </div>
+      <Show when={expandedSession()} keyed>
+        {(session) => (
+          <Expanded
+            session={session}
+            worktree={label(session.worktree) ?? ""}
+            onClose={() => setExpanded(null)}
+            onOpen={() => props.onOpen(session.id)}
+            onOpenSnippet={props.onOpenSnippet}
+            onOpenProposal={props.onOpenProposal}
+            onError={props.onError}
+          />
+        )}
+      </Show>
     </section>
   );
 }
 
-function Card(props: { session: SessionInfo; worktree: string; onOpen: () => void; onOpenPr: () => void }) {
+/** A card opened up over the Board: the session's conversation and a composer to prompt it from here. */
+function Expanded(props: {
+  session: SessionInfo;
+  worktree: string;
+  onClose: () => void;
+  onOpen: () => void;
+  onOpenSnippet: (code: string, label: string) => void;
+  onOpenProposal: (sessionId: SessionId, request: PermissionRequest) => void;
+  onError: (message: string) => void;
+}) {
+  const id = props.session.id;
+  const view = createTabView(BOARD_SLOT);
+  view.show(id).catch((err) => props.onError(String(err)));
+  onCleanup(() => view.hide());
+  const [composerHeight, setComposerHeight] = createSignal(0);
+  const facts = useSessionFacts(() => props.session);
+  return (
+    <div class="board-scrim" onClick={props.onClose}>
+      <div
+        class="board-expanded"
+        style={{ "--c": worktreeColour(props.session.worktree) }}
+        onClick={(e) => e.stopPropagation()}
+        // (Escape closes this first; the Board's own Escape leaves for the Tabs.)
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            props.onClose();
+          }
+        }}
+      >
+        <div class="board-expanded-head">
+          <Avatar name={props.session.name} colour={worktreeColour(props.session.worktree)} size={28} />
+          <span class="who">
+            <b>{props.session.name}</b>
+            <span class="wt">
+              <GitBranch />
+              {props.worktree}
+            </span>
+          </span>
+          <StateDot state={props.session.state} />
+          <span class="grow" />
+          <ContextBar context={facts.context()} />
+          <button class="ghost icon" onClick={props.onOpen} title="Open in Tabs" aria-label="Open in Tabs">
+            <Search />
+          </button>
+          <button class="ghost icon" onClick={props.onClose} title="Close (Esc)" aria-label="Close">
+            <X />
+          </button>
+        </div>
+        <div class="board-expanded-body">
+          <Transcript
+            sessionId={id}
+            items={view.items}
+            start={view.start()}
+            onLoadEarlier={view.loadEarlier}
+            onError={props.onError}
+            onOpenSnippet={props.onOpenSnippet}
+            onOpenProposal={props.onOpenProposal}
+            bottomInset={composerHeight}
+          />
+          <Composer session={props.session} onHeight={setComposerHeight} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Card(props: { session: SessionInfo; worktree: string; moved: boolean; onExpand: () => void; onOpen: () => void; onOpenPr: () => void }) {
   // The question it's waiting on, read again whenever it comes to need you (or is answered).
   const [pending, { refetch }] = createResource(
     () => (props.session.state === "needsYou" ? props.session.id : null),
@@ -128,12 +258,29 @@ function Card(props: { session: SessionInfo; worktree: string; onOpen: () => voi
   };
 
   return (
-    // (The whole card opens the Tab with the mouse; its name is the button for the keyboard.)
-    <div class={`board-card ${props.session.state}`} style={{ "--c": worktreeColour(props.session.worktree) }} onClick={() => props.onOpen()}>
+    // (The whole card expands with the mouse; its name is the button for the keyboard.)
+    <div
+      class={`board-card ${props.session.state}`}
+      classList={{ moved: props.moved }}
+      style={{ "--c": worktreeColour(props.session.worktree) }}
+      onClick={() => props.onExpand()}
+    >
       <div class="board-card-top">
         <GitBranch />
         <span class="wt">{props.worktree}</span>
+        <span class="grow" />
         <PrButton worktree={props.session.worktree} class="ghost" compact onOpen={props.onOpenPr} />
+        <button
+          class="ghost icon board-card-tabs"
+          onClick={(e) => {
+            e.stopPropagation();
+            props.onOpen();
+          }}
+          title="Open in Tabs"
+          aria-label="Open in Tabs"
+        >
+          <Search />
+        </button>
       </div>
       <div class="board-card-head" title={facts.title()}>
         <Avatar name={props.session.name} colour={worktreeColour(props.session.worktree)} size={36} />
@@ -143,9 +290,9 @@ function Card(props: { session: SessionInfo; worktree: string; onOpen: () => voi
               class="board-card-open"
               onClick={(e) => {
                 e.stopPropagation();
-                props.onOpen();
+                props.onExpand();
               }}
-              title="Open its Tab"
+              title="Expand to the conversation"
             >
               {props.session.name}
             </button>
