@@ -1023,6 +1023,22 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .board-card:hover { background: var(--card-focus); border-color: var(--card-focus); }
 .board-card:focus-within, .board-card:focus-visible { background: var(--bg-3); border-color: var(--bg-3); }
 .board-card.needsYou { border-color: var(--needs-border); }
+.board-card.moved { animation: board-moved 6s ease-out; }
+@keyframes board-moved {
+  0%, 70% { background: color-mix(in srgb, var(--working) 28%, var(--card)); border-color: var(--working); box-shadow: 0 0 0 2px color-mix(in srgb, var(--working) 45%, transparent); }
+  100% { box-shadow: 0 0 0 2px transparent; }
+}
+.board-card-top .grow { flex: 1; }
+.board-card-tabs { min-height: 22px; width: 22px; padding: 0; color: var(--fg-3); }
+.board-card-tabs .lucide { width: 13px; height: 13px; color: currentColor; }
+.board-card.expanded { cursor: default; }
+.board-collapse { display: grid; grid-template-rows: 0fr; opacity: 0; margin: 4px -8px -4px -21px; transition: grid-template-rows 0.2s ease, opacity 0.2s ease; }
+.board-collapse.open { grid-template-rows: 1fr; opacity: 1; }
+.board-collapse-inner { min-height: 0; overflow: hidden; }
+@media (prefers-reduced-motion: reduce) { .board-collapse { transition: none; } }
+.board-convo { --card: #18181b; --card-focus: #1e1e22; height: 420px; display: flex; flex-direction: column; position: relative; cursor: default; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.board-convo .composer { background: linear-gradient(to bottom, rgba(17, 17, 19, 0) 0%, rgba(17, 17, 19, 0.9) 35%, var(--bg-2) 60%); padding: 18px 8px 8px; }
+.board-convo .composer > * { width: 100%; }
 .board-card-top { display: flex; align-items: center; gap: 6px; font: 11.5px var(--mono); color: var(--fg-3); min-width: 0; }
 .board-card-top .lucide { width: 11px; height: 11px; color: var(--c); }
 .board-card-top .wt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
