@@ -324,7 +324,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .group-label { flex: none; display: flex; align-items: center; gap: 2px; height: 28px; padding: 0 2px 0 8px; font-size: 12px; font-weight: 500; color: var(--fg-3); }
 .group-label button.icon { min-height: 22px; width: 22px; color: var(--fg-3); }
 .group-label .lucide { width: 14px; height: 14px; }
-.sidebar-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; scrollbar-width: thin; scrollbar-gutter: stable; padding-right: 6px; }
+.sidebar-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; scrollbar-gutter: stable; padding-right: 6px; }
 .sidebar-item { flex: none; justify-content: flex-start; gap: 8px; min-height: 32px; padding: 0 8px; background: transparent; border: 0; color: var(--fg-2); font-weight: 400; text-align: left; }
 .sidebar-item:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-1); }
 .sidebar-item.on { background: var(--bg-4); color: var(--fg-1); font-weight: 500; }
