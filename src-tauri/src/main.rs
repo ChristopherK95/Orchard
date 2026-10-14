@@ -697,6 +697,13 @@ fn sessions(core: State<'_, Core>) -> Vec<SessionInfo> {
 
 /// Closes a Tab; its session goes to the Worktree's Recent sessions.
 #[tauri::command]
+async fn clear_session(core: State<'_, Core>, session_id: SessionId) -> CommandResult<SessionId> {
+    core.clear_session(session_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn close_tab(core: State<'_, Core>, session_id: SessionId) -> CommandResult<()> {
     core.close_tab(session_id).await.map_err(|e| e.to_string())
 }
@@ -1578,6 +1585,7 @@ fn main() {
             find_files,
             list_dir,
             close_tab,
+            clear_session,
             recent_sessions,
             reopen_session,
             other_conversations,

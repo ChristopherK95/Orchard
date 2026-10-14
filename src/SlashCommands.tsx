@@ -11,6 +11,9 @@ const [bySession, setBySession] = createStore<Record<SessionId, SlashCommand[]>>
 const [byWorktree, setByWorktree] = createStore<Record<string, SlashCommand[]>>({});
 let listening = false;
 
+/** Orchard's own command: the Agent doesn't offer a `/clear`, so Orchard runs it (`core.clearSession`). */
+export const CLEAR_COMMAND: SlashCommand = { name: "clear", description: "Clear the conversation and start a fresh one", hint: null };
+
 /** The commands to offer in a session (reactive). */
 export function useSlashCommands(session: () => SessionInfo): () => SlashCommand[] {
   if (!listening) {
@@ -36,7 +39,8 @@ export function useSlashCommands(session: () => SessionInfo): () => SlashCommand
   });
   return () => {
     const s = session();
-    return bySession[s.id]?.length ? bySession[s.id] : (byWorktree[s.worktree] ?? []);
+    const offered = bySession[s.id]?.length ? bySession[s.id] : (byWorktree[s.worktree] ?? []);
+    return offered.some((c) => c.name === CLEAR_COMMAND.name) ? offered : [CLEAR_COMMAND, ...offered];
   };
 }
 

@@ -1530,7 +1530,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
               onOpenProposal={(sessionId, request) => openInEditor({ kind: "proposal", sessionId, request })}
               bottomInset={composerHeight}
             />
-            <Composer session={s} onHeight={setComposerHeight} />
+            <Composer session={s} onHeight={setComposerHeight} onCleared={(id) => void show(id)} />
           </>
         )}
       </Show>

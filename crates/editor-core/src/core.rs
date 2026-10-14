@@ -3673,6 +3673,31 @@ impl Core {
         Ok(())
     }
 
+    /// Clears a session's context (`/clear`): a fresh conversation in the same Worktree, with the
+    /// same permission mode, takes the Tab's place. The old conversation goes to the Worktree's
+    /// Recent sessions, so nothing is lost. Refused while the Agent is working.
+    pub async fn clear_session(&self, id: SessionId) -> Result<SessionId, CoreError> {
+        let session = self.session(id)?;
+        session.wait_settled().await;
+        session.update(|control| {
+            if control.in_transition() {
+                return Err(CoreError::SessionInTransition);
+            }
+            match control.state() {
+                SessionState::Working | SessionState::NeedsYou => Err(CoreError::SessionBusy),
+                _ => Ok(()),
+            }
+        })?;
+        let saved = session.saved();
+        let fresh = self.start_session_in(&saved.worktree).await?;
+        if saved.permission_mode != PermissionMode::AskForEdits {
+            // The context is cleared either way; a mode that won't carry over isn't worth failing for.
+            let _ = self.set_permission_mode(fresh, saved.permission_mode).await;
+        }
+        self.close_tab(id).await?;
+        Ok(fresh)
+    }
+
     /// Reopens one of the Recent sessions in a new Tab, with its conversation.
     pub async fn reopen_session(&self, acp_id: &str) -> Result<SessionId, CoreError> {
         let saved = {
