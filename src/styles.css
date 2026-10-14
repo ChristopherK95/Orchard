@@ -1028,7 +1028,11 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .board-card-tabs { min-height: 22px; width: 22px; padding: 0; color: var(--fg-3); }
 .board-card-tabs .lucide { width: 13px; height: 13px; color: currentColor; }
 .board-card.expanded { cursor: default; }
-.board-convo { --card: #18181b; --card-focus: #1e1e22; height: 420px; margin: 4px -8px -4px -21px; display: flex; flex-direction: column; position: relative; cursor: default; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.board-collapse { display: grid; grid-template-rows: 0fr; opacity: 0; margin: 4px -8px -4px -21px; transition: grid-template-rows 0.2s ease, opacity 0.2s ease; }
+.board-collapse.open { grid-template-rows: 1fr; opacity: 1; }
+.board-collapse-inner { min-height: 0; overflow: hidden; }
+@media (prefers-reduced-motion: reduce) { .board-collapse { transition: none; } }
+.board-convo { --card: #18181b; --card-focus: #1e1e22; height: 420px; display: flex; flex-direction: column; position: relative; cursor: default; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .board-convo .composer { background: linear-gradient(to bottom, rgba(17, 17, 19, 0) 0%, rgba(17, 17, 19, 0.9) 35%, var(--bg-2) 60%); padding: 18px 8px 8px; }
 .board-convo .composer > * { width: 100%; }
 .board-card-top { display: flex; align-items: center; gap: 6px; font: 11.5px var(--mono); color: var(--fg-3); min-width: 0; }

@@ -212,6 +212,21 @@ function Card(props: {
   const facts = useSessionFacts(() => props.session);
   const [answering, setAnswering] = createSignal(false);
   const [error, setError] = createSignal("");
+  // The conversation stays mounted while it animates closed, and is mounted one frame before it animates open.
+  const [mounted, setMounted] = createSignal(props.expanded);
+  const [open, setOpen] = createSignal(props.expanded);
+  let collapseTimer: ReturnType<typeof setTimeout> | undefined;
+  createEffect(() => {
+    clearTimeout(collapseTimer);
+    if (props.expanded) {
+      setMounted(true);
+      requestAnimationFrame(() => requestAnimationFrame(() => setOpen(props.expanded)));
+    } else {
+      setOpen(false);
+      collapseTimer = setTimeout(() => setMounted(false), 220);
+    }
+  });
+  onCleanup(() => clearTimeout(collapseTimer));
   const act = (action: Promise<void>) => action.catch((err) => setError(String(err)));
   const answer = async (optionId: string, toolCallId: string) => {
     setAnswering(true);
@@ -346,13 +361,17 @@ function Card(props: {
           </div>
         )}
       </Show>
-      <Show when={props.expanded}>
-        <Conversation
-          session={props.session}
-          onOpenSnippet={props.onOpenSnippet}
-          onOpenProposal={props.onOpenProposal}
-          onError={props.onError}
-        />
+      <Show when={mounted()}>
+        <div class="board-collapse" classList={{ open: open() }}>
+          <div class="board-collapse-inner">
+            <Conversation
+              session={props.session}
+              onOpenSnippet={props.onOpenSnippet}
+              onOpenProposal={props.onOpenProposal}
+              onError={props.onError}
+            />
+          </div>
+        </div>
       </Show>
     </div>
   );
