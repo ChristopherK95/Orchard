@@ -27,6 +27,16 @@ jobs:
         with:
           fetch-depth: 0
 
+      # So Claude can run the checks CLAUDE.md asks for: `pnpm typecheck` and the core tests.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
       - uses: anthropics/claude-code-action@v1
         with:
           # Pro/Max plan: `claude setup-token` locally, store as a repo secret.
@@ -49,4 +59,4 @@ jobs:
                ambiguous to implement, comment with questions instead of guessing.
           claude_args: >-
             --max-turns 60
-            --allowedTools "Edit,Write,Read,Glob,Grep,Bash(git:*),Bash(gh:*),Bash(pnpm:*),Bash(npx:*),"
+            --allowedTools "Edit,Write,Read,Glob,Grep,Bash(git:*),Bash(gh:*),Bash(pnpm:*),Bash(npx:*),Bash(cargo:*)"
