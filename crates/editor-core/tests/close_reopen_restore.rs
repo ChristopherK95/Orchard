@@ -340,3 +340,30 @@ async fn a_restored_tab_whose_conversation_claude_code_lacks_is_closed_when_show
     core.open_workspace(&setup.repo()).await.unwrap();
     assert!(core.sessions().is_empty(), "and it isn't restored again");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn clearing_a_session_starts_a_fresh_conversation_and_keeps_the_old_one_under_recent() {
+    let repo = git_repo();
+    let fake = FakeAgent::new(ECHO);
+    let core = core_with_state(&fake);
+    let root = core.open_workspace(repo.path()).await.unwrap().root;
+    let id = core.new_session().await.unwrap();
+    core.set_permission_mode(id, PermissionMode::Plan)
+        .await
+        .unwrap();
+    turn(&core, id, "one").await;
+
+    let fresh = core.clear_session(id).await.unwrap();
+
+    assert_ne!(fresh, id);
+    assert!(matches!(
+        core.session_info(id),
+        Err(CoreError::UnknownSession)
+    ));
+    let info = core.session_info(fresh).unwrap();
+    assert_eq!(info.state, SessionState::Idle);
+    assert_eq!(info.permission_mode, PermissionMode::Plan);
+    assert_eq!(core.transcript(fresh).unwrap(), vec![]);
+    let recent = core.recent_sessions(&root);
+    assert_eq!(recent.len(), 1, "the cleared conversation can be reopened");
+}

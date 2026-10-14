@@ -7,7 +7,7 @@ import { ContextMeter } from "./ContextMeter";
 import { EditNotes } from "./EditNotes";
 import { createMentionMenu, mention, MentionMarks, MentionMenu } from "./FileMentions";
 import { renderUserMarkdown } from "./markdown";
-import { createSlashMenu, SlashMenu, useSlashCommands } from "./SlashCommands";
+import { CLEAR_COMMAND, createSlashMenu, SlashMenu, useSlashCommands } from "./SlashCommands";
 import {
   ArrowUp,
   BookOpen,
@@ -258,7 +258,7 @@ export function reportHeight(el: HTMLElement, onHeight?: (px: number) => void) {
 }
 
 /** `takeFocus` (by default on): whether it takes the keyboard (as it shows, and once a turn is over). */
-export function Composer(props: { session: SessionInfo; onHeight?: (px: number) => void; takeFocus?: boolean }) {
+export function Composer(props: { session: SessionInfo; onHeight?: (px: number) => void; takeFocus?: boolean; onCleared?: (id: SessionId) => void }) {
   // The draft outlives the composer: it moves between columns with focus, and Tabs get switched.
   const saved = drafts.get(props.session.id);
   const [text, setDraft] = createSignal(saved?.text ?? "");
@@ -460,6 +460,13 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
     if (!ready() || disabled()) return;
     setError("");
     try {
+      if (prompt === `/${CLEAR_COMMAND.name}` && !files.length) {
+        // The conversation goes to Recent sessions and a fresh one takes its place.
+        const fresh = await core.clearSession(props.session.id);
+        setText("");
+        props.onCleared?.(fresh);
+        return;
+      }
       if (working()) await core.queuePrompt(props.session.id, prompt, files);
       else await core.sendPrompt(props.session.id, prompt, files);
       setText("");
