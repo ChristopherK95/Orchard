@@ -9,11 +9,18 @@ import { escapeHtml } from "./html";
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false });
 md.disable("image");
 
-md.renderer.rules.fence = (tokens, index) => {
-  const token = tokens[index];
-  const label = token.info.trim().split(/\s+/)[0] ?? "";
-  return codeBlock(token.content.replace(/\n$/, ""), label);
-};
+// Your own messages: the same markdown, but a line break stays one (you typed it), and the
+// Agent-reply cards below don't apply.
+const userMd = new MarkdownIt({ html: false, linkify: true, breaks: true });
+userMd.disable("image");
+
+for (const instance of [md, userMd]) {
+  instance.renderer.rules.fence = (tokens, index) => {
+    const token = tokens[index];
+    const label = token.info.trim().split(/\s+/)[0] ?? "";
+    return codeBlock(token.content.replace(/\n$/, ""), label);
+  };
+}
 
 // A question the Agent asks you becomes a card: a top-level paragraph that starts with a bold
 // "**1. Title**", then an italic or bold "Recommendation: …" (in that paragraph or a later one),
@@ -235,6 +242,11 @@ function codeBlock(code: string, label: string): string {
 /** Markdown to HTML. Reactive through the highlighter, so blocks re-render when their grammar loads. */
 export function renderMarkdown(text: string): string {
   return md.render(text);
+}
+
+/** Markdown for a message you sent. */
+export function renderUserMarkdown(text: string): string {
+  return userMd.render(text);
 }
 
 const SAFE_LINK = /^(https?:|mailto:)/i;

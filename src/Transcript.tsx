@@ -9,7 +9,7 @@ import { Dynamic } from "solid-js/web";
 import { answerInDraft } from "./Chat";
 import type { PermissionRequest, SessionId, TranscriptItem } from "./core";
 import { BookOpen, Brain, Check, ChevronRight, Globe, Loader, MoveRight, Paperclip, Pencil, Play, TextSearch, Trash2, Wrench } from "./icons";
-import { handleTranscriptClick, renderMarkdown } from "./markdown";
+import { handleTranscriptClick, renderMarkdown, renderUserMarkdown } from "./markdown";
 import { PermissionCard } from "./PermissionCard";
 
 /** How close to the bottom (px) still counts as "following" new output. */
@@ -222,7 +222,7 @@ function renderItem(
               </For>
             </div>
           </Show>
-          <div class="msg user">{item.text}</div>
+          <div class="msg user markdown" innerHTML={renderUserMarkdown(item.text)} />
         </>
       );
     default:
