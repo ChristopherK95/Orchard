@@ -790,6 +790,8 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .composer textarea { width: 100%; resize: none; height: 44px; min-height: 22px; padding: 0; background: transparent; border: 0; border-radius: 0; font-size: 14px; line-height: 1.5; }
 .composer textarea:focus { box-shadow: none; }
 /* Mentions of files: marked by a copy of the text behind the (transparent) input, laid out alike. */
+/* Live preview of the draft's markdown; inert, so its links and code buttons do nothing. */
+.composer-preview { max-height: 200px; overflow-y: auto; padding-bottom: 10px; border-bottom: 1px solid var(--line); pointer-events: none; }
 .composer-field { position: relative; display: flex; }
 .composer-field textarea { position: relative; scrollbar-gutter: stable; }
 .mention-marks { position: absolute; inset: 0; overflow: hidden; scrollbar-gutter: stable; pointer-events: none; font-size: 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: break-word; color: transparent; }
