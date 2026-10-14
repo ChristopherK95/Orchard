@@ -1,0 +1,52 @@
+# Save as .github/workflows/claude-issue-to-pr.yml
+# Trigger: add the "claude" label to an issue.
+name: Claude issue -> PR
+
+on:
+  issues:
+    types: [labeled]
+
+concurrency:
+  group: claude-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    if: github.event.label.name == 'claude'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # Pro/Max plan: `claude setup-token` locally, store as a repo secret.
+          # Or use: anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are working on issue #${{ github.event.issue.number }} in ${{ github.repository }}.
+
+            Title: ${{ github.event.issue.title }}
+            Body:
+            ${{ github.event.issue.body }}
+
+            1. Read CLAUDE.md and the relevant code first.
+            2. Create a branch named claude/issue-${{ github.event.issue.number }}.
+            3. Implement the change. Run the project's tests/lint and fix failures.
+            4. Commit, push, and open a PR with `gh pr create`. The PR body must
+               include "Closes #${{ github.event.issue.number }}", a summary of
+               the changes, and how to try them out.
+            5. Comment on the issue with the PR link. If the issue is too
+               ambiguous to implement, comment with questions instead of guessing.
+          claude_args: >-
+            --max-turns 60
+            --allowedTools "Edit,Write,Read,Glob,Grep,Bash(git:*),Bash(gh:*),Bash(pnpm:*),Bash(npx:*),"
