@@ -1,11 +1,12 @@
 // Pieces of the chat surface shared by the Tabs view and each column of the Columns view: the
 // composer, banners, the Recent sessions list and the state labels.
-import { createEffect, createResource, createSignal, For, type JSX, Match, on, onCleanup, Show, Switch } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, For, type JSX, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { type Attachment, core, type FileMatch, type OtherConversation, type PermissionMode, type QueuedPrompt, type RecentSession, type SessionId, type SessionInfo } from "./core";
 import { ContextMeter } from "./ContextMeter";
 import { EditNotes } from "./EditNotes";
 import { createMentionMenu, mention, MentionMarks, MentionMenu } from "./FileMentions";
+import { renderUserMarkdown } from "./markdown";
 import { CLEAR_COMMAND, createSlashMenu, SlashMenu, useSlashCommands } from "./SlashCommands";
 import {
   ArrowUp,
@@ -307,6 +308,12 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
   const busy = () => working() || props.session.state === "needsYou";
   // A Suspended session takes a message too: sending it resumes the session. A Working one queues it.
   const disabled = () => props.session.state !== "idle" && props.session.state !== "suspended" && !working();
+  // The draft as it will read once sent: only when it uses markdown, so plain text stays quiet.
+  const preview = createMemo(() => {
+    if (!text().trim()) return "";
+    const html = renderUserMarkdown(text());
+    return /<(?!\/?p>|br\s*\/?>)[a-z]/i.test(html) ? html : "";
+  });
   let input!: HTMLTextAreaElement;
   let marks!: HTMLDivElement;
   let root!: HTMLDivElement;
@@ -577,6 +584,9 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
           />
         </Show>
         <div class="composer-inner">
+          <Show when={preview()}>
+            {(html) => <div class="composer-preview markdown" aria-hidden="true" innerHTML={html()} />}
+          </Show>
           <div class="composer-field">
             <MentionMarks text={text()} worktree={props.session.worktree} ref={(el) => (marks = el)} />
             <textarea

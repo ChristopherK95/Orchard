@@ -2094,8 +2094,12 @@ impl Core {
     /// are (fetch first for news of merged PRs).
     pub async fn merge_overview(&self) -> Result<Vec<WorktreeMerge>, CoreError> {
         let root = self.workspace()?.root;
+        // Each branch is looked at by a run of git commands of its own, so they go side by side
+        // (a few at a time, so many Worktrees don't start a swarm of git processes).
+        let limit = Arc::new(tokio::sync::Semaphore::new(4));
         let mut rows = vec![];
-        for info in self.worktrees() {
+        let mut detecting = tokio::task::JoinSet::new();
+        for (i, info) in self.worktrees().into_iter().enumerate() {
             let (base, _) = self.base_of(&info.path).await;
             let mut row = WorktreeMerge {
                 path: info.path.clone(),
@@ -2109,13 +2113,23 @@ impl Core {
             if !info.is_main {
                 match self.resolved_base(&root, &info.path).await {
                     Ok((base, base_id)) => {
-                        let branch = info.branch.as_deref();
-                        row.merge = Some(merged::detect(&info.path, branch, &base, &base_id).await)
+                        let limit = limit.clone();
+                        detecting.spawn(async move {
+                            let _turn = limit.acquire().await;
+                            let branch = info.branch.as_deref();
+                            let state =
+                                merged::detect(&info.path, branch, &base, &base_id).await;
+                            (i, state)
+                        });
                     }
                     Err(err) => row.error = Some(err.to_string()),
                 }
             }
             rows.push(row);
+        }
+        while let Some(done) = detecting.join_next().await {
+            let (i, state) = done.map_err(|e| CoreError::Git(e.to_string()))?;
+            rows[i].merge = Some(state);
         }
         Ok(rows)
     }
