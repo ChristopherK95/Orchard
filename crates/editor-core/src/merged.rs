@@ -60,6 +60,9 @@ pub struct WorktreeMerge {
 /// How many other remote branches are looked at when the branch isn't merged into its Base.
 const OTHER_TARGETS: usize = 25;
 
+/// How many of those are looked at at once.
+const CONCURRENT_TARGETS: usize = 4;
+
 /// How `worktree`'s HEAD stands against its Base, `base` (shown by name) at `base_id` (a commit id,
 /// resolved in the main checkout so the Worktree's own `HEAD` can't stand in for the Base). If it
 /// isn't merged there, the remote branches that moved since its last commit are tried: a PR into a
@@ -130,26 +133,48 @@ async fn merged_elsewhere(
     head: &str,
 ) -> Option<MergeState> {
     let since = git::commit_time(worktree, head).await?;
+    // The branches to look at, newest first. Each takes a few git commands of its own (a
+    // `merge-tree` among them), so they're looked at side by side, a few at a time; the pick
+    // between those that have the work then goes in order.
+    let candidates: Vec<_> = git::remote_branches_since(worktree, since, OTHER_TARGETS)
+        .await
+        .into_iter()
+        // Its own remote branch, and the Base under another name, aren't somewhere else.
+        .filter(|target| {
+            let own = branch
+                .is_some_and(|b| target.short.split_once('/').map(|(_, rest)| rest) == Some(b));
+            !own && target.id != base_id
+        })
+        .collect();
+    let turns = std::sync::Arc::new(tokio::sync::Semaphore::new(CONCURRENT_TARGETS));
+    let mut looking = tokio::task::JoinSet::new();
+    for (i, target) in candidates.iter().enumerate() {
+        let (turns, worktree) = (turns.clone(), worktree.to_owned());
+        let (head, target_id) = (head.to_owned(), target.id.clone());
+        looking.spawn(async move {
+            let _turn = turns.acquire().await;
+            let arrived = if git::is_merged(&worktree, &head, &target_id).await {
+                if git::on_first_parent_line(&worktree, &head, &target_id).await {
+                    None
+                } else {
+                    arrival(&worktree, &target_id, &head, Arrival::Commits).await
+                }
+            } else if has_changes_of(&worktree, &target_id, &head).await {
+                arrival(&worktree, &target_id, &head, Arrival::Changes).await
+            } else {
+                None
+            };
+            (i, arrived)
+        });
+    }
+    let mut arrivals: Vec<Option<Arrived>> = candidates.iter().map(|_| None).collect();
+    while let Some(Ok((i, arrived))) = looking.join_next().await {
+        arrivals[i] = arrived;
+    }
     // Where it arrived first so far (with that branch's commit id), and the branch's name.
     let mut found: Option<(Arrived, String)> = None;
     let mut into = String::new();
-    for target in git::remote_branches_since(worktree, since, OTHER_TARGETS).await {
-        // Its own remote branch, and the Base under another name, aren't somewhere else.
-        let own =
-            branch.is_some_and(|b| target.short.split_once('/').map(|(_, rest)| rest) == Some(b));
-        if own || target.id == base_id {
-            continue;
-        }
-        let arrived = if git::is_merged(worktree, head, &target.id).await {
-            if git::on_first_parent_line(worktree, head, &target.id).await {
-                continue;
-            }
-            arrival(worktree, &target.id, head, Arrival::Commits).await
-        } else if has_changes_of(worktree, &target.id, head).await {
-            arrival(worktree, &target.id, head, Arrival::Changes).await
-        } else {
-            continue;
-        };
+    for (target, arrived) in candidates.into_iter().zip(arrivals) {
         let Some(arrived) = arrived else {
             continue;
         };
