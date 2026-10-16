@@ -240,9 +240,11 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .startup-card form.new-repo { flex-direction: column; gap: 12px; }
 .new-repo label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500; color: var(--fg-1); }
 .new-repo p { margin: 0; }
+/* (`.startup form input`'s flex: 1 would squash the Name input's height in its column.) */
+.new-repo label > input { flex: none; height: 36px; }
 .new-repo-location { display: flex; gap: 8px; }
-.new-repo-location input { flex: 1; min-width: 0; }
-.new-repo-location button { flex: none; }
+.new-repo-location input { flex: 1; min-width: 0; height: 36px; }
+.new-repo-location button { flex: none; min-height: 36px; }
 .new-repo-actions { display: flex; justify-content: flex-end; gap: 8px; }
 /* Over an open Workspace (ticket 30). */
 .picker-modal { width: min(660px, 100%); padding: 18px 18px 14px; }
