@@ -173,6 +173,20 @@ async fn workspace_for(
         .map_err(|e| e.to_string())
 }
 
+/// Makes the folder `name` in `location` a new git repository (the Workspace picker's New
+/// repository…); its folder, to open.
+#[tauri::command]
+async fn create_repository(
+    app: AppHandle,
+    core: State<'_, Core>,
+    location: String,
+    name: String,
+) -> CommandResult<PathBuf> {
+    core.create_repository(&typed_path(&app, location), &name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Closes every popped-out Manual editor window, unsaved changes or not (the caller asked).
 #[tauri::command]
 fn close_pop_outs(app: AppHandle) {
@@ -212,14 +226,15 @@ fn remove_recent_workspace(core: State<'_, Core>, root: String) -> CommandResult
         .map_err(|e| e.to_string())
 }
 
-/// The native folder dialog (the Workspace picker's Browse…); `None` if it was cancelled.
+/// The native folder dialog (the Workspace picker's Browse…, titled `title`); `None` if it was
+/// cancelled.
 #[tauri::command]
-async fn pick_folder(window: tauri::Window) -> Option<String> {
+async fn pick_folder(window: tauri::Window, title: Option<String>) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
     window
         .dialog()
         .file()
-        .set_title("Open a repository")
+        .set_title(title.as_deref().unwrap_or("Open a repository"))
         .set_parent(&window)
         .blocking_pick_folder()
         .and_then(|folder| folder.into_path().ok())
@@ -1536,6 +1551,7 @@ fn main() {
             default_workspace_path,
             open_workspace,
             workspace_for,
+            create_repository,
             close_pop_outs,
             recent_workspaces,
             remove_recent_workspace,

@@ -253,6 +253,29 @@ pub(crate) async fn toplevel(path: &Path) -> Option<PathBuf> {
     Some(PathBuf::from(out.trim()))
 }
 
+/// Makes `dir` a new repository on git's default branch, with an empty first commit: a branch with
+/// no commit on it can't start a Worktree.
+pub(crate) async fn init(dir: &Path) -> Result<(), String> {
+    run(dir, &["init", "--quiet"]).await?;
+    // (With the profile and a time limit, as `commit` has: a global hook or signing may run.)
+    let mut cmd = git_with_profile(dir).await;
+    cmd.args(["commit", "--quiet", "--allow-empty", "-m", "Initial commit"])
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let child = cmd.spawn().map_err(|e| format!("could not run git: {e}"))?;
+    let out = tokio::time::timeout(COMMIT_TIMEOUT, crate::process::collect(child, None))
+        .await
+        .map_err(|_| {
+            "The first commit took too long (a hook or signing prompt?) and was stopped.".to_owned()
+        })?
+        .map_err(|e| format!("could not run git: {e}"))?;
+    match out.status.success() {
+        true => Ok(()),
+        false => Err(hook_failure(&out)),
+    }
+}
+
 /// The repository's shared git directory (where `worktrees/` lives).
 pub(crate) async fn common_dir(path: &Path) -> Option<PathBuf> {
     let out = output(

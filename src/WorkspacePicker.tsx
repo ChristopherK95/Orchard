@@ -1,14 +1,18 @@
 // The Workspace picker (ticket 29): one input over the Recent Workspaces, plus Browse… for the
 // native folder dialog. Typing filters the list (Ctrl+P's matching); a path opens as typed.
-// ↑/↓ move, Enter opens, Delete removes a row from the list, Ctrl+O browses. At startup it fills
+// ↑/↓ move, Enter opens, Delete removes a row from the list, Ctrl+O browses, Ctrl+N makes a new
+// repository (a named folder with `git init` and a first commit) and opens it. At startup it fills
 // the window; over an open Workspace (ticket 30) it's an overlay that Esc closes.
 import { createEffect, createSignal, For, type JSX, onMount, Show } from "solid-js";
 import { core, type RecentWorkspace, type WorkspaceInfo } from "./core";
 import { Highlighted } from "./CommandPalette";
-import { FolderOpen, Search, X } from "./icons";
+import { FolderOpen, Plus, Search, X } from "./icons";
 
 /** Text that's a path rather than a filter: it has a separator, or starts with a drive or `~`. */
 const looksLikePath = (text: string) => /[\\/]/.test(text) || /^[a-z]:/i.test(text) || text.startsWith("~");
+
+/** The folder `path` is in ("" if it has none). */
+const parentOf = (path: string) => path.replace(/[\\/]+$/, "").replace(/[\\/][^\\/]*$/, "");
 
 /** "Just now", "5 min ago", "2 h ago", "Yesterday", "3 days ago", then the date. */
 function ago(ms: number, now = Date.now()): string {
@@ -41,6 +45,8 @@ export function WorkspacePicker(props: {
   const [selected, setSelected] = createSignal(0);
   const [error, setError] = createSignal(props.error ?? "");
   const [opening, setOpening] = createSignal(false);
+  /** Making a new repository: its form shows instead of the list. */
+  const [creating, setCreating] = createSignal(false);
   let input!: HTMLInputElement;
   let asked = 0;
 
@@ -88,15 +94,44 @@ export function WorkspacePicker(props: {
 
   const pick = (row: RecentWorkspace | undefined) => row?.exists && void open(row.root);
 
+  const startCreating = () => {
+    setError("");
+    setCreating(true);
+  };
+
+  const stopCreating = () => {
+    setCreating(false);
+    input.focus();
+  };
+
   onMount(() => {
     input.focus();
     void search(query());
   });
 
   const card = (
+    <Show
+      when={!creating()}
+      fallback={
+        <NewRepository
+          header={props.header}
+          // (Next to the last repository opened, as a new one usually is.)
+          location={parentOf(rows().find((w) => w.exists)?.root ?? "") || "~"}
+          busy={opening()}
+          create={async (location, name) => open(await core.createRepository(location, name))}
+          onCancel={stopCreating}
+        />
+      }
+    >
       <div class="startup-card">
         {props.header}
-        <h1>Open a repository</h1>
+        <div class="picker-head">
+          <h1>Open a repository</h1>
+          <button type="button" class="ghost" onClick={startCreating} disabled={opening()} title="Create a new git repository (Ctrl+N)">
+            <Plus />
+            New repository…
+          </button>
+        </div>
         <div class="picker">
           <div class="palette-search">
             <Search />
@@ -128,6 +163,9 @@ export function WorkspacePicker(props: {
                 } else if (e.key === "o" && e.ctrlKey && !e.shiftKey && !e.altKey) {
                   e.preventDefault();
                   void browse();
+                } else if (e.key === "n" && e.ctrlKey && !e.shiftKey && !e.altKey) {
+                  e.preventDefault();
+                  startCreating();
                 } else if (e.key === "Delete" && count && input.selectionStart === input.value.length && input.selectionEnd === input.value.length) {
                   // (With the caret at the end, Delete has no text to delete: it removes the row.)
                   e.preventDefault();
@@ -212,13 +250,14 @@ export function WorkspacePicker(props: {
           <p class="error small">{error()}</p>
         </Show>
         <p class="muted small picker-keys">
-          <kbd>↑</kbd> <kbd>↓</kbd> select · <kbd>Enter</kbd> open · <kbd>Del</kbd> remove from list · <kbd>Ctrl+O</kbd> browse
+          <kbd>↑</kbd> <kbd>↓</kbd> select · <kbd>Enter</kbd> open · <kbd>Del</kbd> remove from list · <kbd>Ctrl+O</kbd> browse · <kbd>Ctrl+N</kbd> new
           <Show when={props.overlay}>
             {" "}
             · <kbd>Esc</kbd> cancel
           </Show>
         </p>
       </div>
+    </Show>
   );
 
   return (
@@ -231,5 +270,101 @@ export function WorkspacePicker(props: {
         </div>
       )}
     </Show>
+  );
+}
+
+/** The picker's New repository…: a name, and the folder to make it in. */
+function NewRepository(props: {
+  header?: JSX.Element;
+  /** Where it's made, as the form opens. */
+  location: string;
+  busy: boolean;
+  /** Makes and opens it; throwing shows the error. */
+  create: (location: string, name: string) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [name, setName] = createSignal("");
+  const [location, setLocation] = createSignal(props.location);
+  const [error, setError] = createSignal("");
+  const [creating, setCreating] = createSignal(false);
+  const busy = () => props.busy || creating();
+  let nameInput!: HTMLInputElement;
+
+  /** The folder it makes, as typed so far. */
+  const target = () => {
+    const folder = location().trim().replace(/[\\/]+$/, "");
+    const sep = folder.includes("\\") && !folder.includes("/") ? "\\" : "/";
+    return name().trim() && folder ? `${folder}${sep}${name().trim()}` : "";
+  };
+
+  const browse = async () => {
+    const folder = await core.pickFolder("Create the repository in").catch((err) => (setError(String(err)), null));
+    if (folder) setLocation(folder);
+    nameInput.focus();
+  };
+
+  const submit = async (e: Event) => {
+    e.preventDefault();
+    if (busy() || !name().trim() || !location().trim()) return;
+    setError("");
+    setCreating(true);
+    try {
+      await props.create(location().trim(), name());
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  onMount(() => nameInput.focus());
+
+  return (
+    <div class="startup-card">
+      {props.header}
+      <h1>Create a repository</h1>
+      <form
+        class="new-repo"
+        onSubmit={(e) => void submit(e)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && !busy()) {
+            e.preventDefault();
+            e.stopPropagation(); // (back to the list, not closing the picker)
+            props.onCancel();
+          }
+        }}
+      >
+        <label>
+          Name
+          <input ref={nameInput} value={name()} onInput={(e) => setName(e.currentTarget.value)} placeholder="my-app" disabled={busy()} spellcheck={false} />
+        </label>
+        <label>
+          Location
+          <div class="new-repo-location">
+            <input class="mono" value={location()} onInput={(e) => setLocation(e.currentTarget.value)} disabled={busy()} spellcheck={false} />
+            <button type="button" class="ghost" onClick={() => void browse()} disabled={busy()} title="Choose the folder to create it in">
+              <FolderOpen />
+              Browse…
+            </button>
+          </div>
+        </label>
+        <p class="muted small">
+          <Show when={target()} fallback="A new folder, made a git repository with an empty first commit, then opened.">
+            Creates <span class="mono">{target()}</span>, runs <span class="mono">git init</span> and makes an empty first commit, then opens it.
+          </Show>
+        </p>
+        <Show when={error()}>
+          <p class="error small">{error()}</p>
+        </Show>
+        <div class="new-repo-actions">
+          <button type="button" onClick={() => props.onCancel()} disabled={busy()}>
+            Back <kbd>Esc</kbd>
+          </button>
+          <button type="submit" class="primary" disabled={busy() || !name().trim() || !location().trim()}>
+            {creating() ? "Creating…" : "Create and open"} <kbd>Enter</kbd>
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }

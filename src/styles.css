@@ -234,6 +234,16 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .picker-row .not-found { color: var(--warn); }
 .picker-keys { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .picker-row .current { color: var(--idle-text); }
+.picker-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.picker-head button { flex: none; }
+/* The picker's New repository… form. */
+.startup-card form.new-repo { flex-direction: column; gap: 12px; }
+.new-repo label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500; color: var(--fg-1); }
+.new-repo p { margin: 0; }
+.new-repo-location { display: flex; gap: 8px; }
+.new-repo-location input { flex: 1; min-width: 0; }
+.new-repo-location button { flex: none; }
+.new-repo-actions { display: flex; justify-content: flex-end; gap: 8px; }
 /* Over an open Workspace (ticket 30). */
 .picker-modal { width: min(660px, 100%); padding: 18px 18px 14px; }
 .leave-workspace .modal-body p { margin: 0; font-size: 13px; line-height: 1.5; }
