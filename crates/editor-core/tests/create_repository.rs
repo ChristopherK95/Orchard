@@ -107,3 +107,28 @@ async fn a_folder_with_files_or_a_bad_name_is_refused_and_left_alone() {
     assert!(core.create_repository(&missing, "x").await.is_err());
     assert_eq!(std::fs::read_dir(location.path()).unwrap().count(), 1);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_repository_has_no_pull_requests_rather_than_github_errors() {
+    let fake = FakeAgent::new(ECHO);
+    let core = core(&fake);
+    let location = tempfile::tempdir().unwrap();
+    let dir = core
+        .create_repository(location.path(), "fresh")
+        .await
+        .unwrap();
+    core.open_workspace(&dir).await.unwrap();
+
+    // (With no remote, the GitHub CLI isn't asked: it would only say "no git remotes found".)
+    assert!(core.my_pull_requests(&dir).await.unwrap().is_empty());
+    assert!(core.review_requests(&dir).await.unwrap().is_empty());
+    assert!(core.open_pull_request(&dir).await.unwrap().is_none());
+    assert!(core
+        .pull_request_details(&dir, None)
+        .await
+        .unwrap()
+        .is_none());
+    let statistics = core.statistics(&dir, 30).await.unwrap();
+    assert_eq!(statistics.days, 30);
+    assert_eq!(statistics.still_waiting, 0);
+}

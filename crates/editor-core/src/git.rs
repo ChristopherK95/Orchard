@@ -87,6 +87,14 @@ fn hook_failure(out: &std::process::Output) -> String {
     }
 }
 
+/// Whether the repository has any remote: one with none (a repository just made, say) can't be on
+/// GitHub, so the GitHub CLI isn't asked about it.
+pub(crate) async fn has_remote(repo: &Path) -> bool {
+    run(repo, &["remote"])
+        .await
+        .is_ok_and(|remotes| !remotes.trim().is_empty())
+}
+
 async fn has_origin(repo: &Path) -> bool {
     run(repo, &["remote"])
         .await

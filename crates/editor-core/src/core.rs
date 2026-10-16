@@ -3021,6 +3021,9 @@ impl Core {
         let Some(branch) = git::current_branch(&worktree).await else {
             return Ok(None);
         };
+        if !git::has_remote(&worktree).await {
+            return Ok(None);
+        }
         let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
         crate::pull_request::open_for(&gh, &worktree, &branch)
             .await
@@ -3042,6 +3045,9 @@ impl Core {
                 None => return Ok(None),
             },
         };
+        if !git::has_remote(&worktree).await {
+            return Ok(None);
+        }
         let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
         crate::pull_request::details_for(&gh, &worktree, &which)
             .await
@@ -3067,6 +3073,9 @@ impl Core {
     /// repo, most recently updated first.
     pub async fn my_pull_requests(&self, worktree: &Path) -> Result<Vec<MyPullRequest>, CoreError> {
         let worktree = self.known_worktree(worktree)?;
+        if !git::has_remote(&worktree).await {
+            return Ok(vec![]);
+        }
         let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
         crate::pull_request::mine(&gh, &worktree)
             .await
@@ -3078,6 +3087,9 @@ impl Core {
     /// most recently asked first.
     pub async fn review_requests(&self, worktree: &Path) -> Result<Vec<ReviewRequest>, CoreError> {
         let worktree = self.known_worktree(worktree)?;
+        if !git::has_remote(&worktree).await {
+            return Ok(vec![]);
+        }
         let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
         let search = format!("q={}", dashboard::REVIEW_SEARCH);
         let query = format!("query={}", dashboard::REVIEW_QUERY);
@@ -3125,7 +3137,12 @@ impl Core {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| since.as_secs() as i64);
-        statistics::read(&gh, &worktree, statistics::Periods { now, days })
+        let periods = statistics::Periods { now, days };
+        if !git::has_remote(&worktree).await {
+            // (Nothing on GitHub yet: every figure is nought.)
+            return Ok(statistics::figures(periods, "", &[], &[], None, &[]));
+        }
+        statistics::read(&gh, &worktree, periods)
             .await
             .map_err(|e| CoreError::Git(crate::pull_request::not_about_creating(e)))
     }
