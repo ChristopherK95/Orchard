@@ -26,9 +26,14 @@ for (const instance of [md, userMd]) {
 // "**1. Title**", then an italic or bold "Recommendation: …" (in that paragraph or a later one),
 // a list of "(a) …" options, or both. What comes between them (text, lists, code) is the card's
 // body. Options (and the recommendation, when there are none) answer it into the composer
-// (`data-answer`, see `handleTranscriptClick`). Anything else stays plain markdown.
+// (`data-answer`, see `handleTranscriptClick`). The marked form works too: "❓ **Q5 – Title?**"
+// and a "➡️ (a). Why" recommendation. Anything else stays plain markdown.
 const QUESTION = /^\*\*(\d+)[.)]\s+([^*]+?)\*\*\s*([\s\S]*)$/;
-const OPTION = /^(?:\*\*)?\(([a-z])\)(?:\*\*)?\s+([\s\S]+)$/;
+// The marked form: "❓ **Q5 – Title?** …", with the title bold or ending at its first "?".
+const QUESTION_MARKED = /^❓️?\s*(?:\*\*)?Q(\d+)\s*[-–—:]\s*([^*\n]+?)(?:\*\*|(?<=\?)(?!\*))\s*([\s\S]*)$/;
+// The marked recommendation: "➡️ (a). Why", the pick (if any) leading its text.
+const ARROW = /^➡️?\s*([\s\S]+)$/;
+const OPTION =/^(?:\*\*)?\(([a-z])\)(?:\*\*)?\s+([\s\S]+)$/;
 const RECOMMENDATION = /^(\*\*|\*|__|_)Recommendation:?\s*([\s\S]*?)\1\s*([\s\S]*)$/i;
 const RECOMMENDATION_IN = /(\*\*|\*|__|_)Recommendation\b/i;
 /** A line like "Round 2": short, with no closing punctuation. It heads what follows; no card takes it in. */
@@ -38,6 +43,17 @@ const MAX_BODY = 8;
 
 type Tokens = StateCore["tokens"];
 type Options = { options: { letter: string; text: string }[]; end: number };
+
+/** The number, title and rest of a question paragraph, in either form. */
+function questionIn(text: string | null): RegExpExecArray | null {
+  return text === null ? null : (QUESTION.exec(text) ?? QUESTION_MARKED.exec(text));
+}
+
+/** A recommendation paragraph in either form, shaped as `RECOMMENDATION` matches it. */
+function recommendationIn(text: string): RegExpExecArray | null {
+  const arrow = ARROW.exec(text);
+  return arrow ? (Object.assign(["", "", "", arrow[1]], { index: 0, input: text }) as RegExpExecArray) : RECOMMENDATION.exec(text);
+}
 
 /** The text of the top-level paragraph that starts at `i`. */
 function paragraphAt(tokens: Tokens, i: number): string | null {
@@ -75,7 +91,7 @@ md.core.ruler.before("inline", "question_cards", (state) => {
   const html = (content: string) => Object.assign(new state.Token("html_block", "", 0), { content });
   const inline = (content: string) => Object.assign(new state.Token("inline", "", 0), { content, children: [] });
   for (let i = 0; i < tokens.length; i++) {
-    const head = QUESTION.exec(paragraphAt(tokens, i) ?? "");
+    const head = questionIn(paragraphAt(tokens, i));
     if (!head) continue;
     const n = head[1];
     let lead = head[3];
@@ -89,8 +105,8 @@ md.core.ruler.before("inline", "question_cards", (state) => {
     let list: Options | null = null;
     for (let blocks = 0; !rec && blocks < MAX_BODY && end < tokens.length; blocks++) {
       const text = paragraphAt(tokens, end);
-      if ((text !== null && QUESTION.test(text)) || tokens[end].type === "heading_open" || tokens[end].type === "hr") break;
-      rec = text !== null ? RECOMMENDATION.exec(text) : null;
+      if (questionIn(text) || tokens[end].type === "heading_open" || tokens[end].type === "hr") break;
+      rec = text !== null ? recommendationIn(text) : null;
       if (rec) {
         end += 3;
         break;
@@ -116,7 +132,7 @@ md.core.ruler.before("inline", "question_cards", (state) => {
       let questionNext = false;
       while (ends.length < MAX_BODY && next < tokens.length) {
         const text = paragraphAt(tokens, next);
-        if (text !== null && QUESTION.test(text)) questionNext = true;
+        if (questionIn(text)) questionNext = true;
         if (questionNext || (text !== null && TITLE_LIKE.test(text)) || tokens[next].type === "heading_open" || tokens[next].type === "hr") break;
         ends.push((next = blockEnd(tokens, next)));
       }
@@ -129,7 +145,7 @@ md.core.ruler.before("inline", "question_cards", (state) => {
 
     // The pick is the italic part ("(c), with …"); a bold label leaves it in the body instead.
     const pick = rec?.[2].replace(/[.:]\s*$/, "") ?? "";
-    const recommended = /^\(([a-z])\)/.exec(pick || (rec?.[3] ?? ""))?.[1];
+    const recommended = /^(?:\*\*)?\(([a-z])\)/.exec(pick || (rec?.[3] ?? ""))?.[1];
     const card = [
       html(`<section class="qcard"><div class="qcard-head"><span class="qcard-n">${n}</span><span class="qcard-title">`),
       inline(head[2]),
