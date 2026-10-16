@@ -855,8 +855,10 @@ export const core = {
   recentWorkspaces: (query: string) => invoke<RecentWorkspace[]>("recent_workspaces", { query }),
   /** Takes a Workspace off the Recent Workspaces; its saved Tabs stay. */
   removeRecentWorkspace: (root: string) => invoke<void>("remove_recent_workspace", { root }),
-  /** The native folder dialog; null if it was cancelled. */
-  pickFolder: () => invoke<string | null>("pick_folder"),
+  /** The native folder dialog (titled "Open a repository" unless `title`); null if it was cancelled. */
+  pickFolder: (title?: string) => invoke<string | null>("pick_folder", { title }),
+  /** Makes the folder `name` in `location` a new git repository with an empty first commit; its folder. */
+  createRepository: (location: string, name: string) => invoke<string>("create_repository", { location, name }),
   newSession: () => invoke<SessionId>("new_session"),
   newSessionIn: (worktree: string) => invoke<SessionId>("new_session_in", { worktree }),
   /** The Worktree being looked at (its files are indexed and watched). */

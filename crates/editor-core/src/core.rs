@@ -387,6 +387,9 @@ pub enum CoreError {
     WorktreeNotListed(PathBuf),
     #[error("git: {0}")]
     Git(String),
+    /// A new repository that can't be made, and why.
+    #[error("{0}")]
+    NewRepository(String),
     #[error("no such Agent session")]
     UnknownSession,
     #[error("the Agent session is still working on the previous prompt")]
@@ -1360,6 +1363,66 @@ impl Core {
         self.workspace_at(path).await
     }
 
+    /// Makes the folder `name` in `location` a new git repository with an empty first commit, for
+    /// the Workspace picker to open. An empty folder already there is used; anything else there
+    /// is left alone. The new repository's folder.
+    pub async fn create_repository(
+        &self,
+        location: &Path,
+        name: &str,
+    ) -> Result<PathBuf, CoreError> {
+        let invalid = |why: &str| Err(CoreError::NewRepository(why.to_owned()));
+        let name = name.trim();
+        if name.is_empty() {
+            return invalid("Give the repository a name.");
+        }
+        // (Windows' forbidden characters are refused everywhere, so a repository can move between
+        // the two.)
+        if name == "."
+            || name == ".."
+            || name.contains(['/', '\\', '<', '>', ':', '"', '|', '?', '*'])
+        {
+            return invalid("A repository's name can't have / \\ < > : \" | ? or * in it.");
+        }
+        if !location.is_dir() {
+            return Err(CoreError::NewRepository(format!(
+                "{} isn't a folder.",
+                location.display()
+            )));
+        }
+        let dir = location.join(name);
+        let made = match std::fs::read_dir(&dir).map(|mut entries| entries.next().is_none()) {
+            Ok(true) => false,
+            Ok(false) => {
+                return Err(CoreError::NewRepository(format!(
+                    "{} already has files in it; open it instead, or choose another name.",
+                    dir.display()
+                )))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&dir).map_err(|e| {
+                    CoreError::NewRepository(format!("couldn't create {}: {e}", dir.display()))
+                })?;
+                true
+            }
+            Err(_) => {
+                return Err(CoreError::NewRepository(format!(
+                    "{} is already there.",
+                    dir.display()
+                )))
+            }
+        };
+        if let Err(e) = git::init(&dir).await {
+            // (Nothing half-made is left behind, so trying again after fixing git starts afresh.)
+            let _ = match made {
+                true => std::fs::remove_dir_all(&dir),
+                false => std::fs::remove_dir_all(dir.join(".git")),
+            };
+            return Err(CoreError::Git(e));
+        }
+        Ok(worktrees::normalize(dir))
+    }
+
     /// The Recent Workspaces matching `query` (best first; all of them, newest first, when it's
     /// empty), at most `RECENT_WORKSPACES`.
     pub fn recent_workspaces(&self, query: &str) -> Vec<RecentWorkspace> {
@@ -2117,8 +2180,7 @@ impl Core {
                         detecting.spawn(async move {
                             let _turn = limit.acquire().await;
                             let branch = info.branch.as_deref();
-                            let state =
-                                merged::detect(&info.path, branch, &base, &base_id).await;
+                            let state = merged::detect(&info.path, branch, &base, &base_id).await;
                             (i, state)
                         });
                     }
@@ -2959,6 +3021,9 @@ impl Core {
         let Some(branch) = git::current_branch(&worktree).await else {
             return Ok(None);
         };
+        if !git::has_remote(&worktree).await {
+            return Ok(None);
+        }
         let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
         crate::pull_request::open_for(&gh, &worktree, &branch)
             .await
@@ -2980,6 +3045,9 @@ impl Core {
                 None => return Ok(None),
             },
         };
+        if !git::has_remote(&worktree).await {
+            return Ok(None);
+        }
         let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
         crate::pull_request::details_for(&gh, &worktree, &which)
             .await
@@ -3005,6 +3073,9 @@ impl Core {
     /// repo, most recently updated first.
     pub async fn my_pull_requests(&self, worktree: &Path) -> Result<Vec<MyPullRequest>, CoreError> {
         let worktree = self.known_worktree(worktree)?;
+        if !git::has_remote(&worktree).await {
+            return Ok(vec![]);
+        }
         let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
         crate::pull_request::mine(&gh, &worktree)
             .await
@@ -3016,6 +3087,9 @@ impl Core {
     /// most recently asked first.
     pub async fn review_requests(&self, worktree: &Path) -> Result<Vec<ReviewRequest>, CoreError> {
         let worktree = self.known_worktree(worktree)?;
+        if !git::has_remote(&worktree).await {
+            return Ok(vec![]);
+        }
         let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
         let search = format!("q={}", dashboard::REVIEW_SEARCH);
         let query = format!("query={}", dashboard::REVIEW_QUERY);
@@ -3063,7 +3137,12 @@ impl Core {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| since.as_secs() as i64);
-        statistics::read(&gh, &worktree, statistics::Periods { now, days })
+        let periods = statistics::Periods { now, days };
+        if !git::has_remote(&worktree).await {
+            // (Nothing on GitHub yet: every figure is nought.)
+            return Ok(statistics::figures(periods, "", &[], &[], None, &[]));
+        }
+        statistics::read(&gh, &worktree, periods)
             .await
             .map_err(|e| CoreError::Git(crate::pull_request::not_about_creating(e)))
     }

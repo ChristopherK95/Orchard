@@ -11,7 +11,7 @@ One git repository opened in an editor window. One window holds exactly one Work
 _Avoid_: Project, repo window
 
 **Workspace picker**:
-Where a Workspace is chosen: at startup, or over an open Workspace to switch the window to another. Lists the Recent Workspaces and also takes a typed path or a browsed folder. (The UI calls it "Open a repository".)
+Where a Workspace is chosen: at startup, or over an open Workspace to switch the window to another. Lists the Recent Workspaces and also takes a typed path or a browsed folder. It can also make a new repository (a named folder in a chosen location, with `git init` and an empty first commit, so Worktrees can branch from it) and open it. (The UI calls it "Open a repository".)
 _Avoid_: Project picker, welcome screen
 
 **Recent Workspaces**:
