@@ -81,6 +81,7 @@ export function Setup(props: {
       case "sessionFailed":
         return "The Agent session didn't start";
       case "done":
+      case "finished":
         return "Worktree set up";
     }
   };

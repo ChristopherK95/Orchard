@@ -4,6 +4,7 @@ import { batch, createEffect, createMemo, createSignal, For, lazy, Match, on, on
 import { createStore, produce, reconcile } from "solid-js/store";
 import {
   core,
+  setupOver,
   type LoadedSettings,
   type MissingPrerequisite,
   type MyPullRequest,
@@ -820,9 +821,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         event.kind === "availableCommandsChanged" ||
         event.kind === "usageChanged" ||
         event.kind === "queuedPromptChanged" ||
-        event.kind === "gitStatusChanged"
+        event.kind === "gitStatusChanged" ||
+        event.kind === "pendingReviewChanged"
       ) {
-        return; // (the Manual editors', permission cards', Edit note chips', Git drawer's and composer's business)
+        return; // (the Manual editors', permission cards', Edit note chips', Git drawer's, composer's and Code review's business)
       } else if (!sessions[event.sessionId]) return;
       else if (event.kind === "sessionStateChanged") onStateChanged(event.sessionId, event.state);
       else if (event.kind === "permissionModeChanged") setSessions(event.sessionId, "permissionMode", event.mode);
@@ -1025,7 +1027,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         pinned={mainView() === "columns" ? pinned() : null}
         sessionsIn={sessionsIn}
         activeSession={activeId()}
-        settingUp={(path) => !!setups[path] && setups[path].status.kind !== "done"}
+        settingUp={(path) => !!setups[path] && !setupOver(setups[path].status)}
         onSelect={(path) => {
           toMainView();
           if (mainView() === "columns" && !pinned().includes(path)) void pin(path);
@@ -1523,7 +1525,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         keyed
         fallback={
           <Show
-            when={setups[activeWorktree()]?.status.kind !== "done" && setups[activeWorktree()]}
+            when={setups[activeWorktree()] && !setupOver(setups[activeWorktree()].status) && setups[activeWorktree()]}
             fallback={
               <div class="center empty-worktree" style={{ "--c": worktreeColour(activeWorktree()) }}>
                 <GitBranch />

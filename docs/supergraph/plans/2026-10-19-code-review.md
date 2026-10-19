@@ -480,7 +480,7 @@ Checkpoint:
 - Commit: `Worktrees overview: a Review Worktree is ready to remove once its review is done`
 
 ## Task 13: Tauri commands and TypeScript bindings
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 6, Task 7, Task 9, Task 11, Task 12
 Files:

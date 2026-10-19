@@ -9,6 +9,7 @@ import { createEffect, createSignal, For, lazy, Match, onCleanup, Show, Switch }
 import { Avatar } from "./Avatar";
 import { Banner, Composer, FindOtherConversations, RecentList } from "./Chat";
 import type { OtherConversation, PermissionRequest, RecentSession, SessionId, SessionInfo } from "./core";
+import { setupOver } from "./core";
 import { ChevronDown, CirclePause, CirclePlay, Ellipsis, GitBranch, Pin, Plus, Sparkles, SquareTerminal, Trash2, X } from "./icons";
 import { PrButton } from "./PrOverlay";
 import { useSessionFacts } from "./sessionFacts";
@@ -190,7 +191,7 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
   const [composerHeight, setComposerHeight] = createSignal(0);
   const setup = () => {
     const s = props.setupOf(path);
-    return s && s.status.kind !== "done" ? s : undefined;
+    return s && !setupOver(s.status) ? s : undefined;
   };
   /** A session tab: shows it (in place of the terminal, if that's up). */
   const showSession = (id: SessionId) => {

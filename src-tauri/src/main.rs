@@ -1175,6 +1175,203 @@ async fn review_feedback_prompt(
         .map_err(|e| e.to_string())
 }
 
+/// Opens the Code review of PR `number` (making its Review Worktree the first time).
+#[tauri::command]
+async fn open_code_review(
+    core: State<'_, Core>,
+    number: u64,
+) -> CommandResult<editor_core::CodeReview> {
+    core.open_code_review(number)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// One file's diff in the Code review: the PR's, or only what changed since the last review.
+#[tauri::command]
+async fn code_review_diff(
+    core: State<'_, Core>,
+    number: u64,
+    path: String,
+    since_last_review: bool,
+) -> CommandResult<Vec<editor_core::DiffLine>> {
+    core.code_review_diff(number, &path, since_last_review)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Adds a comment on a line or range to the Pending review.
+#[tauri::command]
+async fn add_review_comment(
+    core: State<'_, Core>,
+    number: u64,
+    comment: editor_core::NewReviewComment,
+) -> CommandResult<editor_core::PendingComment> {
+    core.add_review_comment(number, comment)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn edit_review_comment(
+    core: State<'_, Core>,
+    number: u64,
+    id: u64,
+    body: String,
+) -> CommandResult<()> {
+    core.edit_review_comment(number, id, &body)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn remove_review_comment(core: State<'_, Core>, number: u64, id: u64) -> CommandResult<()> {
+    core.remove_review_comment(number, id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Records lines asked about with "Ask Claude", for their gutter marker.
+#[tauri::command]
+async fn add_review_question(
+    core: State<'_, Core>,
+    number: u64,
+    question: editor_core::Question,
+) -> CommandResult<()> {
+    core.add_review_question(number, question)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Why a submit failed, as the Submit dialog reads it: GitHub's message and the files it named
+/// (`submitFailed`), how many comments are outdated (`outdatedComments`), or just why (`other`).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmitError {
+    kind: &'static str,
+    message: String,
+    paths: Vec<String>,
+    count: usize,
+}
+
+impl From<CoreError> for SubmitError {
+    fn from(e: CoreError) -> Self {
+        let message = e.to_string();
+        match e {
+            CoreError::SubmitFailed { message, paths } => SubmitError {
+                kind: "submitFailed",
+                message,
+                paths,
+                count: 0,
+            },
+            CoreError::OutdatedComments { count } => SubmitError {
+                kind: "outdatedComments",
+                message,
+                paths: vec![],
+                count,
+            },
+            _ => SubmitError {
+                kind: "other",
+                message,
+                paths: vec![],
+                count: 0,
+            },
+        }
+    }
+}
+
+/// Submits the Pending review with its verdict and summary, in one go.
+#[tauri::command]
+async fn submit_review(
+    core: State<'_, Core>,
+    number: u64,
+    verdict: editor_core::Verdict,
+    summary: String,
+) -> Result<(), SubmitError> {
+    core.submit_review(number, verdict, &summary)
+        .await
+        .map_err(SubmitError::from)
+}
+
+/// Replies to a thread on the PR's code, under its comment `comment_id`.
+#[tauri::command]
+async fn reply_to_thread(
+    core: State<'_, Core>,
+    number: u64,
+    comment_id: u64,
+    body: String,
+) -> CommandResult<editor_core::PullRequestComment> {
+    core.reply_to_thread(number, comment_id, &body)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Ticks (or unticks) a file of the PR Viewed on GitHub.
+#[tauri::command]
+async fn set_review_file_viewed(
+    core: State<'_, Core>,
+    number: u64,
+    path: String,
+    viewed: bool,
+) -> CommandResult<()> {
+    core.set_review_file_viewed(number, &path, viewed)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// How many commits were pushed to the PR since the Review Worktree's head.
+#[tauri::command]
+async fn code_review_new_commits(core: State<'_, Core>, number: u64) -> CommandResult<u32> {
+    core.code_review_new_commits(number)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Moves the Review Worktree to the PR's new head, the Pending review's comments with it.
+#[tauri::command]
+async fn refresh_code_review(
+    core: State<'_, Core>,
+    number: u64,
+) -> CommandResult<editor_core::CodeReview> {
+    core.refresh_code_review(number)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The Code review's Agent session (started, or reopened, if need be).
+#[tauri::command]
+async fn code_review_session(core: State<'_, Core>, number: u64) -> CommandResult<SessionId> {
+    core.code_review_session(number)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// "Claude review": asks the review session to review the whole PR.
+#[tauri::command]
+async fn claude_review(core: State<'_, Core>, number: u64) -> CommandResult<SessionId> {
+    core.claude_review(number).await.map_err(|e| e.to_string())
+}
+
+/// "Ask Claude": the selected lines, with some around them, as an attachment.
+#[tauri::command]
+async fn ask_attachment(
+    core: State<'_, Core>,
+    number: u64,
+    path: String,
+    side: editor_core::DiffSide,
+    start_line: Option<u32>,
+    line: u32,
+) -> CommandResult<Attachment> {
+    core.ask_attachment(number, &path, side, start_line, line)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The PR number of a Review Worktree; None for any other Worktree.
+#[tauri::command]
+fn is_review_worktree(core: State<'_, Core>, worktree: String) -> Option<u64> {
+    core.is_review_worktree(worktree.as_ref())
+}
+
 /// "Push" to a branch whose PR is open: commits what's left and pushes, its output to `on_progress`.
 #[tauri::command]
 async fn push_to_pull_request(
@@ -1656,6 +1853,21 @@ fn main() {
             review_feedback_prompt,
             rerun_checks,
             push_to_pull_request,
+            open_code_review,
+            code_review_diff,
+            add_review_comment,
+            edit_review_comment,
+            remove_review_comment,
+            add_review_question,
+            submit_review,
+            reply_to_thread,
+            set_review_file_viewed,
+            code_review_new_commits,
+            refresh_code_review,
+            code_review_session,
+            claude_review,
+            ask_attachment,
+            is_review_worktree,
             set_permission_mode,
             transcript_page_before,
             notify_session,

@@ -53,6 +53,8 @@ export interface SessionInfo {
   worktree: string;
   state: SessionState;
   permissionMode: PermissionMode;
+  /** Its mode can't be changed: it's in a Review Worktree, so it stays in Plan mode. */
+  modeLocked: boolean;
   /** New transcript items since the Tab was last shown. */
   unread: number;
   /** The model it runs on, as the Agent names it ("Opus 4.8"); null until it's said. */
@@ -149,12 +151,16 @@ export interface WorktreeInfo {
   ahead: number | null;
   behind: number | null;
   changed: number;
+  /** The PR number of a Review Worktree; null for any other Worktree. */
+  review: number | null;
 }
 
 /** What "＋ worktree" creates: a new branch from a start point, or an existing (local or remote) branch. */
 export type NewWorktree =
   | { kind: "newBranch"; name: string; startPoint: string | null }
-  | { kind: "existingBranch"; name: string };
+  | { kind: "existingBranch"; name: string }
+  /** Detached at `commit` (what a Review Worktree is). */
+  | { kind: "detached"; name: string; commit: string };
 
 export interface BranchInfo {
   /** `feat/x` for a local branch, `origin/feat/x` for a remote one. */
@@ -184,6 +190,8 @@ export interface RemovalCheck {
   branch: string | null;
   /** Agent sessions that removal stops first. */
   sessions: SessionId[];
+  /** A Review Worktree's review session (stopping it with the Worktree loses nothing). */
+  reviewSession: SessionId | null;
   /** `XY path` lines as `git status --short` shows them (`??` = untracked); the first 100. */
   changes: string[];
   changedCount: number;
@@ -231,6 +239,15 @@ export interface WorktreeMerge {
   error: string | null;
   /** Uncommitted changes (removal loses them whatever `merge` says). */
   changed: number;
+  /** A Review Worktree's Code review (its `merge` is then null: its commits are the PR's). */
+  review: ReviewRow | null;
+}
+
+/** The Code review a Review Worktree is for, as the Worktrees overview shows it. */
+export interface ReviewRow {
+  number: number;
+  /** The review was submitted, or the PR merged or closed: the Review Worktree can go. */
+  done: boolean;
 }
 
 export interface RemoveWorktree {
@@ -250,7 +267,12 @@ export type SetupStatus =
   | { kind: "failed"; step: number; message: string }
   /** The commands ran (or were skipped), but the Agent session didn't start. */
   | { kind: "sessionFailed"; message: string }
-  | { kind: "done"; sessionId: SessionId };
+  | { kind: "done"; sessionId: SessionId }
+  /** Done in a Review Worktree, where no session starts by itself. */
+  | { kind: "finished" };
+
+/** The setup is over: its session started (`done`), or a Review Worktree's, which starts none, ran (`finished`). */
+export const setupOver = (status: SetupStatus) => status.kind === "done" || status.kind === "finished";
 
 export interface SetupInfo {
   worktree: string;
@@ -501,6 +523,8 @@ export interface OpenPullRequest {
 
 /** The PR of a Worktree's branch, as the PR overlay shows it. */
 export interface PullRequestDetails {
+  /** Its GraphQL node id. */
+  id: string;
   number: number;
   title: string;
   url: string;
@@ -517,6 +541,13 @@ export interface PullRequestDetails {
   /** The branch it comes from, and the one it goes into. */
   head: string;
   base: string;
+  /** The commits its head and base branches are at. */
+  headOid: string;
+  baseOid: string;
+  /** The user is asked to review it, or has reviewed it. */
+  viewerIsReviewer: boolean;
+  /** The commit the user's last review was on, if they've reviewed it. */
+  viewerLastReviewOid: string | null;
   additions: number;
   deletions: number;
   changedFiles: number;
@@ -656,6 +687,8 @@ export interface Check {
 }
 
 export interface PullRequestComment {
+  /** Its id on GitHub, for a comment on code (what a reply goes under); null in the conversation. */
+  id: number | null;
   author: string;
   body: string;
   createdAt: string;
@@ -676,9 +709,107 @@ export interface CodeThread {
   /** None once the code it was on has changed (outdated). */
   line: number | null;
   originalLine: number | null;
+  /** Which side of the diff its lines are on, and the first of them for a range. */
+  side: DiffSide;
+  startLine: number | null;
+  /** The code it was on has changed since (GitHub no longer places it in the diff). */
+  outdated: boolean;
   url: string;
   diffHunk: string;
   comments: PullRequestComment[];
+}
+
+/** A diff's old side (the base's lines) or new side (the head's). */
+export type DiffSide = "left" | "right";
+
+/** A Code review, as its overlay shows it. */
+export interface CodeReview {
+  number: number;
+  title: string;
+  /** The Review Worktree. */
+  worktree: string;
+  /** The PR's head as fetched (what the Review Worktree is at), its base branch, and where they split. */
+  head: string;
+  base: string;
+  mergeBase: string;
+  files: CodeReviewFile[];
+  /** What changed since the user's last review, when they've reviewed it before. */
+  sinceLastReview: SinceLastReview | null;
+  pending: PendingReview;
+  /** The Review Worktree's setup, while it runs (or after it failed) in this run of the editor. */
+  setup: SetupInfo | null;
+}
+
+/** A file the PR changes. */
+export interface CodeReviewFile {
+  /** `/`-separated, relative to the repository. */
+  path: string;
+  change: BaseChange["change"];
+  renamedFrom: string | null;
+  additions: number;
+  deletions: number;
+  /** Ticked Viewed on GitHub by the user. */
+  viewed: boolean;
+}
+
+/** The files changed since the user last reviewed the PR (a re-requested review). */
+export interface SinceLastReview {
+  /** The commit their last review was on. */
+  commit: string;
+  files: CodeReviewFile[];
+}
+
+/** The comments not submitted yet, and the lines Claude was asked about. */
+export interface PendingReview {
+  comments: PendingComment[];
+  questions: Question[];
+}
+
+/** A comment on a line (`line`) or a range (`startLine` to `line`) of one side of a file's diff. */
+export interface PendingComment {
+  id: number;
+  path: string;
+  side: DiffSide;
+  startLine: number | null;
+  line: number;
+  /** Markdown. */
+  body: string;
+  /** The text of `line` when the comment was made. */
+  lineText: string;
+  /** Its line is gone from the diff since (new commits): it must be moved or removed to submit. */
+  outdated: boolean;
+  /** It started as an answer of Claude's to a question about these lines. */
+  fromQuestion: boolean;
+}
+
+export interface NewReviewComment {
+  path: string;
+  side: DiffSide;
+  startLine?: number | null;
+  line: number;
+  body: string;
+  fromQuestion?: boolean;
+}
+
+/** Lines Claude was asked about ("Ask Claude"); `attachment` is the name of what was attached. */
+export interface Question {
+  path: string;
+  side: DiffSide;
+  startLine: number | null;
+  line: number;
+  attachment: string;
+}
+
+/** What a submitted review says of the PR. */
+export type Verdict = "approve" | "requestChanges" | "comment";
+
+/** What `submitReview` rejects with: GitHub turned it down (`message` is GitHub's, `paths` the
+ *  files its errors name), comments are outdated (`count`), or something else went wrong. */
+export interface SubmitError {
+  kind: "submitFailed" | "outdatedComments" | "other";
+  message: string;
+  paths: string[];
+  count: number;
 }
 
 export type PushToPullRequestOutcome =
@@ -836,7 +967,9 @@ export type CoreEvent =
   | { kind: "recentSessionsChanged"; worktree: string; sessions: RecentSession[] }
   | { kind: "settingsChanged"; settings: LoadedSettings }
   | { kind: "setupChanged"; worktree: string; commands: string[]; status: SetupStatus }
-  | { kind: "setupOutput"; worktree: string; text: string };
+  | { kind: "setupOutput"; worktree: string; text: string }
+  /** PR `number`'s Pending review changed (a comment added, edited or removed, a question, or Submit). */
+  | { kind: "pendingReviewChanged"; number: number };
 
 export const core = {
   prerequisites: () => invoke<MissingPrerequisite[]>("prerequisites"),
@@ -1028,6 +1161,40 @@ export const core = {
   failingCheckPrompt: (worktree: string, number: number) => invoke<string>("failing_check_prompt", { worktree, number }),
   /** The prompt that starts an Agent session on PR `number`'s requested changes and unresolved threads. */
   reviewFeedbackPrompt: (worktree: string, number: number) => invoke<string>("review_feedback_prompt", { worktree, number }),
+  /** Opens PR `number`'s Code review, making its Review Worktree the first time. */
+  openCodeReview: (number: number) => invoke<CodeReview>("open_code_review", { number }),
+  /** One file's diff in the Code review: the PR's, or only what changed since the last review. */
+  codeReviewDiff: (number: number, path: string, sinceLastReview: boolean) =>
+    invoke<DiffLine[]>("code_review_diff", { number, path, sinceLastReview }),
+  /** Adds a comment to the Pending review; rejects if its lines aren't in the diff. */
+  addReviewComment: (number: number, comment: NewReviewComment) =>
+    invoke<PendingComment>("add_review_comment", { number, comment }),
+  editReviewComment: (number: number, id: number, body: string) => invoke<void>("edit_review_comment", { number, id, body }),
+  removeReviewComment: (number: number, id: number) => invoke<void>("remove_review_comment", { number, id }),
+  /** Records lines asked about with "Ask Claude", for their gutter marker. */
+  addReviewQuestion: (number: number, question: Question) => invoke<void>("add_review_question", { number, question }),
+  /** Submits the Pending review in one go; rejects with a `SubmitError`. */
+  submitReview: (number: number, verdict: Verdict, summary: string) =>
+    invoke<void>("submit_review", { number, verdict, summary }),
+  /** Replies to a thread on the PR's code, under its comment `commentId`; the reply as posted. */
+  replyToThread: (number: number, commentId: number, body: string) =>
+    invoke<PullRequestComment>("reply_to_thread", { number, commentId, body }),
+  /** Ticks (or unticks) a file Viewed on GitHub. */
+  setReviewFileViewed: (number: number, path: string, viewed: boolean) =>
+    invoke<void>("set_review_file_viewed", { number, path, viewed }),
+  /** How many commits were pushed to the PR since the Review Worktree's head. */
+  codeReviewNewCommits: (number: number) => invoke<number>("code_review_new_commits", { number }),
+  /** Moves the Review Worktree to the PR's new head; pending comments follow their lines (or go outdated). */
+  refreshCodeReview: (number: number) => invoke<CodeReview>("refresh_code_review", { number }),
+  /** The Code review's Agent session (started, or reopened, if need be). */
+  codeReviewSession: (number: number) => invoke<SessionId>("code_review_session", { number }),
+  /** "Claude review": asks the review session to review the whole PR; the session. */
+  claudeReview: (number: number) => invoke<SessionId>("claude_review", { number }),
+  /** "Ask Claude": the selected lines, with some around them, to attach to the review session's prompt. */
+  askAttachment: (number: number, path: string, side: DiffSide, startLine: number | null, line: number) =>
+    invoke<Attachment>("ask_attachment", { number, path, side, startLine, line }),
+  /** The PR number of a Review Worktree; null for any other Worktree. */
+  isReviewWorktree: (worktree: string) => invoke<number | null>("is_review_worktree", { worktree }),
   /** Push for a branch whose PR is open: commits what's left with `commitMessage`, then pushes. */
   pushToPullRequest: (worktree: string, commitMessage: string, evenIfWorking: boolean, onProgress: (progress: PullRequestProgress) => void) => {
     const channel = new Channel<PullRequestProgress>();

@@ -43,7 +43,7 @@ export type WorktreeTab = WorktreeInfo & { removed?: boolean };
 
 /** A Worktree that disappeared (e.g. removed in a terminal) while sessions still run in it. */
 export const removedWorktree = (path: string): WorktreeTab => ({
-  path, branch: null, head: "", isMain: false, ahead: null, behind: null, changed: 0, removed: true,
+  path, branch: null, head: "", isMain: false, ahead: null, behind: null, changed: 0, review: null, removed: true,
 });
 
 /** A stable colour per Worktree path. */
