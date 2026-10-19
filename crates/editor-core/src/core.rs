@@ -31,7 +31,7 @@ use crate::git_status::{
     BaseChange, BaseChanges, ChangeKind, CommitOutcome, CommitRequest, GitStatus, PullOutcome,
     PushOutcome,
 };
-use crate::merged::{self, WorktreeMerge};
+use crate::merged::{self, MergeState, WorktreeMerge};
 use crate::names;
 use crate::permissions;
 use crate::pull_request::{
@@ -315,6 +315,16 @@ const AUTO_SUSPEND_COOLDOWN: Duration = Duration::from_secs(20);
 type ActorSlot = Arc<tokio::sync::OnceCell<Arc<WorktreeActor>>>;
 
 /// How long after a burst of file news a Worktree's branch status is refreshed.
+/// What a Worktree's merged state depends on: its branch, its HEAD, its Base's commit, and where the
+/// remote branches point (a PR may have been merged into one of them).
+#[derive(Clone, PartialEq, Eq)]
+struct MergeKey {
+    branch: Option<String>,
+    head: String,
+    base_id: String,
+    remotes: u64,
+}
+
 const STATUS_SETTLE: Duration = Duration::from_millis(200);
 /// A fetch on window focus waits at least this long since the Worktree was last fetched.
 const FOCUS_FETCH_EVERY: Duration = Duration::from_secs(5 * 60);
@@ -700,6 +710,9 @@ struct Inner {
     last_fetch: Mutex<Option<std::time::Instant>>,
     /// When the window getting focus last re-listed every Worktree (by `clock`).
     last_focus_relist: Mutex<Option<std::time::Instant>>,
+    /// Each Worktree's merged state as the Worktrees overview last worked it out, and what it was
+    /// worked out from: it only changes when one of those does.
+    merged: Mutex<HashMap<PathBuf, (MergeKey, MergeState)>>,
     /// One push, fetch or pull at a time: every Worktree shares the repo's remote refs, and two
     /// fetches would fight over them.
     remote_op: tokio::sync::Mutex<()>,
@@ -961,6 +974,7 @@ impl Core {
             shown_worktree: Mutex::new(None),
             last_fetch: Mutex::default(),
             last_focus_relist: Mutex::default(),
+            merged: Mutex::default(),
             remote_op: tokio::sync::Mutex::new(()),
             documents: Mutex::default(),
             fonts: tokio::sync::OnceCell::new(),
@@ -2162,42 +2176,104 @@ impl Core {
     /// are (fetch first for news of merged PRs).
     pub async fn merge_overview(&self) -> Result<Vec<WorktreeMerge>, CoreError> {
         let root = self.workspace()?.root;
+        // Read once for every Worktree: the branches (to check the Bases their reflogs name, and to
+        // tell whether a remote one moved since a branch was last looked at), and full HEAD ids.
+        let refs = git::RefSnapshot::read(&root).await;
+        let heads: HashMap<PathBuf, String> = git::worktree_list(&root)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|w| (worktrees::normalize(w.path), w.head))
+            .collect();
+        let mut default = None;
+        let mut base_ids: HashMap<String, Option<String>> = HashMap::new();
         // Each branch is looked at by a run of git commands of its own, so they go side by side
         // (a few at a time, so many Worktrees don't start a swarm of git processes).
         let limit = Arc::new(tokio::sync::Semaphore::new(4));
         let mut rows = vec![];
         let mut detecting = tokio::task::JoinSet::new();
-        for (i, info) in self.worktrees().into_iter().enumerate() {
-            let (base, _) = self.base_of(&info.path).await;
+        let listed = self.worktrees();
+        for (i, info) in listed.iter().cloned().enumerate() {
+            let (base, _) = self
+                .base_with(&info.path, refs.as_ref(), &mut default)
+                .await;
             let mut row = WorktreeMerge {
                 path: info.path.clone(),
                 branch: info.branch.clone(),
                 is_main: info.is_main,
-                base,
+                base: base.clone(),
                 merge: None,
                 error: None,
                 changed: info.changed,
             };
             if !info.is_main {
-                match self.resolved_base(&root, &info.path).await {
-                    Ok((base, base_id)) => {
-                        let limit = limit.clone();
-                        detecting.spawn(async move {
-                            let _turn = limit.acquire().await;
-                            let branch = info.branch.as_deref();
-                            let state = merged::detect(&info.path, branch, &base, &base_id).await;
-                            (i, state)
-                        });
+                // (By commit id, resolved in the main checkout: see `resolved_base`.)
+                let base_id = match base_ids.get(&base) {
+                    Some(id) => id.clone(),
+                    None => {
+                        let id = git::resolve_commit(&root, &base).await;
+                        base_ids.insert(base.clone(), id.clone());
+                        id
                     }
-                    Err(err) => row.error = Some(err.to_string()),
+                };
+                match base_id {
+                    Some(base_id) => {
+                        let head = match heads.get(&info.path).filter(|h| !h.is_empty()) {
+                            Some(head) => head.clone(),
+                            None => git::resolve_commit(&info.path, "HEAD")
+                                .await
+                                .unwrap_or_default(),
+                        };
+                        let key = refs.as_ref().map(|refs| MergeKey {
+                            branch: info.branch.clone(),
+                            head: head.clone(),
+                            base_id: base_id.clone(),
+                            remotes: refs.remotes,
+                        });
+                        let known = self
+                            .inner
+                            .merged
+                            .lock()
+                            .expect("merged lock")
+                            .get(&info.path)
+                            .cloned();
+                        match known {
+                            Some((was, state)) if Some(&was) == key.as_ref() => {
+                                row.merge = Some(state);
+                            }
+                            _ => {
+                                let limit = limit.clone();
+                                detecting.spawn(async move {
+                                    let _turn = limit.acquire().await;
+                                    let branch = info.branch.as_deref();
+                                    let state = merged::detect_at(
+                                        &info.path, branch, &base, &base_id, &head,
+                                    )
+                                    .await;
+                                    (i, key, state)
+                                });
+                            }
+                        }
+                    }
+                    None => row.error = Some(format!("git: couldn't find the Base `{base}`")),
                 }
             }
             rows.push(row);
         }
         while let Some(done) = detecting.join_next().await {
-            let (i, state) = done.map_err(|e| CoreError::Git(e.to_string()))?;
+            let (i, key, state) = done.map_err(|e| CoreError::Git(e.to_string()))?;
+            if let Some(key) = key {
+                let mut merged = self.inner.merged.lock().expect("merged lock");
+                merged.insert(rows[i].path.clone(), (key, state.clone()));
+            }
             rows[i].merge = Some(state);
         }
+        // (Worktrees that are gone are forgotten.)
+        self.inner
+            .merged
+            .lock()
+            .expect("merged lock")
+            .retain(|path, _| listed.iter().any(|w| &w.path == path));
         Ok(rows)
     }
 
@@ -2206,28 +2282,41 @@ impl Core {
     /// upstream but commits since its Base, or a merge or rebase in progress.
     pub async fn worktree_attention(&self) -> Result<Vec<WorktreeAttention>, CoreError> {
         self.workspace()?;
+        // Each Worktree's git status scans its folder, so they're read side by side (a few at a
+        // time), and listed in the Worktrees' order.
+        let limit = Arc::new(tokio::sync::Semaphore::new(6));
+        let mut reading = tokio::task::JoinSet::new();
+        for (i, info) in self.worktrees().into_iter().enumerate() {
+            let (core, limit) = (self.clone(), limit.clone());
+            reading.spawn(async move {
+                let _turn = limit.acquire().await;
+                // One git can't read (its folder deleted outside the editor) is left out.
+                let status = git::status(&info.path).await.ok()?;
+                let since_base = if status.branch.is_some() && status.upstream.is_none() {
+                    let (base, _) = core.base_of(&info.path).await;
+                    git::count_not_in(&info.path, &base, "HEAD").await
+                } else {
+                    0
+                };
+                let reasons = dashboard::reasons(&status, since_base);
+                (!reasons.is_empty()).then_some((
+                    i,
+                    WorktreeAttention {
+                        path: info.path,
+                        branch: info.branch,
+                        reasons,
+                    },
+                ))
+            });
+        }
         let mut listed = vec![];
-        for info in self.worktrees() {
-            // One git can't read (its folder deleted outside the editor) is left out.
-            let Ok(status) = git::status(&info.path).await else {
-                continue;
-            };
-            let since_base = if status.branch.is_some() && status.upstream.is_none() {
-                let (base, _) = self.base_of(&info.path).await;
-                git::count_not_in(&info.path, &base, "HEAD").await
-            } else {
-                0
-            };
-            let reasons = dashboard::reasons(&status, since_base);
-            if !reasons.is_empty() {
-                listed.push(WorktreeAttention {
-                    path: info.path,
-                    branch: info.branch,
-                    reasons,
-                });
+        while let Some(done) = reading.join_next().await {
+            if let Some(row) = done.map_err(|e| CoreError::Git(e.to_string()))? {
+                listed.push(row);
             }
         }
-        Ok(listed)
+        listed.sort_by_key(|(i, _)| *i);
+        Ok(listed.into_iter().map(|(_, row)| row).collect())
     }
 
     fn sessions_in(&self, worktree: &Path) -> Vec<Arc<Session>> {
@@ -2760,33 +2849,53 @@ impl Core {
     /// the branch its branch was made from (as its reflog says), else the default. Whether none was
     /// set for it.
     async fn base_of(&self, worktree: &Path) -> (String, bool) {
-        let set = self
-            .inner
-            .state
-            .lock()
-            .expect("state lock")
-            .bases
-            .get(worktree)
-            .cloned();
+        self.base_with(worktree, None, &mut None).await
+    }
+
+    /// `base_of`, with the branches its reflog names checked against `refs` if given (read once
+    /// for many Worktrees), and the default worked out at most once into `default`.
+    async fn base_with(
+        &self,
+        worktree: &Path,
+        refs: Option<&git::RefSnapshot>,
+        default: &mut Option<String>,
+    ) -> (String, bool) {
+        let (set, branch) = {
+            let state = self.inner.state.lock().expect("state lock");
+            let branch = state
+                .worktrees
+                .iter()
+                .find(|w| w.path == worktree)
+                .and_then(|w| w.branch.clone());
+            (state.bases.get(worktree).cloned(), branch)
+        };
         if let Some(base) = set {
             return (base, false);
         }
         // Not set here: the branch it was made from (outside the editor too, as git recorded it),
         // which is where its PR most likely goes, else the default.
-        let branch = self
-            .worktrees()
-            .into_iter()
-            .find(|w| w.path == worktree)
-            .and_then(|w| w.branch);
         if let Some(branch) = branch {
-            if let Some(from) = git::created_from(worktree, &branch).await {
+            let from = match refs {
+                Some(refs) => git::reflog_sources(worktree, &branch)
+                    .await
+                    .into_iter()
+                    .find(|(_, name)| refs.has_branch(name))
+                    .map(|(from, _)| from),
+                None => git::created_from(worktree, &branch).await,
+            };
+            if let Some(from) = from {
                 return (from, true);
             }
         }
-        match self.workspace() {
-            Ok(workspace) => (git::default_start_point(&workspace.root).await, true),
-            Err(_) => ("HEAD".into(), true),
+        if let Some(default) = default {
+            return (default.clone(), true);
         }
+        let found = match self.workspace() {
+            Ok(workspace) => git::default_start_point(&workspace.root).await,
+            Err(_) => "HEAD".into(),
+        };
+        *default = Some(found.clone());
+        (found, true)
     }
 
     /// "Review" (ticket 42): every file the Worktree's PR would change, from where its branch split
