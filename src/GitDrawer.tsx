@@ -36,6 +36,18 @@ const OPERATION: Record<Operation, { name: string; git: string }> = {
   am: { name: "patch apply (git am)", git: "am" },
 };
 
+/** A burst of git status events reads the status once. */
+const COALESCE_MS = 150;
+
+/** `next`, with the files that haven't changed since `now` kept as they were, so their rows are kept
+ *  rather than drawn again (an Agent's edit changes one file of many). */
+function sameFilesKept(now: GitStatus | null, next: GitStatus): GitStatus {
+  if (!now) return next;
+  const was = new Map(now.files.map((f) => [f.path, f]));
+  const same = (a: GitFile, b: GitFile) => JSON.stringify(a) === JSON.stringify(b);
+  return { ...next, files: next.files.map((f) => (was.has(f.path) && same(was.get(f.path)!, f) ? was.get(f.path)! : f)) };
+}
+
 const LETTER_KIND: Record<string, string> = { "?": "untracked", A: "added", D: "deleted", U: "deleted", R: "renamed" };
 
 export function GitDrawer(props: {
@@ -71,7 +83,7 @@ export function GitDrawer(props: {
     try {
       const next = await core.gitStatus(worktree);
       if (n !== asked || worktree !== props.worktree) return;
-      setStatus(next); // (an operation's error stays up: the status is read after every one)
+      setStatus((now) => sameFilesKept(now, next)); // (an operation's error stays up: the status is read after every one)
     } catch (err) {
       if (n === asked) setError(String(err));
     }
@@ -93,18 +105,26 @@ export function GitDrawer(props: {
       },
     ),
   );
+  // A burst of git status events (an Agent's run of edits, a checkout) reads the status once.
+  let due: ReturnType<typeof setTimeout> | undefined;
+  const soon = () => {
+    if (due !== undefined) return;
+    due = setTimeout(() => {
+      due = undefined;
+      void refresh();
+      if (mode() === "base") void refreshChanges();
+    }, COALESCE_MS);
+  };
   let stop: (() => void) | undefined;
   let alive = true;
   onCleanup(() => {
     alive = false;
+    clearTimeout(due);
     stop?.();
   });
   void core
     .onEvent((event) => {
-      if (event.kind === "gitStatusChanged" && event.worktree === props.worktree) {
-        void refresh();
-        if (mode() === "base") void refreshChanges();
-      }
+      if (event.kind === "gitStatusChanged" && event.worktree === props.worktree) soon();
     })
     .then((unlisten) => (alive ? (stop = unlisten) : unlisten()));
 

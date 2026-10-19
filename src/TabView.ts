@@ -27,25 +27,31 @@ export function createTabView(slot: string): TabView {
 
   // Each show() gets a token; batches from an earlier stream (even of the same session) are dropped.
   let current = 0;
+  // A batch is applied as one change (the transcript, its rows and markdown update once, not once
+  // per delta), with runs of text appended to the same item joined first.
   const applyFor = (token: number) => (deltas: TranscriptDelta[]) => {
     if (token !== current) return;
-    for (const delta of deltas) {
-      if (delta.kind === "reset") {
-        setStart(delta.start);
-        setItems(reconcile(delta.items));
-        continue;
+    batch(() => {
+      let first = start();
+      for (const delta of joinAppends(deltas)) {
+        if (delta.kind === "reset") {
+          first = delta.start;
+          setStart(delta.start);
+          setItems(reconcile(delta.items));
+          continue;
+        }
+        const at = delta.index - first;
+        if (at < 0) continue; // a change to an item before the loaded page
+        if (delta.kind === "itemAdded" || delta.kind === "itemUpdated") setItems(at, delta.item);
+        else
+          setItems(
+            produce((all) => {
+              const item = all[at];
+              if (item?.kind === "agent") item.text += delta.text;
+            }),
+          );
       }
-      const at = delta.index - start();
-      if (at < 0) continue; // a change to an item before the loaded page
-      if (delta.kind === "itemAdded" || delta.kind === "itemUpdated") setItems(at, delta.item);
-      else
-        setItems(
-          produce((all) => {
-            const item = all[at];
-            if (item?.kind === "agent") item.text += delta.text;
-          }),
-        );
-    }
+    });
   };
 
   const show = async (id: SessionId) => {
@@ -86,4 +92,16 @@ export function createTabView(slot: string): TabView {
   };
 
   return { slot, shown, items, start, show, hide, loadEarlier };
+}
+
+/** `deltas` with each run of text appended to the same item made one append. */
+function joinAppends(deltas: TranscriptDelta[]): TranscriptDelta[] {
+  const joined: TranscriptDelta[] = [];
+  for (const delta of deltas) {
+    const last = joined[joined.length - 1];
+    if (delta.kind === "textAppended" && last?.kind === "textAppended" && last.index === delta.index)
+      joined[joined.length - 1] = { ...last, text: last.text + delta.text };
+    else joined.push(delta);
+  }
+  return joined;
 }

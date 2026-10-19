@@ -227,7 +227,7 @@ const OPEN_ICON = svg('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 
 const COPY_ICON = svg('<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>');
 
 function codeBlock(code: string, label: string): string {
-  const lines = highlightCode(code, languageOf(label))
+  const lines = highlightCode(code, languageOf(label), true)
     .split("\n")
     .map((line) => `<span class="l">${line || " "}</span>`)
     .join("");

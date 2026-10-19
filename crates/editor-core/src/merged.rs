@@ -73,6 +73,18 @@ pub(crate) async fn detect(
     let head = git::resolve_commit(worktree, "HEAD")
         .await
         .unwrap_or_default();
+    detect_at(worktree, branch, base, base_id, &head).await
+}
+
+/// `detect`, for a Worktree whose HEAD is known to be the commit `head`.
+pub(crate) async fn detect_at(
+    worktree: &Path,
+    branch: Option<&str>,
+    base: &str,
+    base_id: &str,
+    head: &str,
+) -> MergeState {
+    let head = head.to_owned();
     if git::is_merged(worktree, &head, base_id).await {
         // On the Base's own line it either never left it or was fast-forwarded in: only one with
         // commits made on it did any work.

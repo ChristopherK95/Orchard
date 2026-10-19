@@ -405,3 +405,51 @@ async fn a_worktree_made_outside_the_editor_is_measured_against_the_branch_it_wa
     assert_eq!(row.base, "origin/project/big");
     assert_eq!(row.merge, Some(MergeState::NothingNew));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_overview_looks_again_once_remote_branches_or_the_base_move() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let core = core_with(&fake);
+    core.open_workspace(&setup.repo()).await.unwrap();
+    project_branch(&setup, "project/big");
+    let mut worktrees = vec![];
+    for branch in ["pr/elsewhere", "pr/base"] {
+        let path = new_worktree(&core, branch).await;
+        commit_file(&path, &format!("{}.txt", branch.replace('/', "-")));
+        push(&path, branch);
+        worktrees.push(path);
+    }
+    core.fetch(&setup.repo()).await.unwrap();
+    for path in &worktrees {
+        assert_eq!(
+            state_of(&core, path).await,
+            Some(MergeState::NotMerged { commits: 1 })
+        );
+    }
+    // Asked again with nothing changed, the answer is the same.
+    assert_eq!(
+        state_of(&core, &worktrees[0]).await,
+        Some(MergeState::NotMerged { commits: 1 })
+    );
+
+    // Only a remote branch moved (not the Worktree's HEAD, nor its Base).
+    merge_pr_into(&setup, "pr/elsewhere", "project/big", "squash");
+    core.fetch(&setup.repo()).await.unwrap();
+    assert_eq!(
+        state_of(&core, &worktrees[0]).await,
+        Some(MergeState::ChangesInBase {
+            into: "origin/project/big".into()
+        })
+    );
+
+    // Its Base moved.
+    merge_pr(&setup, "pr/base", "merge");
+    core.fetch(&setup.repo()).await.unwrap();
+    assert_eq!(
+        state_of(&core, &worktrees[1]).await,
+        Some(MergeState::Merged {
+            into: "origin/main".into()
+        })
+    );
+}

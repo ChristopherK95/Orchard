@@ -198,7 +198,9 @@ fn close_pop_outs(app: AppHandle) {
 }
 
 /// The Workspace picker's list: the Recent Workspaces matching `query`.
-#[tauri::command]
+// Commands that read or write files (the app state file, /proc) are `async`, so they run off
+// the main thread and the window doesn't wait on the disk.
+#[tauri::command(async)]
 fn recent_workspaces(core: State<'_, Core>, query: String) -> Vec<RecentWorkspace> {
     core.recent_workspaces(&query)
 }
@@ -220,7 +222,7 @@ async fn pick_files(window: tauri::Window) -> Vec<String> {
         .collect()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn remove_recent_workspace(core: State<'_, Core>, root: String) -> CommandResult<()> {
     core.remove_recent_workspace(root.as_ref())
         .map_err(|e| e.to_string())
@@ -294,6 +296,11 @@ async fn remove_worktree(
 #[tauri::command]
 async fn branches(core: State<'_, Core>) -> CommandResult<BranchList> {
     core.branches().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn branches_as_fetched(core: State<'_, Core>) -> CommandResult<BranchList> {
+    core.branches_as_fetched().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -752,7 +759,7 @@ fn column_shares(core: State<'_, Core>) -> std::collections::BTreeMap<PathBuf, u
 }
 
 /// Sets the columns' widths (shares of the row), remembered across restarts.
-#[tauri::command]
+#[tauri::command(async)]
 fn set_column_shares(
     core: State<'_, Core>,
     shares: std::collections::BTreeMap<PathBuf, u32>,
@@ -761,7 +768,7 @@ fn set_column_shares(
 }
 
 /// Pins or unpins a Worktree as a column; returns the pinned Worktrees now.
-#[tauri::command]
+#[tauri::command(async)]
 fn set_pinned(
     core: State<'_, Core>,
     worktree: String,
@@ -1139,7 +1146,7 @@ fn statistics_period(core: State<'_, Core>) -> u32 {
 }
 
 /// Chooses the days the open Workspace's statistics cover, remembered across restarts.
-#[tauri::command]
+#[tauri::command(async)]
 fn set_statistics_period(core: State<'_, Core>, days: u32) -> CommandResult<()> {
     core.set_statistics_period(days).map_err(|e| e.to_string())
 }
@@ -1366,7 +1373,7 @@ async fn show_session(
 }
 
 /// Every running shell, oldest first.
-#[tauri::command]
+#[tauri::command(async)]
 fn terminals(core: State<'_, Core>) -> Vec<TerminalInfo> {
     core.terminals()
 }
@@ -1566,6 +1573,7 @@ fn main() {
             removal_check,
             remove_worktree,
             branches,
+            branches_as_fetched,
             suggest_branch_name,
             default_start_point,
             settings,

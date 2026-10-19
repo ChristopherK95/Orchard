@@ -79,7 +79,8 @@ export function Transcript(props: {
 
   // Rows keyed by their (stable) key, so re-measuring doesn't rebuild what's on screen.
   const rowKeys = createMemo(() => virtualizer.getVirtualItems().map((row) => row.key as number));
-  const rowFor = (key: number) => virtualizer.getVirtualItems().find((row) => row.key === key);
+  const rowsByKey = createMemo(() => new Map(virtualizer.getVirtualItems().map((row) => [row.key as number, row])));
+  const rowFor = (key: number) => rowsByKey().get(key);
 
   const toBottom = () => requestAnimationFrame(() => virtualizer.scrollToIndex(rows().keys.length - 1, { align: "end" }));
   // The composer grew (Edit notes, an error): keep the newest item above it when following.

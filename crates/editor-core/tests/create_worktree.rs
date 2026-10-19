@@ -225,3 +225,26 @@ async fn a_new_branch_name_that_already_exists_is_refused() {
     );
     assert_ne!(core.suggest_branch_name().await.unwrap(), "agent/taken");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_branches_as_last_fetched_are_listed_without_fetching() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let core = core_with(&fake);
+    core.open_workspace(&setup.repo()).await.unwrap();
+    // A colleague pushes a branch.
+    let seed = setup.root().join("seed");
+    git(&seed, &["checkout", "--quiet", "-b", "theirs/new"]);
+    commit(&seed, "theirs");
+    git(&seed, &["push", "--quiet", "origin", "theirs/new"]);
+    let has_theirs = |list: &editor_core::BranchList| {
+        list.branches.iter().any(|b| b.name == "origin/theirs/new")
+    };
+
+    let known = core.branches_as_fetched().await.unwrap();
+    assert!(!has_theirs(&known), "not fetched yet");
+    assert!(known.branches.iter().any(|b| b.name == "main"));
+
+    assert!(has_theirs(&core.branches().await.unwrap()));
+    assert!(has_theirs(&core.branches_as_fetched().await.unwrap()));
+}

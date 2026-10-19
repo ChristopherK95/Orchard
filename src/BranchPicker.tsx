@@ -3,7 +3,7 @@
 // or the sidebar's Worktree row. Not while a session there is mid-turn or a merge or rebase is in
 // progress; branches checked out in another Worktree lead to it.
 import { createMemo, createResource, createSignal, For, onCleanup, Show } from "solid-js";
-import { core, type BranchInfo, type GitStatus } from "./core";
+import { core, type BranchInfo, type BranchList as Branches, type GitStatus } from "./core";
 import { hasUnsavedChangesUnder } from "./documents";
 
 const OPERATION_NAME: Record<NonNullable<GitStatus["operation"]>, string> = {
@@ -13,6 +13,25 @@ const OPERATION_NAME: Record<NonNullable<GitStatus["operation"]>, string> = {
   revert: "revert",
   am: "patch apply (git am)",
 };
+
+/** At most this many rows are shown at once: with thousands of branches, rendering them all makes
+ *  opening the list (and every keystroke in its filter) slow. The filter finds the rest. */
+export const SHOWN_AT_MOST = 200;
+
+/** The branches as last fetched at once, then (as the New Worktree dialog lists them) as fetched
+ *  now: fetching can take a while with many branches or a slow remote. */
+export function branchesThenFetched() {
+  const failed = (err: unknown): Branches => ({ branches: [], warning: `Couldn't list the branches: ${err}` });
+  const [known] = createResource(() => core.branchesAsFetched().catch(() => null));
+  const [fetched] = createResource(() => core.branches().catch(failed));
+  return {
+    list: (): Branches | undefined => fetched() ?? known() ?? undefined,
+    /** Nothing to show yet. */
+    loading: () => !fetched() && !known(),
+    /** Shown as last fetched while it fetches. */
+    fetching: () => fetched.loading,
+  };
+}
 
 /** Every branch (fetched first, as the New Worktree dialog lists them), filtered, each with what
  *  can be done with it from `worktree`. */
@@ -27,18 +46,18 @@ export function BranchList(props: {
   onClose: () => void;
 }) {
   const [filter, setFilter] = createSignal("");
-  const [list] = createResource(() =>
-    core.branches().catch((err) => ({ branches: [] as BranchInfo[], warning: `Couldn't list the branches: ${err}` })),
-  );
-  const picks = createMemo(() => {
+  const branches = branchesThenFetched();
+  const list = branches.list;
+  const matching = createMemo(() => {
     const words = filter().toLowerCase();
     return (list()?.branches ?? []).filter((b) => b.name.toLowerCase().includes(words));
   });
+  const picks = () => matching().slice(0, SHOWN_AT_MOST);
+  const locals = createMemo(() => new Map((list()?.branches ?? []).filter((b) => !b.remote).map((b) => [b.name, b])));
   /** The local branch a row comes to (a remote one's local branch of the same name, if any). */
   const localOf = (branch: BranchInfo) => {
     if (!branch.remote) return branch;
-    const name = branch.name.slice(branch.name.indexOf("/") + 1);
-    return list()?.branches.find((b) => !b.remote && b.name === name) ?? null;
+    return locals().get(branch.name.slice(branch.name.indexOf("/") + 1)) ?? null;
   };
   /** Where `branch` (or its local branch) is checked out, if that's another Worktree. */
   const elsewhere = (branch: BranchInfo) => {
@@ -72,8 +91,11 @@ export function BranchList(props: {
       </Show>
       <input placeholder="Filter branches" value={filter()} onInput={(e) => setFilter(e.currentTarget.value)} autofocus />
       <Show when={list()?.warning}>{(w) => <p class="warning small">{w()}</p>}</Show>
+      <Show when={!branches.loading() && branches.fetching()}>
+        <p class="muted small">Fetching…</p>
+      </Show>
       <div class="branch-list">
-        <Show when={!list.loading} fallback={<p class="muted">Fetching branches…</p>}>
+        <Show when={!branches.loading()} fallback={<p class="muted">Fetching branches…</p>}>
           <For each={picks()} fallback={<p class="muted">No matching branches.</p>}>
             {(b) => (
               <div class="branch-row" classList={{ taken: !!elsewhere(b) }}>
@@ -110,6 +132,9 @@ export function BranchList(props: {
               </div>
             )}
           </For>
+          <Show when={matching().length > SHOWN_AT_MOST}>
+            <p class="muted small">{matching().length - SHOWN_AT_MOST} more: type to narrow them down.</p>
+          </Show>
         </Show>
       </div>
     </div>

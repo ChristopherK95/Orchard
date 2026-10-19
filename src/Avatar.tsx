@@ -82,13 +82,32 @@ function face(name: string, clothes: string): (string | null)[][] {
   return grid.map((row) => row.map((p) => (p === "." ? null : colour[p])));
 }
 
+/** A face as one outline per colour (a few nodes rather than a rect per pixel: avatars are on every
+ *  sidebar card, Board card and column tab). */
+type Shape = { fill: string; d: string };
+
+const drawn = new Map<string, Shape[]>();
+
+/** `face`'s pixels as shapes, worked out once per name and colour. */
+function shapes(name: string, clothes: string): Shape[] {
+  const key = `${clothes} ${name}`;
+  let known = drawn.get(key);
+  if (!known) {
+    const byColour = new Map<string, string>();
+    face(name, clothes).forEach((row, y) =>
+      row.forEach((fill, x) => fill && byColour.set(fill, `${byColour.get(fill) ?? ""}M${x} ${y}h1v1h-1z`)),
+    );
+    known = [...byColour].map(([fill, d]) => ({ fill, d }));
+    if (drawn.size >= 500) drawn.clear(); // (names come and go; this keeps it small)
+    drawn.set(key, known);
+  }
+  return known;
+}
+
 export function Avatar(props: { name: string; colour: string; size?: number }) {
-  const pixels = () => face(props.name, props.colour);
   return (
     <svg class="avatar" viewBox="-1 -1 12 12" width={props.size ?? 32} height={props.size ?? 32} shape-rendering="crispEdges" aria-hidden="true">
-      <For each={pixels()}>
-        {(row, y) => <For each={row}>{(fill, x) => fill && <rect x={x()} y={y()} width="1" height="1" fill={fill} />}</For>}
-      </For>
+      <For each={shapes(props.name, props.colour)}>{(shape) => <path d={shape.d} fill={shape.fill} />}</For>
     </svg>
   );
 }

@@ -670,34 +670,81 @@ pub(crate) async fn count_not_in(worktree: &Path, base: &str, commit: &str) -> u
 /// origin/project"); only a branch other than itself that still exists counts (not `HEAD~1` or
 /// a commit id). `None` once the reflog has expired.
 pub(crate) async fn created_from(worktree: &Path, branch: &str) -> Option<String> {
-    let reference = format!("refs/heads/{branch}");
-    let log = output(worktree, &["log", "-g", "--format=%gs", &reference, "--"]).await?;
-    // Newest first.
-    for entry in log.lines() {
-        let Some(from) = entry
-            .strip_prefix("reset: moving to ")
-            .or_else(|| entry.strip_prefix("branch: Created from "))
-        else {
-            continue;
-        };
-        let from = from.trim();
-        let name = from
-            .trim_start_matches("refs/remotes/")
-            .trim_start_matches("refs/heads/");
-        // (Nor its own remote branch, `origin/<branch>`.)
-        if name == branch || name.split_once('/').is_some_and(|(_, rest)| rest == branch) {
-            continue;
-        }
+    for (from, name) in reflog_sources(worktree, branch).await {
         for full in [format!("refs/remotes/{name}"), format!("refs/heads/{name}")] {
             if run(worktree, &["show-ref", "--verify", "--quiet", &full])
                 .await
                 .is_ok()
             {
-                return Some(from.to_owned());
+                return Some(from);
             }
         }
     }
     None
+}
+
+/// `created_from`'s candidates, newest first, as written (`origin/project`, `refs/heads/x`) and as a
+/// branch name, without checking that they still exist.
+pub(crate) async fn reflog_sources(worktree: &Path, branch: &str) -> Vec<(String, String)> {
+    let reference = format!("refs/heads/{branch}");
+    let Some(log) = output(worktree, &["log", "-g", "--format=%gs", &reference, "--"]).await else {
+        return vec![];
+    };
+    log.lines()
+        .filter_map(|entry| {
+            let from = entry
+                .strip_prefix("reset: moving to ")
+                .or_else(|| entry.strip_prefix("branch: Created from "))?
+                .trim();
+            let name = from
+                .trim_start_matches("refs/remotes/")
+                .trim_start_matches("refs/heads/");
+            // (Nor its own remote branch, `origin/<branch>`.)
+            let own =
+                name == branch || name.split_once('/').is_some_and(|(_, rest)| rest == branch);
+            (!own).then(|| (from.to_owned(), name.to_owned()))
+        })
+        .collect()
+}
+
+/// The repository's local and remote branches at one moment, read with one git command: which
+/// exist, and a fingerprint of where the remote ones point (it changes when any of them moves).
+pub(crate) struct RefSnapshot {
+    names: std::collections::HashSet<String>,
+    pub(crate) remotes: u64,
+}
+
+impl RefSnapshot {
+    pub(crate) async fn read(repo: &Path) -> Option<Self> {
+        use std::hash::{Hash, Hasher};
+        let format = "--format=%(refname) %(objectname)";
+        let out = output(
+            repo,
+            &["for-each-ref", format, "refs/heads", "refs/remotes"],
+        )
+        .await?;
+        let mut names = std::collections::HashSet::new();
+        let mut remotes = std::collections::hash_map::DefaultHasher::new();
+        for line in out.lines() {
+            let Some((name, _)) = line.split_once(' ') else {
+                continue;
+            };
+            if name.starts_with("refs/remotes/") {
+                line.hash(&mut remotes);
+            }
+            names.insert(name.to_owned());
+        }
+        Some(Self {
+            names,
+            remotes: remotes.finish(),
+        })
+    }
+
+    /// Whether `name` (a branch name, as `reflog_sources` gives it) is a remote or local branch.
+    pub(crate) fn has_branch(&self, name: &str) -> bool {
+        self.names.contains(&format!("refs/remotes/{name}"))
+            || self.names.contains(&format!("refs/heads/{name}"))
+    }
 }
 
 /// How many merge commits are on `target`'s first-parent line since `commit`: how many PRs went

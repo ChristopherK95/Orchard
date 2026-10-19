@@ -1,7 +1,7 @@
 // Walking skeleton view (ticket 01): prerequisite gate → open a Workspace → one Tab with a
 // streaming transcript and a composer. It only renders core state and sends commands (ADR 0003).
-import { batch, createEffect, createSignal, For, lazy, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { batch, createEffect, createMemo, createSignal, For, lazy, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
+import { createStore, produce, reconcile } from "solid-js/store";
 import {
   core,
   type LoadedSettings,
@@ -29,7 +29,7 @@ import { FilesDrawer } from "./FilesDrawer";
 import { type BranchPopover, BranchSwitcher, popoverUnder } from "./BranchPicker";
 import { GitDrawer } from "./GitDrawer";
 import { myPrs, PrBoard, watchMyPrs } from "./PrBoard";
-import { cleanUp, reviewRequests, statistics, watchAttention, watchCleanUp, watchReviewRequests, watchStatistics } from "./dashboardData";
+import { reviewRequests, statistics, watchAttention, watchCleanUp, watchReviewRequests, watchStatistics } from "./dashboardData";
 import { PrButton, PrOverlay } from "./PrOverlay";
 import { ReviewOverlay } from "./ReviewOverlay";
 import type { OpenRequest } from "./ManualEditor";
@@ -57,8 +57,10 @@ import { applyAppearance } from "./appearance";
 import orchardMark from "./assets/orchard-mark-small.svg?raw";
 import { Bell, ChevronDown, ChevronRight, GitBranch, GitCompareArrows, GitPullRequest, Loader, PanelLeft, PanelRight, Search, Sparkles, SquareTerminal, X } from "./icons";
 
-/** The PRs and review requests read this lately aren't asked for again when the window gets focus. */
+/** The PRs and review requests read this lately aren't asked for again when the window gets focus,
+ *  or the Dashboard is shown. */
 const FOCUS_FRESH_MS = 60_000;
+const stale = (at: number | null) => at === null || Date.now() - at >= FOCUS_FRESH_MS;
 
 export function App() {
   const [problems, setProblems] = createSignal<MissingPrerequisite[] | null>(null);
@@ -212,7 +214,11 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
 
   // Worktrees as the core reports them, the one whose sessions are shown, and the session last
   // used in each (so switching back returns to it).
-  const [worktrees, setWorktrees] = createSignal<WorktreeInfo[]>([]);
+  // A store, so a new listing updates the rows of the Worktrees that changed in place (keyed by
+  // path) rather than replacing every row: a file an Agent saves changes one count.
+  const [worktreeList, setWorktreeList] = createStore<WorktreeInfo[]>([]);
+  const worktrees = () => worktreeList;
+  const setWorktrees = (next: WorktreeInfo[]) => setWorktreeList(reconcile(next, { key: "path" }));
   // In the Columns view the active Worktree is the focused column's.
   const [activeWorktree, setActiveWorktree] = createSignal(props.workspace.root);
   const [lastSessionIn, setLastSessionIn] = createStore<Record<string, SessionId>>({});
@@ -504,20 +510,41 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   createEffect(() => settings() && applyAppearance(settings()!.settings.appearance));
   /** Something to know that isn't an error (e.g. a fetch failed, so a Worktree started from stale refs). */
   const [notice, setNotice] = createSignal("");
-  const sessionsIn = (path: string) => order().map((id) => sessions[id]).filter((s) => s.worktree === path);
-  const rowWorktrees = (): WorktreeTab[] => {
+  /** Each Worktree's sessions, in Tab order (asked for several times per sidebar row). */
+  const sessionsBy = createMemo(() => {
+    const by = new Map<string, SessionInfo[]>();
+    for (const id of order()) {
+      const session = sessions[id];
+      const here = by.get(session.worktree);
+      if (here) here.push(session);
+      else by.set(session.worktree, [session]);
+    }
+    return by;
+  });
+  const sessionsIn = (path: string): SessionInfo[] => sessionsBy().get(path) ?? [];
+  // (The same row for a removed Worktree each time, so the sidebar keeps it rather than redrawing it.)
+  const removedRows = new Map<string, WorktreeTab>();
+  const rowWorktrees = createMemo((): WorktreeTab[] => {
     const listed = worktrees();
-    const vanished = [...new Set(order().map((id) => sessions[id].worktree))].filter((p) => !listed.some((w) => w.path === p));
-    return [...listed, ...vanished.map(removedWorktree)];
-  };
+    const known = new Set(listed.map((w) => w.path));
+    const vanished = [...sessionsBy().keys()].filter((p) => !known.has(p));
+    for (const path of removedRows.keys()) if (!vanished.includes(path)) removedRows.delete(path);
+    const removed = vanished.map((path) => {
+      let row = removedRows.get(path);
+      if (!row) removedRows.set(path, (row = removedWorktree(path)));
+      return row;
+    });
+    return [...listed, ...removed];
+  });
   const worktree = () => rowWorktrees().find((w) => w.path === activeWorktree());
   watchMyPrs(mainWorktree);
-  // (What the Dashboard shows besides the sessions, kept current whether or not it's showing.)
+  // (What the Dashboard shows besides the sessions: the review requests kept current whether or not
+  // it's showing; its Worktree lists and statistics only while it is.)
   watchReviewRequests(mainWorktree);
-  watchAttention();
-  watchCleanUp();
-  // (The statistics, though, only while it's showing.)
-  watchStatistics(mainWorktree, () => view() === "dashboard");
+  const dashboardShown = () => view() === "dashboard";
+  watchAttention(dashboardShown);
+  watchCleanUp(dashboardShown);
+  watchStatistics(mainWorktree, dashboardShown);
   /** The Dashboard entry's badge: what waits on the user (not Worktree hygiene). */
   const dashboardBadge = () =>
     needYou() +
@@ -527,9 +554,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   let openedOnDashboard = false;
   // The view has changed since the Workspace opened (the user's choice, the open-on-start one stands down).
   let viewChosen = false;
-  // Showing the Dashboard asks GitHub again, and reads the Worktrees ready to clean up. The
-  // statistics are read only when there are none, or they're an hour old: even when the Workspace
-  // opened on it, as the watchers don't ask for them unless the Dashboard is up.
+  // Showing the Dashboard asks GitHub again, unless it was asked under a minute ago (its Worktree
+  // lists are read again by their watchers). The statistics are read only when there are none, or
+  // they're an hour old: even when the Workspace opened on it, as the watchers don't ask for them
+  // unless the Dashboard is up.
   createEffect(
     on(
       view,
@@ -541,9 +569,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           openedOnDashboard = false;
           return;
         }
-        myPrs.refresh();
-        reviewRequests.refresh();
-        cleanUp.refresh();
+        if (stale(myPrs.refreshedAt())) myPrs.refresh();
+        if (stale(reviewRequests.refreshedAt())) reviewRequests.refresh();
       },
       { defer: true },
     ),
@@ -905,7 +932,6 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     // review requests are asked for again too, unless they were read under a minute ago.
     const onFocus = () => {
       void core.windowFocused().catch(() => {});
-      const stale = (at: number | null) => at === null || Date.now() - at >= FOCUS_FRESH_MS;
       if (stale(myPrs.refreshedAt())) myPrs.refresh();
       if (stale(reviewRequests.refreshedAt())) reviewRequests.refresh();
     };

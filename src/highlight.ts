@@ -75,14 +75,36 @@ export function languageOfPath(path: string | null | undefined): string | undefi
 /**
  * `code` as highlighted HTML (lines separated by "\n"), or escaped plain text while the grammar
  * loads or if the language is unknown. Reactive: re-runs once that language's grammar arrives.
+ * `keep`: the result is kept for the next call with the same code (a chat code block, rendered
+ * again with each piece of a streaming reply).
  */
-export function highlightCode(code: string, language: string | undefined): string {
+export function highlightCode(code: string, language: string | undefined, keep = false): string {
   if (!language) return escapeHtml(code);
   const g = grammar(language);
   if (!g.loaded()) {
     void load(language, g);
     return escapeHtml(code);
   }
+  if (!keep) return highlight(code, g);
+  // A streaming reply is rendered again as it grows: its finished code blocks come from here.
+  const key = `${language}\0${code}`;
+  const known = highlighted.get(key);
+  if (known !== undefined) {
+    highlighted.delete(key); // (most recently used last)
+    highlighted.set(key, known);
+    return known;
+  }
+  const html = highlight(code, g);
+  highlighted.set(key, html);
+  if (highlighted.size > KEPT) highlighted.delete(highlighted.keys().next().value!);
+  return html;
+}
+
+/** How many highlighted blocks are kept, the least recently used going first. */
+const KEPT = 200;
+const highlighted = new Map<string, string>();
+
+function highlight(code: string, g: Grammar): string {
   let html = "";
   lezerHighlight(
     code,

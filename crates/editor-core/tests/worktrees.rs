@@ -258,3 +258,49 @@ async fn refreshing_picks_up_changes_without_the_watcher() {
         .iter()
         .any(|w| same_path(&w.path, &feature)));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn focus_reads_every_worktree_again_at_most_every_thirty_seconds() {
+    let repo = git_repo();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let feature = elsewhere.path().join("feature");
+    git(
+        repo.path(),
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "feat/quiet",
+            feature.to_str().unwrap(),
+        ],
+    );
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let clock = std::sync::Arc::new(FakeClock::default());
+    let core = editor_core::Core::new(editor_core::CoreConfig {
+        clock: Some(clock.clone()),
+        ..editor_core::CoreConfig::new(fake.command())
+    });
+    core.open_workspace(repo.path()).await.unwrap();
+    let changed_in_feature = || {
+        core.worktrees()
+            .iter()
+            .find(|w| same_path(&w.path, &feature))
+            .expect("feature listed")
+            .changed
+    };
+
+    // Nothing watches the feature Worktree (it isn't shown and has no sessions): focus reads it.
+    std::fs::write(feature.join("one.txt"), "1").unwrap();
+    core.window_focused().await;
+    assert_eq!(changed_in_feature(), 1);
+
+    std::fs::write(feature.join("two.txt"), "2").unwrap();
+    clock.advance(std::time::Duration::from_secs(10));
+    core.window_focused().await;
+    assert_eq!(changed_in_feature(), 1, "read again too soon");
+
+    clock.advance(std::time::Duration::from_secs(20));
+    core.window_focused().await;
+    assert_eq!(changed_in_feature(), 2);
+}
