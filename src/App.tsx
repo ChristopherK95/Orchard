@@ -33,6 +33,7 @@ import { myPrs, PrBoard, watchMyPrs } from "./PrBoard";
 import { reviewRequests, statistics, watchAttention, watchCleanUp, watchReviewRequests, watchStatistics } from "./dashboardData";
 import { PrButton, PrOverlay } from "./PrOverlay";
 import { ReviewOverlay } from "./ReviewOverlay";
+import { CodeReviewOverlay } from "./CodeReviewOverlay";
 import type { OpenRequest } from "./ManualEditor";
 // CodeMirror loads with the first file opened, not at startup.
 const ManualEditor = lazy(() => import("./ManualEditor").then((m) => ({ default: m.ManualEditor })));
@@ -387,6 +388,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   /** The PR shown over everything else: the Worktree's branch's, or PR `number` of its repo. */
   const [prOf, setPrOf] = createSignal<{ worktree: string; number?: number } | null>(null);
   const openPrOf = (worktree: string) => setPrOf({ worktree });
+  /** The Code review over everything else (issue 44): PR `number`, which the user was asked to review. */
+  const [codeReviewOf, setCodeReviewOf] = createSignal<{ number: number } | null>(null);
   /** The Worktree the user's PRs are read in: the main one. */
   const mainWorktree = () => rowWorktrees().find((w) => w.isMain)?.path ?? props.workspace.root;
   /** One of the user's PRs: a Worktree on its branch shows it as its own; any other is shown from the main one. */
@@ -841,26 +844,26 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       // (Ctrl+P is never the browser's print, even with a dialog open.)
       if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !agentPickerOpen() && !switching() && !settingsAt() && !reviewing() && !prOf()) setPaletteOpen(true);
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !agentPickerOpen() && !switching() && !settingsAt() && !reviewing() && !prOf() && !codeReviewOf()) setPaletteOpen(true);
         return;
       }
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "o") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !agentPickerOpen() && !settingsAt() && !reviewing() && !prOf()) setSwitching(true);
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !agentPickerOpen() && !settingsAt() && !reviewing() && !prOf() && !codeReviewOf()) setSwitching(true);
         return;
       }
       // (Not when the Manual editor or the Terminal took it: there it's theirs.)
       if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k" && !e.defaultPrevented && !document.activeElement?.closest(".terminal-panel")) {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !switching() && !settingsAt() && !reviewing() && !prOf()) setAgentPickerOpen(true);
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !switching() && !settingsAt() && !reviewing() && !prOf() && !codeReviewOf()) setAgentPickerOpen(true);
         return;
       }
       if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ",") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !agentPickerOpen() && !switching() && !reviewing() && !prOf()) openSettingsPage();
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !agentPickerOpen() && !switching() && !reviewing() && !prOf() && !codeReviewOf()) openSettingsPage();
         return;
       }
-      if (removing() || overviewOpen() || creatingWorktree() || paletteOpen() || agentPickerOpen() || switching() || settingsAt() || reviewing() || prOf()) return; // a dialog is open over the Tab
+      if (removing() || overviewOpen() || creatingWorktree() || paletteOpen() || agentPickerOpen() || switching() || settingsAt() || reviewing() || prOf() || codeReviewOf()) return; // a dialog is open over the Tab
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
         return void toggleDrawer("files");
@@ -1434,6 +1437,26 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             />
           );
         }}
+      </Show>
+      <Show when={codeReviewOf()}>
+        {(of) => (
+          <CodeReviewOverlay
+            number={of().number}
+            colourOf={worktreeColour}
+            setupOf={(path) => setups[path]}
+            onOpenSettings={() => {
+              setCodeReviewOf(null);
+              openSettingsPage("repo");
+            }}
+            onShowSession={(id) => {
+              setCodeReviewOf(null);
+              toMainView();
+              void show(id);
+            }}
+            onRemoveWorktree={(path) => setRemoving(rowWorktrees().find((w) => w.path === path) ?? null)}
+            onClose={() => setCodeReviewOf(null)}
+          />
+        )}
       </Show>
       <Show when={branchPopover()}>
         {(at) => (

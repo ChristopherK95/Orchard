@@ -575,7 +575,7 @@ Checkpoint:
 - Commit: `Diffs: lines can be selected and comments shown between them`
 
 ## Task 16: The Code review overlay
-Status: pending
+Status: completed
 Risk: high
 Dependencies: Task 14, Task 15
 Files:

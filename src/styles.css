@@ -1601,3 +1601,35 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .pr-checks-summary .wait { color: var(--needs-text); }
 .pr-labels { display: flex; flex-wrap: wrap; gap: 6px; }
 .pr-label { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; background: color-mix(in srgb, var(--l) 18%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--l) 50%, transparent); color: color-mix(in srgb, var(--l) 55%, #fff); font-size: 11.5px; font-weight: 500; }
+
+/* Code review (issue 44): the Review's layout, with the PR's threads and the Pending review's
+   comments under their lines, a menu beside lines picked, and Claude docked on the right. */
+.cr-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-1); font-weight: 500; }
+.cr-notice { margin: 0 14px 8px; border-radius: var(--r-md); }
+.cr-notice:not(.warn, .error) { background: var(--bg-1); color: var(--fg-2); }
+.cr-notice .grow { flex: 1; }
+.cr-notice .icon { min-height: 22px; width: 22px; }
+.cr-notice .lucide { flex: none; width: 13px; height: 13px; }
+.review-body.docked { grid-template-columns: minmax(200px, 260px) minmax(0, 1fr) minmax(320px, 420px); }
+.cr-dock { min-width: 0; min-height: 0; display: flex; flex-direction: column; margin-left: 8px; border-radius: var(--r-lg); background: var(--bg-1); overflow: hidden; }
+.cr-failed { flex: none; width: 13px; height: 13px; color: var(--danger); }
+.diff-inline .pr-thread, .diff-inline .cr-box, .cr-outdated .pr-thread { max-width: 900px; margin: 0; }
+.diff-inline > * + * { margin-top: 8px; }
+.cr-pending { border: 1px dashed var(--line-strong); }
+.cr-pending.failed { border-color: var(--danger-border); }
+.cr-pending .pr-thread-head button.small { min-height: 24px; gap: 4px; }
+.cr-pending .pr-thread-head .lucide { width: 13px; height: 13px; }
+.cr-thread-foot { padding: 8px 14px 10px; border-top: 2px solid var(--bg-1); }
+.cr-box { display: flex; flex-direction: column; gap: 6px; }
+.cr-box textarea { min-height: 84px; padding: 8px 10px; resize: vertical; font: 13px/1.5 var(--ui); }
+.cr-box-actions { display: flex; align-items: center; gap: 8px; }
+.cr-box-actions .hint { font-size: 11.5px; color: var(--fg-3); }
+.cr-box-actions .grow { flex: 1; }
+.cr-outdated { flex: none; max-height: 40%; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; background: var(--bg-2); border-bottom: 1px solid var(--line); }
+.cr-menu { position: fixed; z-index: 60; display: flex; gap: 2px; padding: 3px; background: var(--bg-3); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--e-3); }
+.cr-menu button { min-height: 28px; padding: 0 10px; font-size: 12.5px; }
+.cr-menu .lucide { width: 13px; height: 13px; }
+.diff-marker { position: absolute; left: 4px; top: 0; display: inline-flex; align-items: center; height: 100%; color: var(--c, var(--fg-1)); cursor: pointer; }
+.diff-marker .lucide { width: 12px; height: 12px; }
+.modal.cr-submit { width: min(640px, 100%); }
+.cr-verdicts { align-self: flex-start; }
