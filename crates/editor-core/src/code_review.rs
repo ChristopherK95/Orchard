@@ -421,6 +421,18 @@ pub(crate) fn ask_attachment(
     }
 }
 
+/// Whether PR `number` was merged or closed (`gh pr view --json state`); false if that can't be
+/// told.
+pub(crate) async fn pull_request_over(gh: &Path, repo: &Path, number: u64) -> bool {
+    let number = number.to_string();
+    let args = ["pr", "view", &number, "--json", "state"];
+    let Ok(printed) = crate::pull_request::gh_text(gh, repo, &args).await else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(printed.trim())
+        .is_ok_and(|view| matches!(view["state"].as_str(), Some("MERGED" | "CLOSED")))
+}
+
 /// Where GitHub keeps PR `number`'s head, which a fork's PR has too.
 pub(crate) fn pull_head_ref(number: u64) -> String {
     format!("refs/pull/{number}/head")

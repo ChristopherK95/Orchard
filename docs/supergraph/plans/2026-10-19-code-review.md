@@ -441,7 +441,7 @@ Checkpoint:
 - Commit: `Code review: ask Claude to review the PR, or about selected lines`
 
 ## Task 12: When a Review Worktree can be removed
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 6, Task 11
 Files:

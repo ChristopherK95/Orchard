@@ -920,3 +920,86 @@ async fn a_question_attaches_the_lines_asked_about() {
     assert_eq!(name, "a:10-10 (old)");
     assert!(text.contains("l10") && !text.contains("ten"), "{text}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_review_worktree_is_removable_once_its_review_is_done() {
+    let setup = RepoWithOrigin::new();
+    let head = push_pr(&setup, &[("a", "first\n")], "A");
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let submit =
+        "'api -X POST repos/{owner}/{repo}/pulls/7/reviews --input -') echo '{\"id\":1}' ;;";
+    let gh = review_gh(&pr_view(&head, true, "[]"), submit);
+    let state = fake.state_path();
+    let core = core_with_gh_and_state(&fake, &gh, &state);
+    let root = open(&core, &setup.repo()).await;
+    let review = core.open_code_review(7).await.unwrap();
+    setup_over(&core, &review.worktree).await;
+    let review_row = |rows: Vec<editor_core::WorktreeMerge>| {
+        rows.into_iter()
+            .find(|row| row.path == review.worktree)
+            .expect("listed")
+            .review
+    };
+
+    let before = review_row(core.merge_overview().await.unwrap()).expect("a review row");
+    assert_eq!((before.number, before.done), (7, false));
+
+    let session = core.code_review_session(7).await.unwrap();
+    core.submit_review(7, Verdict::Approve, "").await.unwrap();
+    let after = review_row(core.merge_overview().await.unwrap()).unwrap();
+    assert!(after.done, "submitted");
+    let check = core.removal_check(&review.worktree).await.unwrap();
+    assert!(
+        !check.discard_to_remove,
+        "the PR's commits aren't lost with it: {check:?}"
+    );
+    assert_eq!(check.sessions, [session]);
+    assert_eq!(check.review_session, Some(session));
+
+    git(&root, &["update-ref", "refs/orchard/review/7-last", &head]);
+    core.remove_worktree(&review.worktree, Default::default())
+        .await
+        .unwrap();
+    for gone in ["refs/orchard/review/7", "refs/orchard/review/7-last"] {
+        assert_eq!(
+            git_out(&root, &["rev-parse", "--verify", "-q", gone]),
+            None,
+            "{gone}"
+        );
+    }
+    drop(core);
+
+    let core = core_with_gh_and_state(&fake, &gh, &state);
+    open(&core, &setup.repo()).await;
+    let forgotten = core.code_review_diff(7, "a", false).await.unwrap_err();
+    assert!(
+        matches!(forgotten, CoreError::NoCodeReview(7)),
+        "{forgotten:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_merged_prs_review_is_done() {
+    let setup = RepoWithOrigin::new();
+    let head = push_pr(&setup, &[("a", "first\n")], "A");
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let marker = setup.root().join("merged");
+    // (`pr view 7 --json state` says MERGED once the marker is there.)
+    let state_arm = format!(
+        "'pr view 7 --json state') if [ -f {m} ]; then echo '{{\"state\":\"MERGED\"}}'; else echo '{{\"state\":\"OPEN\"}}'; fi ;;",
+        m = marker.display()
+    );
+    let gh = review_gh(&pr_view(&head, true, "[]"), &state_arm);
+    let core = core_with_gh(&fake, &gh);
+    open(&core, &setup.repo()).await;
+    let review = core.open_code_review(7).await.unwrap();
+    let done = |rows: Vec<editor_core::WorktreeMerge>| {
+        rows.into_iter()
+            .find(|row| row.path == review.worktree)
+            .and_then(|row| row.review)
+            .map(|r| r.done)
+    };
+    assert_eq!(done(core.merge_overview().await.unwrap()), Some(false));
+    std::fs::write(&marker, "").unwrap();
+    assert_eq!(done(core.merge_overview().await.unwrap()), Some(true));
+}

@@ -34,7 +34,7 @@ use crate::git_status::{
     BaseChange, BaseChanges, ChangeKind, CommitOutcome, CommitRequest, GitStatus, PullOutcome,
     PushOutcome,
 };
-use crate::merged::{self, MergeState, WorktreeMerge};
+use crate::merged::{self, MergeState, ReviewRow, WorktreeMerge};
 use crate::names;
 use crate::permissions;
 use crate::pull_request::{
@@ -2089,6 +2089,9 @@ impl Core {
                 state.recent.retain(|s| s.worktree != info.path);
             }
         }
+        if removed.is_ok() {
+            self.forget_code_review(&root, &info.path).await;
+        }
         self.inner.refresh_worktrees().await;
         if removed.is_ok() {
             self.inner.recent_changed(&info.path);
@@ -2229,6 +2232,23 @@ impl Core {
             .map(|s| s.info.lock().expect("info lock").id)
             .collect();
         check.sessions.sort();
+        let review = {
+            let state = self.inner.state.lock().expect("state lock");
+            state.review_of(&info.path).map(|number| {
+                let session = state.code_reviews[&number]
+                    .session
+                    .as_ref()
+                    .and_then(|acp_id| state.by_acp_id.get(acp_id).copied());
+                (number, session)
+            })
+        };
+        if let Some((_, session)) = review {
+            // Its commits are the PR's, on GitHub: removing it loses none of them.
+            check.unpushed.clear();
+            check.unpushed_count = 0;
+            check.discard_to_remove = check.changed_count > 0;
+            check.review_session = session.filter(|s| check.sessions.contains(s));
+        }
         Ok(check)
     }
 
@@ -2281,8 +2301,21 @@ impl Core {
                 merge: None,
                 error: None,
                 changed: info.changed,
+                review: None,
             };
-            if !info.is_main {
+            if let Some(number) = info.review {
+                let submitted = self
+                    .inner
+                    .state
+                    .lock()
+                    .expect("state lock")
+                    .code_reviews
+                    .get(&number)
+                    .is_some_and(|saved| saved.submitted);
+                let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+                let done = submitted || code_review::pull_request_over(&gh, &root, number).await;
+                row.review = Some(ReviewRow { number, done });
+            } else if !info.is_main {
                 // (By commit id, resolved in the main checkout: see `resolved_base`.)
                 let base_id = match base_ids.get(&base) {
                     Some(id) => id.clone(),
@@ -3860,6 +3893,27 @@ impl Core {
         Ok(code_review::ask_attachment(
             path, side, start_line, line, &text, at,
         ))
+    }
+
+    /// A Review Worktree was removed: its Code review (Pending review and all) is forgotten, and
+    /// the refs that kept its commits go.
+    async fn forget_code_review(&self, root: &Path, worktree: &Path) {
+        let number = {
+            let mut state = self.inner.state.lock().expect("state lock");
+            let number = state.review_of(worktree);
+            if let Some(number) = number {
+                state.code_reviews.remove(&number);
+            }
+            number
+        };
+        if let Some(number) = number {
+            for name in [
+                code_review::review_ref(number),
+                code_review::last_review_ref(number),
+            ] {
+                let _ = git::delete_ref(root, &name).await;
+            }
+        }
     }
 
     /// PR `number`'s saved Code review.

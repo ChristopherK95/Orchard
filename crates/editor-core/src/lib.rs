@@ -54,7 +54,7 @@ pub use crate::git_status::{
     BaseChange, BaseChanges, ChangeKind, CommitOutcome, CommitRequest, GitFile, GitOperation,
     GitStatus, LastCommit, PullOutcome, PushOutcome,
 };
-pub use crate::merged::{MergeState, WorktreeMerge};
+pub use crate::merged::{MergeState, ReviewRow, WorktreeMerge};
 pub use crate::node::NodeInstall;
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};
 pub use crate::process::host_env;

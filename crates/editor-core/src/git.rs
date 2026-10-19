@@ -287,6 +287,14 @@ pub(crate) async fn ls_remote_ref(repo: &Path, remote_ref: &str) -> Result<Optio
         .map(|(id, _)| id.to_owned()))
 }
 
+/// Deletes the ref `name` (a full one, `refs/…`) if it's there.
+pub(crate) async fn delete_ref(repo: &Path, name: &str) -> Result<(), String> {
+    if resolve_commit(repo, name).await.is_none() {
+        return Ok(());
+    }
+    run(repo, &["update-ref", "-d", name]).await.map(drop)
+}
+
 /// Moves the Worktree's HEAD, index and files to `commit`, throwing away anything else there.
 pub(crate) async fn reset_hard(worktree: &Path, commit: &str) -> Result<(), String> {
     run(worktree, &["reset", "--hard", "--quiet", commit])
