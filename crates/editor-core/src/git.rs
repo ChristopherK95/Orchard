@@ -259,6 +259,24 @@ pub(crate) async fn fetch_ref(
         .ok_or_else(|| format!("{local_ref} wasn't fetched"))
 }
 
+/// Fetches `remote_ref` from `origin` without keeping it under a ref: its commits are then here to
+/// look at (until a later `git gc`).
+pub(crate) async fn fetch_objects(repo: &Path, remote_ref: &str) -> Result<(), String> {
+    run_remote(
+        repo,
+        &[
+            "fetch",
+            "--quiet",
+            "--no-write-fetch-head",
+            "origin",
+            remote_ref,
+        ],
+        None,
+    )
+    .await
+    .map(drop)
+}
+
 /// The commit `remote_ref` is at on `origin`, or `None` if origin hasn't got it.
 pub(crate) async fn ls_remote_ref(repo: &Path, remote_ref: &str) -> Result<Option<String>, String> {
     let out = run_remote(repo, &["ls-remote", "origin", remote_ref], None).await?;
@@ -1417,6 +1435,31 @@ pub(crate) async fn changes_between(
     to: &str,
 ) -> Result<Vec<(char, String, Option<String>)>, String> {
     name_status(repo, &[from, to]).await
+}
+
+/// `git diff` of `paths` from commit `from` to commit `to`, with git's three lines of context and
+/// renames found (give a rename's old path too), as GitHub shows a PR's diff.
+pub(crate) async fn diff_between(
+    repo: &Path,
+    from: &str,
+    to: &str,
+    paths: &[&str],
+) -> Result<String, String> {
+    let mut args = vec![
+        "diff",
+        "-U3",
+        // (Git's defaults, whatever the user's config says: GitHub's diff is made with them.)
+        "--diff-algorithm=default",
+        "--indent-heuristic",
+        "--no-color",
+        "--no-ext-diff",
+        "--find-renames",
+        from,
+        to,
+        "--",
+    ];
+    args.extend(paths);
+    run(repo, &args).await
 }
 
 /// Lines added and deleted per file from `from` to `to` (renames found, under their new path; a

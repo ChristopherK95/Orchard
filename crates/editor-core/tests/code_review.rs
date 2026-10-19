@@ -48,6 +48,7 @@ fn push_pr(setup: &RepoWithOrigin, files: &[(&str, &str)], message: &str) -> Str
     if Command::new("git")
         .args(["rev-parse", "--verify", "--quiet", "feat"])
         .current_dir(&seed)
+        .stdout(std::process::Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
     {
@@ -536,4 +537,167 @@ async fn viewed_ticks_are_githubs() {
 
     let failed = core.set_review_file_viewed(7, "a", false).await;
     assert!(failed.is_err(), "a failure is said");
+}
+
+/// Commits `files` on `main` in the seed clone and pushes it, before the PR branches off.
+fn push_main(setup: &RepoWithOrigin, files: &[(&str, &str)], message: &str) {
+    let seed = setup.root().join("seed");
+    git(&seed, &["checkout", "--quiet", "main"]);
+    for (path, text) in files {
+        std::fs::write(seed.join(path), text).unwrap();
+        git(&seed, &["add", path]);
+    }
+    commit(&seed, message);
+    git(&seed, &["push", "--quiet", "origin", "main"]);
+}
+
+fn lines_of(lines: &[&str]) -> String {
+    lines.iter().map(|l| format!("{l}\n")).collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_lines_githubs_diff_shows_take_comments() {
+    // Two changes whose hunks git (and so GitHub) keeps apart, while another diff algorithm
+    // would join them into one.
+    let before = lines_of(&[
+        "}", "{", "a", "", "a", "a", "{", "a", "{", "b", "", "a", "a", "{", "b", "}", "a", "{",
+        "}", "{", "", "", "", "b", "b",
+    ]);
+    let after = lines_of(&[
+        "}", "z", "a", "", "a", "a", "{", "a", "{", "b", "", "a", "{", "b", "}", "a", "{", "}", "",
+        "", "", "b", "b",
+    ]);
+    let setup = RepoWithOrigin::new();
+    push_main(&setup, &[("f", &before)], "Base");
+    let head = push_pr(&setup, &[("f", &after)], "Change f");
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let gh = review_gh(&pr_view(&head, true, "[]"), "");
+    let core = core_with_gh(&fake, &gh);
+    open(&core, &setup.repo()).await;
+    core.open_code_review(7).await.unwrap();
+
+    // git's hunks: new lines 1-5, 9-14 and 16-21.
+    core.add_review_comment(7, comment_on("f", None, 9, "In the second hunk"))
+        .await
+        .unwrap();
+    let between = core
+        .add_review_comment(7, comment_on("f", None, 15, "Between hunks"))
+        .await
+        .unwrap_err();
+    assert!(matches!(between, CoreError::NotInDiff), "{between:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_removed_comments_id_isnt_used_again() {
+    let setup = RepoWithOrigin::new();
+    let head = push_pr(&setup, &[("a", "l1\nl2\nl3\n")], "A");
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let gh = review_gh(&pr_view(&head, true, "[]"), "");
+    let state = fake.state_path();
+    let core = core_with_gh_and_state(&fake, &gh, &state);
+    open(&core, &setup.repo()).await;
+    core.open_code_review(7).await.unwrap();
+
+    let first = core
+        .add_review_comment(7, comment_on("a", None, 1, "One"))
+        .await
+        .unwrap();
+    let newest = core
+        .add_review_comment(7, comment_on("a", None, 2, "Two"))
+        .await
+        .unwrap();
+    core.remove_review_comment(7, newest.id).await.unwrap();
+    let again = core
+        .add_review_comment(7, comment_on("a", None, 2, "Two again"))
+        .await
+        .unwrap();
+    assert!(![first.id, newest.id].contains(&again.id), "{}", again.id);
+
+    // Nor after a restart, with the Pending review emptied.
+    core.remove_review_comment(7, first.id).await.unwrap();
+    core.remove_review_comment(7, again.id).await.unwrap();
+    drop(core);
+    let core = core_with_gh_and_state(&fake, &gh, &state);
+    open(&core, &setup.repo()).await;
+    core.open_code_review(7).await.unwrap();
+    let after_restart = core
+        .add_review_comment(7, comment_on("a", None, 3, "Three"))
+        .await
+        .unwrap();
+    assert!(
+        ![first.id, newest.id, again.id].contains(&after_restart.id),
+        "{}",
+        after_restart.id
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn refresh_keeps_comments_and_clears_viewed_on_changed_files() {
+    let setup = RepoWithOrigin::new();
+    let numbered: Vec<String> = (1..=30).map(|n| format!("l{n}")).collect();
+    let numbered: Vec<&str> = numbered.iter().map(String::as_str).collect();
+    let head = push_pr(
+        &setup,
+        &[("a", &lines_of(&numbered)), ("b", "unchanged\n")],
+        "A and B",
+    );
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let graphql = "'api graphql'*unmarkFileAsViewed*) echo '{\"data\":{}}' ;;\n\
+         'api graphql'*viewerViewedState*) echo '{\"data\":{\"node\":{\"files\":{\"nodes\":[{\"path\":\"a\",\"viewerViewedState\":\"VIEWED\"},{\"path\":\"b\",\"viewerViewedState\":\"VIEWED\"}],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null}}}}}' ;;";
+    let gh = review_gh(&pr_view(&head, true, "[]"), graphql);
+    let core = core_with_gh(&fake, &gh);
+    open(&core, &setup.repo()).await;
+    let review = core.open_code_review(7).await.unwrap();
+    let range = core
+        .add_review_comment(7, comment_on("a", Some(9), 10, "These two"))
+        .await
+        .unwrap();
+    let gone = core
+        .add_review_comment(7, comment_on("a", None, 20, "This one"))
+        .await
+        .unwrap();
+    assert_eq!(core.code_review_new_commits(7).await.unwrap(), 0);
+
+    // Three lines in above the first comment, the second's line deleted.
+    let mut changed: Vec<&str> = numbered.clone();
+    changed.retain(|l| *l != "l20");
+    for (at, line) in [(5, "new1"), (6, "new2"), (7, "new3")] {
+        changed.insert(at, line);
+    }
+    let new_head = push_pr(&setup, &[("a", &lines_of(&changed))], "Move a's lines");
+    assert_eq!(core.code_review_new_commits(7).await.unwrap(), 1);
+
+    let refreshed = core.refresh_code_review(7).await.unwrap();
+    assert_eq!(refreshed.head, new_head);
+    assert_eq!(rev_parse(&review.worktree, "HEAD"), new_head);
+    assert_eq!(core.code_review_new_commits(7).await.unwrap(), 0);
+    let comments = &refreshed.pending.comments;
+    let moved = comments.iter().find(|c| c.id == range.id).unwrap();
+    assert_eq!((moved.start_line, moved.line), (Some(12), 13));
+    assert!(!moved.outdated);
+    let outdated = comments.iter().find(|c| c.id == gone.id).unwrap();
+    assert!(outdated.outdated);
+    let viewed: Vec<(&str, bool)> = refreshed
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.viewed))
+        .collect();
+    assert_eq!(viewed, [("a", false), ("b", true)]);
+    let unmarked: Vec<Vec<String>> = gh
+        .calls()
+        .into_iter()
+        .filter(|call| call.iter().any(|a| a.contains("unmarkFileAsViewed")))
+        .collect();
+    assert_eq!(unmarked.len(), 1, "{unmarked:?}");
+    assert!(unmarked[0].iter().any(|a| a == "path=a"), "{unmarked:?}");
+
+    // An outdated comment holds the submit back.
+    let err = core
+        .submit_review(7, Verdict::Comment, "Looks fine")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, CoreError::OutdatedComments { count: 1 }),
+        "{err:?}"
+    );
 }

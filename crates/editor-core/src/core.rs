@@ -18,8 +18,7 @@ use crate::auto_suspend::{
     self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, SystemClock, SystemProbe,
 };
 use crate::code_review::{
-    self, CodeReview, NewReviewComment, PendingComment, PendingReview, Question, SinceLastReview,
-    Verdict,
+    self, CodeReview, NewReviewComment, PendingComment, Question, SinceLastReview, Verdict,
 };
 use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 use crate::dashboard::{self, ReviewRequest, WorktreeAttention};
@@ -3326,20 +3325,20 @@ impl Core {
                 .code_reviews
                 .remove(&number)
                 .filter(|saved| saved.worktree == worktree);
-            let done = setup_done || kept.as_ref().is_some_and(|saved| saved.setup_done);
-            let kept_submitted = kept.as_ref().is_some_and(|saved| saved.submitted);
-            let pending = kept.map(|saved| saved.pending).unwrap_or_default();
+            let kept = kept.unwrap_or_default();
+            let done = setup_done || kept.setup_done;
+            let pending = kept.pending.clone();
             state.code_reviews.insert(
                 number,
                 SavedCodeReview {
                     worktree: worktree.clone(),
                     pull_request_id: details.id.clone(),
+                    base: details.base.clone(),
                     head: head.clone(),
                     merge_base: merge_base.clone(),
                     last_review: last_review.clone(),
                     setup_done: done,
-                    submitted: kept_submitted,
-                    pending: pending.clone(),
+                    ..kept
                 },
             );
             (done, pending)
@@ -3404,8 +3403,11 @@ impl Core {
         let diff = self.code_review_diff(number, &comment.path, false).await?;
         let line_text = code_review::anchor(&diff, comment.side, comment.start_line, comment.line)
             .ok_or(CoreError::NotInDiff)?;
-        self.change_pending(number, |pending| {
-            let id = pending.comments.iter().map(|c| c.id).max().unwrap_or(0) + 1;
+        self.change_pending(number, |saved| {
+            // (A review saved before the counter was kept has its ids past the highest.)
+            let highest = saved.pending.comments.iter().map(|c| c.id).max();
+            let id = saved.next_comment_id.max(highest.map_or(1, |h| h + 1));
+            saved.next_comment_id = id + 1;
             let added = PendingComment {
                 id,
                 path: comment.path,
@@ -3417,7 +3419,7 @@ impl Core {
                 outdated: false,
                 from_question: comment.from_question,
             };
-            pending.comments.push(added.clone());
+            saved.pending.comments.push(added.clone());
             Ok(added)
         })
     }
@@ -3429,7 +3431,8 @@ impl Core {
         id: u64,
         body: &str,
     ) -> Result<(), CoreError> {
-        self.change_pending(number, |pending| {
+        self.change_pending(number, |saved| {
+            let pending = &mut saved.pending;
             let comment = pending
                 .comments
                 .iter_mut()
@@ -3442,7 +3445,8 @@ impl Core {
 
     /// Takes a comment out of the Pending review.
     pub async fn remove_review_comment(&self, number: u64, id: u64) -> Result<(), CoreError> {
-        self.change_pending(number, |pending| {
+        self.change_pending(number, |saved| {
+            let pending = &mut saved.pending;
             let before = pending.comments.len();
             pending.comments.retain(|c| c.id != id);
             match pending.comments.len() == before {
@@ -3458,7 +3462,8 @@ impl Core {
         number: u64,
         question: Question,
     ) -> Result<(), CoreError> {
-        self.change_pending(number, |pending| {
+        self.change_pending(number, |saved| {
+            let pending = &mut saved.pending;
             pending.questions.push(question);
             Ok(())
         })
@@ -3475,15 +3480,7 @@ impl Core {
         summary: &str,
     ) -> Result<(), CoreError> {
         let root = self.workspace()?.root;
-        let saved = self
-            .inner
-            .state
-            .lock()
-            .expect("state lock")
-            .code_reviews
-            .get(&number)
-            .cloned()
-            .ok_or(CoreError::NoCodeReview(number))?;
+        let saved = self.saved_review(number)?;
         let comments = &saved.pending.comments;
         let outdated = comments.iter().filter(|c| c.outdated).count();
         if outdated > 0 {
@@ -3515,7 +3512,8 @@ impl Core {
         }
         // (Only the comments sent go: one added meanwhile stays pending.)
         let sent: Vec<u64> = comments.iter().map(|c| c.id).collect();
-        self.change_pending(number, |pending| {
+        self.change_pending(number, |saved| {
+            let pending = &mut saved.pending;
             pending.comments.retain(|c| !sent.contains(&c.id));
             pending.questions.clear();
             Ok(())
@@ -3569,7 +3567,7 @@ impl Core {
     fn change_pending<T>(
         &self,
         number: u64,
-        change: impl FnOnce(&mut PendingReview) -> Result<T, CoreError>,
+        change: impl FnOnce(&mut SavedCodeReview) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {
         let changed = {
             let mut state = self.inner.state.lock().expect("state lock");
@@ -3577,7 +3575,7 @@ impl Core {
                 .code_reviews
                 .get_mut(&number)
                 .ok_or(CoreError::NoCodeReview(number))?;
-            change(&mut saved.pending)?
+            change(saved)?
         };
         self.inner.persist();
         let _ = self
@@ -3614,15 +3612,7 @@ impl Core {
         since_last_review: bool,
     ) -> Result<Vec<crate::session::DiffLine>, CoreError> {
         let root = self.workspace()?.root;
-        let saved = self
-            .inner
-            .state
-            .lock()
-            .expect("state lock")
-            .code_reviews
-            .get(&number)
-            .cloned()
-            .ok_or(CoreError::NoCodeReview(number))?;
+        let saved = self.saved_review(number)?;
         let from = match (since_last_review, saved.last_review) {
             (true, Some(commit)) => commit,
             _ => saved.merge_base,
@@ -3630,13 +3620,135 @@ impl Core {
         let changes = git::changes_between(&root, &from, &saved.head)
             .await
             .map_err(CoreError::Git)?;
-        let Some((letter, _, renamed_from)) = changes.into_iter().find(|(_, p, _)| p == path)
-        else {
+        let Some((_, _, renamed_from)) = changes.into_iter().find(|(_, p, _)| p == path) else {
             return Ok(vec![]);
         };
-        let before = git::file_at(&root, &from, renamed_from.as_deref().unwrap_or(path)).await;
-        let after = git::file_at(&root, &saved.head, path).await;
-        text_diff(path, before, after, ChangeKind::from_letter(letter))
+        // Git's own diff, not one of ours: GitHub takes comments only on the lines its hunks show.
+        let mut paths = vec![path];
+        paths.extend(renamed_from.as_deref());
+        let out = git::diff_between(&root, &from, &saved.head, &paths)
+            .await
+            .map_err(CoreError::Git)?;
+        let lines = crate::diff::parse_git_diff(&out, MAX_VIEW_DIFF_LINES);
+        if lines.is_empty() && out.contains("Binary files") {
+            return Err(CoreError::File(format!(
+                "{path} isn't text, so there's no diff to show"
+            )));
+        }
+        Ok(lines)
+    }
+
+    /// How many commits were pushed to PR `number` since its Review Worktree's head (one
+    /// `ls-remote`, and a fetch of the new head if there is one); 0 if none were. After a
+    /// force-push, the new head's commits since it split from the base branch.
+    pub async fn code_review_new_commits(&self, number: u64) -> Result<u32, CoreError> {
+        let root = self.workspace()?.root;
+        let saved = self.saved_review(number)?;
+        let pull_head = code_review::pull_head_ref(number);
+        let latest = {
+            let _one_at_a_time = self.inner.remote_op.lock().await;
+            git::ls_remote_ref(&root, &pull_head)
+                .await
+                .map_err(CoreError::Git)?
+        };
+        let Some(latest) = latest.filter(|latest| *latest != saved.head) else {
+            return Ok(0);
+        };
+        if git::resolve_commit(&root, &latest).await.is_none() {
+            let _one_at_a_time = self.inner.remote_op.lock().await;
+            git::fetch_objects(&root, &pull_head)
+                .await
+                .map_err(CoreError::Git)?;
+        }
+        if git::is_merged(&root, &saved.head, &latest).await {
+            return Ok(git::count_not_in(&root, &saved.head, &latest).await);
+        }
+        let base = format!("origin/{}", saved.base);
+        let split = git::merge_base_of(&root, &latest, &base)
+            .await
+            .unwrap_or(saved.merge_base);
+        // (A head that moved is something to refresh to, even one that only lost commits.)
+        Ok(git::count_not_in(&root, &split, &latest).await.max(1))
+    }
+
+    /// Moves PR `number`'s Review Worktree to the PR's head as it is now. Each pending comment
+    /// stays on its line, found again by its text near where it was, or is marked outdated; the
+    /// files that changed since are unticked Viewed (on GitHub, where the ticks are kept).
+    pub async fn refresh_code_review(&self, number: u64) -> Result<CodeReview, CoreError> {
+        let root = self.workspace()?.root;
+        let old = self.saved_review(number)?;
+        let head = self.fetch_review_head(&root, number).await?;
+        git::reset_hard(&old.worktree, &head)
+            .await
+            .map_err(CoreError::Git)?;
+        // (Opening again saves the new head and works out its merge base, files and ticks.)
+        let mut review = self.open_code_review(number).await?;
+
+        let mut places = vec![];
+        for comment in &review.pending.comments {
+            let diff = self.code_review_diff(number, &comment.path, false).await?;
+            places.push((comment.id, code_review::moved(comment, &diff)));
+        }
+        review.pending = self.change_pending(number, |saved| {
+            for comment in &mut saved.pending.comments {
+                // (One added meanwhile is on the new head already.)
+                let Some((_, place)) = places.iter().find(|(id, _)| *id == comment.id) else {
+                    continue;
+                };
+                match place {
+                    Some((start_line, line)) => {
+                        (comment.start_line, comment.line) = (*start_line, *line);
+                        comment.outdated = false;
+                    }
+                    None => comment.outdated = true,
+                }
+            }
+            Ok(saved.pending.clone())
+        })?;
+
+        let changed: HashSet<String> = git::changes_between(&root, &old.head, &head)
+            .await
+            .map_err(CoreError::Git)?
+            .into_iter()
+            .flat_map(|(_, path, renamed_from)| std::iter::once(path).chain(renamed_from))
+            .collect();
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let mut unticked = HashSet::new();
+        for file in review
+            .files
+            .iter()
+            .filter(|f| f.viewed && changed.contains(&f.path))
+        {
+            // (If GitHub won't, the tick stays as GitHub has it.)
+            if code_review::set_viewed(&gh, &root, &old.pull_request_id, &file.path, false)
+                .await
+                .is_ok()
+            {
+                unticked.insert(file.path.clone());
+            }
+        }
+        let since_files = review
+            .since_last_review
+            .iter_mut()
+            .flat_map(|s| &mut s.files);
+        for file in review.files.iter_mut().chain(since_files) {
+            if unticked.contains(&file.path) {
+                file.viewed = false;
+            }
+        }
+        Ok(review)
+    }
+
+    /// PR `number`'s saved Code review.
+    fn saved_review(&self, number: u64) -> Result<SavedCodeReview, CoreError> {
+        self.inner
+            .state
+            .lock()
+            .expect("state lock")
+            .code_reviews
+            .get(&number)
+            .cloned()
+            .ok_or(CoreError::NoCodeReview(number))
     }
 
     /// Fetches PR `number`'s head into its review ref, returning the commit.

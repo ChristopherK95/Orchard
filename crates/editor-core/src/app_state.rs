@@ -55,13 +55,16 @@ pub(crate) struct WorkspaceState {
 }
 
 /// A Code review as it's remembered: its Review Worktree and how far it has got.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SavedCodeReview {
     pub(crate) worktree: PathBuf,
     /// The PR's GraphQL node id, which its Viewed ticks are set with.
     #[serde(default)]
     pub(crate) pull_request_id: String,
+    /// The branch the PR goes into.
+    #[serde(default)]
+    pub(crate) base: String,
     /// The PR head the Review Worktree is at.
     pub(crate) head: String,
     /// Where the head split from the PR's base branch, which its diff runs from.
@@ -79,6 +82,10 @@ pub(crate) struct SavedCodeReview {
     /// The comments not submitted yet.
     #[serde(default, skip_serializing_if = "PendingReview::is_empty")]
     pub(crate) pending: PendingReview,
+    /// The id the next pending comment gets: ids aren't used twice, so one removed can't be
+    /// mistaken for a later one.
+    #[serde(default)]
+    pub(crate) next_comment_id: u64,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -245,6 +252,8 @@ mod tests {
                     setup_done: true,
                     submitted: true,
                     pending: PendingReview::default(),
+                    next_comment_id: 3,
+                    base: "main".into(),
                 },
             )]
             .into(),

@@ -259,6 +259,39 @@ pub(crate) fn anchor(
     line_text(diff, side, line)
 }
 
+/// How far from where it was a pending comment's line is looked for after new commits.
+const REANCHOR_REACH: u32 = 20;
+
+/// Where a pending comment's line is in `new_diff` (after new commits): the line on its side with
+/// the same text within `REANCHOR_REACH` lines of where it was, the nearest if there are several;
+/// None if there's none (the comment is outdated).
+pub(crate) fn reanchor(old: &PendingComment, new_diff: &[DiffLine]) -> Option<u32> {
+    numbered(new_diff)
+        .filter_map(|(on_old, on_new, text)| {
+            let at = match old.side {
+                DiffSide::Left => on_old,
+                DiffSide::Right => on_new,
+            }?;
+            (text == old.line_text).then_some(at)
+        })
+        .filter(|at| at.abs_diff(old.line) <= REANCHOR_REACH)
+        .min_by_key(|at| at.abs_diff(old.line))
+}
+
+/// Where a pending comment goes in `new_diff`, its range (`start_line`, `line`) moved as its line
+/// did; None if its line, or its range's first line, isn't in the diff any more.
+pub(crate) fn moved(old: &PendingComment, new_diff: &[DiffLine]) -> Option<(Option<u32>, u32)> {
+    let line = reanchor(old, new_diff)?;
+    let start = match old.start_line {
+        Some(start) => {
+            Some(u32::try_from(i64::from(start) + i64::from(line) - i64::from(old.line)).ok()?)
+        }
+        None => None,
+    };
+    anchor(new_diff, old.side, start, line)?;
+    Some((start, line))
+}
+
 /// Each line a diff shows with its line number on the old side and on the new side (a removed line
 /// has no new one, an added line no old one), read from its hunk headers.
 fn numbered(diff: &[DiffLine]) -> impl Iterator<Item = (Option<u32>, Option<u32>, &str)> {
@@ -487,6 +520,71 @@ mod tests {
             submit_failure("", "error connecting to api.github.com", &["src/a.rs"]);
         assert_eq!(message, "error connecting to api.github.com");
         assert!(paths.is_empty());
+    }
+
+    fn pending_on(line: u32, line_text: &str) -> PendingComment {
+        PendingComment {
+            id: 1,
+            path: "f".into(),
+            side: DiffSide::Right,
+            start_line: None,
+            line,
+            body: "?".into(),
+            line_text: line_text.into(),
+            outdated: false,
+            from_question: false,
+        }
+    }
+
+    #[test]
+    fn a_comment_follows_its_line() {
+        let old: String = (1..=30).map(|n| format!("line {n}\n")).collect();
+        let new = old.replace("line 4\n", "line 4\nnew a\nnew b\n");
+        let diff = diff("", &new);
+        assert_eq!(reanchor(&pending_on(10, "line 10"), &diff), Some(12));
+        let range = PendingComment {
+            start_line: Some(9),
+            ..pending_on(10, "line 10")
+        };
+        assert_eq!(moved(&range, &diff), Some((Some(11), 12)));
+    }
+
+    #[test]
+    fn a_comment_whose_line_went_is_outdated() {
+        let old: String = (1..=30).map(|n| format!("line {n}\n")).collect();
+        let new = old.replace("line 10\n", "");
+        assert_eq!(reanchor(&pending_on(10, "line 10"), &diff("", &new)), None);
+        // Nor is a line of the same text far away taken for it.
+        let far: String = (1..=40).map(|n| format!("line {n}\n")).collect();
+        let far = format!("{}line 10\n", far.replace("line 10\n", ""));
+        assert_eq!(reanchor(&pending_on(10, "line 10"), &diff("", &far)), None);
+    }
+
+    #[test]
+    fn of_lines_alike_the_nearest_is_taken() {
+        let lines = ["}", "a", "}", "b", "c", "}", "d"];
+        let new: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        let diff = diff("", &new);
+        assert_eq!(reanchor(&pending_on(5, "}"), &diff), Some(6));
+        assert_eq!(reanchor(&pending_on(2, "}"), &diff), Some(1));
+    }
+
+    #[test]
+    fn gits_diff_is_read_into_lines() {
+        let out = "diff --git a/f b/f\nindex 1..2 100644\n--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@ fn f() {\n a\n-b\n+c\n\\ No newline at end of file\n";
+        let lines = crate::diff::parse_git_diff(out, 100);
+        let kinds: Vec<(DiffLineKind, &str)> =
+            lines.iter().map(|l| (l.kind, l.text.as_str())).collect();
+        assert_eq!(
+            kinds,
+            [
+                (DiffLineKind::Hunk, "@@ -1,2 +1,2 @@ fn f() {"),
+                (DiffLineKind::Context, "a"),
+                (DiffLineKind::Removed, "b"),
+                (DiffLineKind::Added, "c"),
+            ]
+        );
+        assert_eq!(line_text(&lines, DiffSide::Right, 2).as_deref(), Some("c"));
     }
 
     #[test]
