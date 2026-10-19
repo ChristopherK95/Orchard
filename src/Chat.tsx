@@ -7,21 +7,33 @@ import { ContextMeter } from "./ContextMeter";
 import { EditNotes } from "./EditNotes";
 import { createMentionMenu, mention, MentionMarks, MentionMenu } from "./FileMentions";
 import { renderUserMarkdown } from "./markdown";
+import { continueListEdit, type Edit, type Format, formatEdit, pasteLinkEdit } from "./markdownFormat";
 import { CLEAR_COMMAND, createSlashMenu, SlashMenu, useSlashCommands } from "./SlashCommands";
 import {
   ArrowUp,
+  AtSign,
+  Bold,
   BookOpen,
   CirclePlay,
   Clock,
+  Code,
   FileText,
+  Heading,
   ImageIcon,
   Info,
+  Italic,
+  Link,
+  List,
+  ListOrdered,
+  ListTodo,
   Loader,
   Paperclip,
   ShieldQuestion,
   Sparkles,
   Square,
+  SquareSlash,
   SquareTerminal,
+  TextQuote,
   TriangleAlert,
   X,
   Zap,
@@ -249,6 +261,23 @@ export function setDraft(session: SessionId, text: string) {
 const INPUT_HEIGHT = 44;
 const [inputHeight, setInputHeight] = createSignal(INPUT_HEIGHT);
 
+/** The formatting toolbar's buttons, in groups, like GitHub's comment box. */
+const FORMATS: { format: Format; icon: typeof Bold; title: string }[][] = [
+  [
+    { format: "heading", icon: Heading, title: "Heading" },
+    { format: "bold", icon: Bold, title: "Bold" },
+    { format: "italic", icon: Italic, title: "Italic (Ctrl+I)" },
+    { format: "quote", icon: TextQuote, title: "Quote" },
+    { format: "code", icon: Code, title: "Code (Ctrl+E); a block for several lines" },
+    { format: "link", icon: Link, title: "Link (or paste a URL over the selected text)" },
+  ],
+  [
+    { format: "numbered", icon: ListOrdered, title: "Numbered list" },
+    { format: "bulleted", icon: List, title: "Bulleted list" },
+    { format: "task", icon: ListTodo, title: "Task list" },
+  ],
+];
+
 /** Reports an element's height as it changes (the floating composer's, for the transcript). */
 export function reportHeight(el: HTMLElement, onHeight?: (px: number) => void) {
   if (!onHeight) return;
@@ -302,6 +331,25 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
     input.focus();
     input.setSelectionRange(at, at);
     setCaret(at);
+  };
+  /** Makes an edit through the input's own editing, so Ctrl+Z undoes it like typing. */
+  const apply = (edit: Edit) => {
+    input.focus();
+    input.setSelectionRange(edit.from, edit.to);
+    const done = edit.insert ? document.execCommand("insertText", false, edit.insert) : edit.from === edit.to || document.execCommand("delete");
+    if (!done) {
+      input.setRangeText(edit.insert, edit.from, edit.to);
+      setText(input.value);
+    }
+    input.setSelectionRange(edit.selStart, edit.selEnd);
+    trackCaret();
+  };
+  const format = (f: Format) => apply(formatEdit(text(), input.selectionStart, input.selectionEnd, f));
+  /** Starts a mention at the caret (its menu opens as the name is typed). */
+  const startMention = () => {
+    const at = input.selectionStart;
+    const space = at > 0 && !/\s/.test(text()[at - 1]) ? " " : "";
+    apply({ from: at, to: input.selectionEnd, insert: `${space}@`, selStart: at + space.length + 1, selEnd: at + space.length + 1 });
   };
   const working = () => props.session.state === "working";
   // Mid-turn: a message queues, and Stop is offered.
@@ -393,8 +441,14 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
   };
   const onPaste = (e: ClipboardEvent) => {
     const files = [...(e.clipboardData?.files ?? [])];
+    const pasted = e.clipboardData?.getData("text/plain");
+    const linked = pasted && pasteLinkEdit(text(), input.selectionStart, input.selectionEnd, pasted);
+    if (linked) {
+      e.preventDefault();
+      return apply(linked);
+    }
     // (Text that comes with a picture of itself, from an office app say, is pasted as text.)
-    if (e.clipboardData?.getData("text/plain")) return;
+    if (pasted) return;
     e.preventDefault();
     if (files.length) {
       void attach(files.map((file) => async () => core.attachData(props.session.id, file.name || "pasted image", file.type || null, await base64(file))));
@@ -584,6 +638,37 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
           />
         </Show>
         <div class="composer-inner">
+          <Show when={!locked()}>
+            {/* (Pressing a button doesn't take the focus, so the selection it formats stays.) */}
+            <div class="composer-format" role="toolbar" aria-label="Formatting" onMouseDown={(e) => e.preventDefault()}>
+              <For each={FORMATS}>
+                {(group) => (
+                  <>
+                    <For each={group}>
+                      {(b) => (
+                        <button class="ghost icon icon-only" onClick={() => format(b.format)} title={b.title} aria-label={b.title}>
+                          <b.icon />
+                        </button>
+                      )}
+                    </For>
+                    <span class="sep" />
+                  </>
+                )}
+              </For>
+              <button class="ghost icon icon-only" onClick={startMention} title="Mention a file (type its name after @)" aria-label="Mention a file">
+                <AtSign />
+              </button>
+              <button
+                class="ghost icon icon-only"
+                onClick={() => apply({ from: 0, to: 0, insert: "/", selStart: 1, selEnd: 1 })}
+                disabled={!!text()}
+                title={text() ? "Commands and skills start an empty message" : "Run a command or skill"}
+                aria-label="Run a command or skill"
+              >
+                <SquareSlash />
+              </button>
+            </div>
+          </Show>
           <Show when={preview()}>
             {(html) => <div class="composer-preview markdown" aria-hidden="true" innerHTML={html()} />}
           </Show>
@@ -604,9 +689,19 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
               onKeyDown={(e) => {
                 if (slash.key(e, (command) => complete(command.name))) return;
                 if (mentions.key(e, completeMention)) return;
-                if (e.key === "Enter" && !e.shiftKey) {
+                const shortcut = e.ctrlKey && !e.shiftKey && !e.altKey && { i: "italic", e: "code" }[e.key.toLowerCase()];
+                if (shortcut) {
+                  e.preventDefault();
+                  format(shortcut as Format);
+                } else if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   void send();
+                } else if (e.key === "Enter" && e.shiftKey) {
+                  const next = continueListEdit(text(), input.selectionStart, input.selectionEnd);
+                  if (next) {
+                    e.preventDefault();
+                    apply(next);
+                  }
                 } else if (e.key === "Escape" && busy()) {
                   e.preventDefault();
                   e.stopPropagation();
@@ -620,7 +715,7 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
                     ? "Answer the permission card above first (Y / N)."
                     : working()
                       ? "Queue a message for when the Agent's done (Enter to queue, Esc to stop the Agent)"
-                      : "Message the Agent (Enter to send, Shift+Enter for a newline, / for commands, @ for files)"
+                      : "Message the Agent (Enter to send, Shift+Enter for a newline, / for commands, @ for files, markdown for formatting)"
               }
               disabled={locked()}
             />
