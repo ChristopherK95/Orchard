@@ -82,6 +82,9 @@ pub(crate) struct SavedCodeReview {
     /// The comments not submitted yet.
     #[serde(default, skip_serializing_if = "PendingReview::is_empty")]
     pub(crate) pending: PendingReview,
+    /// The review Agent session's ACP id: one per PR, continued when it's re-requested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) session: Option<String>,
     /// The id the next pending comment gets: ids aren't used twice, so one removed can't be
     /// mistaken for a later one.
     #[serde(default)]
@@ -253,6 +256,7 @@ mod tests {
                     submitted: true,
                     pending: PendingReview::default(),
                     next_comment_id: 3,
+                    session: Some("acp-1".into()),
                     base: "main".into(),
                 },
             )]

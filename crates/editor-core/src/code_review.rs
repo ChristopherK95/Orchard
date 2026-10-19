@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::attachments::Attachment;
 use crate::git;
 use crate::git_status::ChangeKind;
-use crate::pull_request::{DiffSide, PullRequestComment};
+use crate::pull_request::{DiffSide, PullRequestComment, PullRequestDetails};
 use crate::session::{DiffLine, DiffLineKind};
 use crate::setup::SetupInfo;
 
@@ -334,6 +335,92 @@ fn hunk_starts(header: &str) -> Option<(u32, u32)> {
     Some((old.max(1), new.max(1)))
 }
 
+/// What "Claude review" asks of the review Agent session: the PR, its commits and files, and to
+/// read the whole diff itself and answer in prose.
+pub(crate) fn review_prompt(
+    details: &PullRequestDetails,
+    merge_base: &str,
+    head: &str,
+    files: &[CodeReviewFile],
+) -> String {
+    let description = match details.body.trim() {
+        "" => "(none)",
+        body => body,
+    };
+    let files: String = files
+        .iter()
+        .map(|f| {
+            let change = match f.change {
+                ChangeKind::Added => "added",
+                ChangeKind::Modified => "modified",
+                ChangeKind::Deleted => "deleted",
+                ChangeKind::Renamed => "renamed",
+            };
+            let from = match &f.renamed_from {
+                Some(from) => format!(" from `{from}`"),
+                None => String::new(),
+            };
+            format!(
+                "- `{}` ({change}{from}, +{} -{})\n",
+                f.path, f.additions, f.deletions
+            )
+        })
+        .collect();
+    format!(
+        "Review pull request #{number}, \"{title}\", which goes into `{base}`.\n\n\
+         Its description:\n{description}\n\n\
+         This checkout is the PR's head, `{head}`. It split from `{base}` at `{merge_base}`. \
+         Read the whole change with `git diff {merge_base} {head}` (and the files here for \
+         context), and review all of it.\n\n\
+         The files it changes:\n{files}\n\
+         Answer in prose: what the PR does, then anything wrong, risky or unclear, each with its \
+         file and line. Don't change any files: this checkout is read-only.",
+        number = details.number,
+        title = details.title,
+        base = details.base,
+    )
+}
+
+/// How many lines around the lines asked about go with them.
+const ASK_CONTEXT: u32 = 5;
+
+/// What "Ask Claude" attaches: the lines `start_line` to `line` of `text` (the file on `side`),
+/// with `ASK_CONTEXT` lines around them, numbered and the asked-about ones marked.
+pub(crate) fn ask_attachment(
+    path: &str,
+    side: DiffSide,
+    start_line: Option<u32>,
+    line: u32,
+    text: &str,
+    file: Option<PathBuf>,
+) -> Attachment {
+    let start = start_line.unwrap_or(line).min(line);
+    let from = start.saturating_sub(ASK_CONTEXT).max(1);
+    let to = line.saturating_add(ASK_CONTEXT);
+    let width = to.to_string().len();
+    let lines: String = (1..)
+        .zip(text.lines())
+        .filter(|(n, _)| (from..=to).contains(n))
+        .map(|(n, text)| {
+            let mark = if (start..=line).contains(&n) {
+                '>'
+            } else {
+                ' '
+            };
+            format!("{mark} {n:>width$} {text}\n")
+        })
+        .collect();
+    let which = match side {
+        DiffSide::Left => "old",
+        DiffSide::Right => "new",
+    };
+    Attachment::Text {
+        name: format!("{path}:{start}-{line} ({which})"),
+        path: file,
+        text: lines,
+    }
+}
+
 /// Where GitHub keeps PR `number`'s head, which a fork's PR has too.
 pub(crate) fn pull_head_ref(number: u64) -> String {
     format!("refs/pull/{number}/head")
@@ -585,6 +672,57 @@ mod tests {
             ]
         );
         assert_eq!(line_text(&lines, DiffSide::Right, 2).as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn review_prompt_names_the_commits_and_files() {
+        let view = r#"{"id":"PR_kw7","number":7,"title":"Make it better","body":"Why","url":"https://github.com/o/r/pull/7","state":"OPEN","createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z","headRefName":"feat","baseRefName":"main","headRefOid":"head456","baseRefOid":""}"#;
+        let (details, _) = crate::pull_request::viewed(view).unwrap();
+        let files = [CodeReviewFile {
+            path: "src/a.rs".into(),
+            change: ChangeKind::Renamed,
+            renamed_from: Some("src/old.rs".into()),
+            additions: 2,
+            deletions: 1,
+            viewed: false,
+        }];
+        let prompt = review_prompt(&details, "base123", "head456", &files);
+        for needed in [
+            "#7",
+            "\"Make it better\"",
+            "Why",
+            "`main`",
+            "`git diff base123 head456`",
+            "- `src/a.rs` (renamed from `src/old.rs`, +2 -1)",
+            "read-only",
+        ] {
+            assert!(prompt.contains(needed), "{needed} not in {prompt}");
+        }
+    }
+
+    #[test]
+    fn ask_attachment_has_the_lines_and_their_context() {
+        let text: String = (1..=30).map(|n| format!("line {n}\n")).collect();
+        let Attachment::Text { name, text, path } =
+            ask_attachment("f.rs", DiffSide::Right, Some(10), 11, &text, None)
+        else {
+            panic!("not text");
+        };
+        assert_eq!(name, "f.rs:10-11 (new)");
+        assert_eq!(path, None);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.first(), Some(&"   5 line 5"));
+        assert_eq!(lines[5], "> 10 line 10");
+        assert_eq!(lines[6], "> 11 line 11");
+        assert_eq!(lines.last(), Some(&"  16 line 16"));
+        // Near the top, and on the old side.
+        let Attachment::Text { name, text, .. } =
+            ask_attachment("f.rs", DiffSide::Left, None, 2, "a\nb\nc\n", None)
+        else {
+            panic!("not text");
+        };
+        assert_eq!(name, "f.rs:2-2 (old)");
+        assert_eq!(text, "  1 a\n> 2 b\n  3 c\n");
     }
 
     #[test]

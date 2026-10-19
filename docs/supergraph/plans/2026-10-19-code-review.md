@@ -403,7 +403,7 @@ Checkpoint:
 - Commit: `Code review: the Review Worktree can't be edited, and its Agent stays in Plan mode`
 
 ## Task 11: The review Agent session and its prompts
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 4, Task 10
 Files:

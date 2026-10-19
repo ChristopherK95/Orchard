@@ -821,3 +821,102 @@ async fn a_review_session_is_still_locked_in_plan_mode_after_a_restart() {
     assert!(restored.mode_locked);
     assert_eq!(restored.permission_mode, PermissionMode::Plan);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_review_session_per_pr_gets_the_review_prompt() {
+    let setup = RepoWithOrigin::new();
+    let head = push_pr(&setup, &[("a", "first\n"), ("b", "second\n")], "A and B");
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let gh = review_gh(&pr_view(&head, true, "[]"), "");
+    let core = core_with_gh(&fake, &gh);
+    open(&core, &setup.repo()).await;
+    let review = core.open_code_review(7).await.unwrap();
+    setup_over(&core, &review.worktree).await;
+
+    let session = core.claude_review(7).await.unwrap();
+    let info = core.session_info(session).unwrap();
+    assert_eq!(info.worktree, review.worktree);
+    assert_eq!(info.permission_mode, PermissionMode::Plan);
+    eventually("the review prompt", || {
+        fake.received("session/prompt").len() == 1
+    })
+    .await;
+    let prompts = fake.received("session/prompt");
+    let prompt = prompts[0]["params"]["prompt"].to_string();
+    for needed in [
+        head.as_str(),
+        review.merge_base.as_str(),
+        "#7",
+        "Make it better",
+        "Why it's better",
+        "`a`",
+        "`b`",
+    ] {
+        assert!(prompt.contains(needed), "{needed} not in {prompt}");
+    }
+    eventually("the Agent to answer", || {
+        core.transcript(session)
+            .unwrap()
+            .iter()
+            .any(|item| matches!(item, editor_core::TranscriptItem::Agent { .. }))
+    })
+    .await;
+
+    assert_eq!(
+        core.claude_review(7).await.unwrap(),
+        session,
+        "the same one"
+    );
+    assert_eq!(core.code_review_session(7).await.unwrap(), session);
+    eventually("the second answer", || {
+        core.session_info(session).unwrap().state == editor_core::SessionState::Idle
+            && fake.received("session/prompt").len() == 2
+    })
+    .await;
+
+    // Closed, it's reopened (its conversation with it), not started afresh.
+    core.close_tab(session).await.unwrap();
+    let reopened = core.code_review_session(7).await.unwrap();
+    assert_eq!(fake.received("session/new").len(), 1);
+    assert!(core.recent_sessions(&review.worktree).is_empty());
+    assert_eq!(
+        core.session_info(reopened).unwrap().worktree,
+        review.worktree
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_question_attaches_the_lines_asked_about() {
+    let setup = RepoWithOrigin::new();
+    let numbered: String = (1..=20).map(|n| format!("l{n}\n")).collect();
+    push_main(&setup, &[("a", &numbered)], "Base");
+    let head = push_pr(&setup, &[("a", &numbered.replace("l10\n", "ten\n"))], "Ten");
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let gh = review_gh(&pr_view(&head, true, "[]"), "");
+    let core = core_with_gh(&fake, &gh);
+    open(&core, &setup.repo()).await;
+    core.open_code_review(7).await.unwrap();
+
+    let new = core
+        .ask_attachment(7, "a", DiffSide::Right, Some(9), 10)
+        .await
+        .unwrap();
+    let editor_core::Attachment::Text { name, text, .. } = new else {
+        panic!("not text: {new:?}");
+    };
+    assert_eq!(name, "a:9-10 (new)");
+    assert!(
+        text.contains("ten") && text.contains("l4") && text.contains("l15"),
+        "{text}"
+    );
+    assert!(!text.contains("l3\n") && !text.contains("l16"), "{text}");
+    let old = core
+        .ask_attachment(7, "a", DiffSide::Left, None, 10)
+        .await
+        .unwrap();
+    let editor_core::Attachment::Text { name, text, .. } = old else {
+        panic!("not text: {old:?}");
+    };
+    assert_eq!(name, "a:10-10 (old)");
+    assert!(text.contains("l10") && !text.contains("ten"), "{text}");
+}

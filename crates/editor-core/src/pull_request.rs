@@ -904,7 +904,7 @@ struct ReviewCommitOid {
 
 /// Who's asked to review a PR and who has (latest last, with the commit each review was on),
 /// for telling whether the user is one of them.
-struct ViewerReviewers {
+pub(crate) struct ViewerReviewers {
     requested: Vec<String>,
     reviewed: Vec<(String, Option<String>)>,
 }
@@ -1055,7 +1055,7 @@ fn reviewers_of(latest_reviews: Vec<GhReview>, review_requests: Vec<Actor>) -> V
 
 /// Reads `gh pr view --json DETAIL_FIELDS` (without the comments on its code), with who's asked to
 /// review it and who has.
-fn viewed(stdout: &str) -> Result<(PullRequestDetails, ViewerReviewers), String> {
+pub(crate) fn viewed(stdout: &str) -> Result<(PullRequestDetails, ViewerReviewers), String> {
     #[derive(Deserialize)]
     struct Label {
         name: String,

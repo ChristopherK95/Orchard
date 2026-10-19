@@ -38,9 +38,9 @@ use crate::merged::{self, MergeState, WorktreeMerge};
 use crate::names;
 use crate::permissions;
 use crate::pull_request::{
-    CommitChanges, MyPullRequest, OpenPullRequest, PullRequestComment, PullRequestDetails,
-    PullRequestOutcome, PullRequestProgress, PullRequestRequest, PushToPullRequestOutcome, Review,
-    ReviewCommit, ReviewFile,
+    CommitChanges, DiffSide, MyPullRequest, OpenPullRequest, PullRequestComment,
+    PullRequestDetails, PullRequestOutcome, PullRequestProgress, PullRequestRequest,
+    PushToPullRequestOutcome, Review, ReviewCommit, ReviewFile,
 };
 use crate::remove_worktree::{self, RemovalCheck, RemoveWorktree, RemovedWorktree};
 use crate::session::{
@@ -3765,6 +3765,101 @@ impl Core {
             }
         }
         Ok(review)
+    }
+
+    /// PR `number`'s review Agent session, in its Review Worktree (Plan mode): its Tab if it has
+    /// one, else reopened from the Recent sessions, else a new one. One per PR, kept for a
+    /// re-requested review.
+    pub async fn code_review_session(&self, number: u64) -> Result<SessionId, CoreError> {
+        let saved = self.saved_review(number)?;
+        if let Some(acp_id) = &saved.session {
+            let (open, closed) = {
+                let state = self.inner.state.lock().expect("state lock");
+                let open = state.by_acp_id.get(acp_id).copied();
+                let closed = state.recent.iter().any(|s| &s.acp_id == acp_id);
+                (open, closed)
+            };
+            if let Some(id) = open {
+                return Ok(id);
+            }
+            if closed {
+                return self.reopen_session(acp_id).await;
+            }
+        }
+        // (Not held back by its Worktree setup, as `new_session_in` is: it only reads.)
+        let id = self.start_session_in(&saved.worktree).await?;
+        let acp_id = self.session(id)?.acp_id.clone();
+        if let Some(saved) = self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .code_reviews
+            .get_mut(&number)
+        {
+            saved.session = Some(acp_id);
+        }
+        self.inner.persist();
+        Ok(id)
+    }
+
+    /// "Claude review": asks the review Agent session to review the whole PR (it reads the diff
+    /// itself), returning the session.
+    pub async fn claude_review(&self, number: u64) -> Result<SessionId, CoreError> {
+        let root = self.workspace()?.root;
+        let saved = self.saved_review(number)?;
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let details = crate::pull_request::details_for(&gh, &root, &number.to_string())
+            .await
+            .map_err(CoreError::Git)?
+            .ok_or(CoreError::UnknownPullRequest(number))?;
+        let files = code_review::files(&root, &saved.merge_base, &saved.head)
+            .await
+            .map_err(CoreError::Git)?;
+        let prompt = code_review::review_prompt(&details, &saved.merge_base, &saved.head, &files);
+        let id = self.code_review_session(number).await?;
+        self.send_prompt(id, &prompt).await?;
+        Ok(id)
+    }
+
+    /// What "Ask Claude" attaches for lines `start_line` to `line` on `side` of a file of PR
+    /// `number`: them and a few around them, from the head (new side) or the merge base (old).
+    pub async fn ask_attachment(
+        &self,
+        number: u64,
+        path: &str,
+        side: DiffSide,
+        start_line: Option<u32>,
+        line: u32,
+    ) -> Result<Attachment, CoreError> {
+        let root = self.workspace()?.root;
+        let saved = self.saved_review(number)?;
+        let (rev, file, at) = match side {
+            DiffSide::Right => (
+                &saved.head,
+                path.to_owned(),
+                Some(saved.worktree.join(path)),
+            ),
+            DiffSide::Left => {
+                // (A renamed file's old lines are under its old path.)
+                let changes = git::changes_between(&root, &saved.merge_base, &saved.head)
+                    .await
+                    .map_err(CoreError::Git)?;
+                let old = changes
+                    .into_iter()
+                    .find(|(_, p, _)| p == path)
+                    .and_then(|(_, _, from)| from)
+                    .unwrap_or_else(|| path.to_owned());
+                (&saved.merge_base, old, None)
+            }
+        };
+        let text = git::file_at(&root, rev, &file)
+            .await
+            .and_then(documents::decode_text)
+            .ok_or_else(|| CoreError::File(format!("{path} has no text on that side")))?;
+        Ok(code_review::ask_attachment(
+            path, side, start_line, line, &text, at,
+        ))
     }
 
     /// PR `number`'s saved Code review.
