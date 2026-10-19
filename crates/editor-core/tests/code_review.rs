@@ -6,7 +6,9 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use editor_core::{CodeReview, Core, CoreError, CoreEvent, SetupStatus};
+use editor_core::{
+    CodeReview, Core, CoreError, CoreEvent, DiffSide, NewReviewComment, Question, SetupStatus,
+};
 use support::*;
 use tokio::sync::broadcast;
 
@@ -296,4 +298,90 @@ async fn a_first_review_has_no_since_last_review() {
     open(&core, &setup.repo()).await;
     let review = core.open_code_review(7).await.unwrap();
     assert_eq!(review.since_last_review, None);
+}
+
+fn comment_on(path: &str, start_line: Option<u32>, line: u32, body: &str) -> NewReviewComment {
+    NewReviewComment {
+        path: path.into(),
+        side: DiffSide::Right,
+        start_line,
+        line,
+        body: body.into(),
+        from_question: false,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_pending_review_survives_a_restart() {
+    let setup = RepoWithOrigin::new();
+    let head = push_pr(&setup, &[("a", "l1\nl2\nl3\nl4\n")], "A");
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let gh = review_gh(&pr_view(&head, true, "[]"), "");
+    let state = fake.state_path();
+    let core = core_with_gh_and_state(&fake, &gh, &state);
+    open(&core, &setup.repo()).await;
+    core.open_code_review(7).await.unwrap();
+    let mut events = core.subscribe();
+
+    let single = core
+        .add_review_comment(7, comment_on("a", None, 2, "Why l2?"))
+        .await
+        .unwrap();
+    assert_eq!(single.line_text, "l2");
+    assert!(!single.outdated);
+    next_event(&mut events, "the Pending review to change", |e| match e {
+        CoreEvent::PendingReviewChanged { number: 7 } => Some(()),
+        _ => None,
+    })
+    .await;
+    let range = core
+        .add_review_comment(7, comment_on("a", Some(1), 3, "These three"))
+        .await
+        .unwrap();
+    assert_ne!(range.id, single.id);
+    core.edit_review_comment(7, range.id, "These three lines")
+        .await
+        .unwrap();
+    core.add_review_question(
+        7,
+        Question {
+            path: "a".into(),
+            side: DiffSide::Right,
+            start_line: None,
+            line: 4,
+            attachment: "a:4-4 (new)".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let off = core
+        .add_review_comment(7, comment_on("a", None, 40, "Nowhere"))
+        .await
+        .unwrap_err();
+    assert!(matches!(off, CoreError::NotInDiff), "{off:?}");
+    drop(core);
+
+    let core = core_with_gh_and_state(&fake, &gh, &state);
+    open(&core, &setup.repo()).await;
+    let review = core.open_code_review(7).await.unwrap();
+    let comments: Vec<(Option<u32>, u32, &str, &str)> = review
+        .pending
+        .comments
+        .iter()
+        .map(|c| (c.start_line, c.line, c.body.as_str(), c.line_text.as_str()))
+        .collect();
+    assert_eq!(
+        comments,
+        [
+            (None, 2, "Why l2?", "l2"),
+            (Some(1), 3, "These three lines", "l3")
+        ]
+    );
+    assert_eq!(review.pending.questions.len(), 1);
+    assert_eq!(review.pending.questions[0].attachment, "a:4-4 (new)");
+
+    core.remove_review_comment(7, single.id).await.unwrap();
+    assert!(core.remove_review_comment(7, single.id).await.is_err());
+    let review = core.open_code_review(7).await.unwrap();
+    assert_eq!(review.pending.comments.len(), 1);
 }

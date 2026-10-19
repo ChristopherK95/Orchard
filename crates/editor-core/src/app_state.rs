@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::code_review::PendingReview;
 use crate::session::PermissionMode;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +70,9 @@ pub(crate) struct SavedCodeReview {
     /// Its Worktree setup has finished, so it isn't run again.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) setup_done: bool,
+    /// The comments not submitted yet.
+    #[serde(default, skip_serializing_if = "PendingReview::is_empty")]
+    pub(crate) pending: PendingReview,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -232,6 +236,7 @@ mod tests {
                     merge_base: "def".into(),
                     last_review: Some("123".into()),
                     setup_done: true,
+                    pending: PendingReview::default(),
                 },
             )]
             .into(),

@@ -175,7 +175,7 @@ Checkpoint:
 - Commit: `Code review: the PR's diff, or only what changed since my last review`
 
 ## Task 5: The Pending review
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 3
 Files:

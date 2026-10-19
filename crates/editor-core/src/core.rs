@@ -17,7 +17,9 @@ use crate::attachments::{self, Attachment};
 use crate::auto_suspend::{
     self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, SystemClock, SystemProbe,
 };
-use crate::code_review::{self, CodeReview, SinceLastReview};
+use crate::code_review::{
+    self, CodeReview, NewReviewComment, PendingComment, PendingReview, Question, SinceLastReview,
+};
 use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 use crate::dashboard::{self, ReviewRequest, WorktreeAttention};
 use crate::documents::{
@@ -470,6 +472,10 @@ pub enum CoreError {
     NotAReviewer,
     #[error("PR #{0} has no Code review open")]
     NoCodeReview(u64),
+    #[error("those lines aren't in the PR's diff, so GitHub can't take a comment on them")]
+    NotInDiff,
+    #[error("that comment isn't in the Pending review")]
+    UnknownReviewComment,
     #[error(transparent)]
     Acp(#[from] AcpError),
 }
@@ -648,6 +654,11 @@ pub enum CoreEvent {
     SetupOutput {
         worktree: PathBuf,
         text: String,
+    },
+    /// PR `number`'s Pending review changed (a comment added, edited or removed, a question asked,
+    /// or the review submitted).
+    PendingReviewChanged {
+        number: u64,
     },
 }
 
@@ -3301,14 +3312,15 @@ impl Core {
             Some(commit) => self.reachable_last_review(&root, number, commit).await,
             None => None,
         };
-        let setup_done = {
+        let (setup_done, pending) = {
             let mut state = self.inner.state.lock().expect("state lock");
-            // (A setup finishing meanwhile has said so here.)
-            let done = setup_done
-                || state
-                    .code_reviews
-                    .get(&number)
-                    .is_some_and(|saved| saved.worktree == worktree && saved.setup_done);
+            // (A setup finishing meanwhile has said so here; the Pending review stays.)
+            let kept = state
+                .code_reviews
+                .remove(&number)
+                .filter(|saved| saved.worktree == worktree);
+            let done = setup_done || kept.as_ref().is_some_and(|saved| saved.setup_done);
+            let pending = kept.map(|saved| saved.pending).unwrap_or_default();
             state.code_reviews.insert(
                 number,
                 SavedCodeReview {
@@ -3317,9 +3329,10 @@ impl Core {
                     merge_base: merge_base.clone(),
                     last_review: last_review.clone(),
                     setup_done: done,
+                    pending: pending.clone(),
                 },
             );
-            done
+            (done, pending)
         };
         self.inner.persist();
         self.inner.refresh_worktrees().await;
@@ -3346,6 +3359,7 @@ impl Core {
         };
         Ok(CodeReview {
             since_last_review,
+            pending,
             number,
             title: details.title,
             setup: self.setup(&worktree),
@@ -3355,6 +3369,98 @@ impl Core {
             merge_base,
             files,
         })
+    }
+
+    /// Adds a comment on a line or range of the PR's diff to its Pending review (refused if the diff
+    /// doesn't show those lines).
+    pub async fn add_review_comment(
+        &self,
+        number: u64,
+        comment: NewReviewComment,
+    ) -> Result<PendingComment, CoreError> {
+        let diff = self.code_review_diff(number, &comment.path, false).await?;
+        let line_text = code_review::anchor(&diff, comment.side, comment.start_line, comment.line)
+            .ok_or(CoreError::NotInDiff)?;
+        self.change_pending(number, |pending| {
+            let id = pending.comments.iter().map(|c| c.id).max().unwrap_or(0) + 1;
+            let added = PendingComment {
+                id,
+                path: comment.path,
+                side: comment.side,
+                start_line: comment.start_line,
+                line: comment.line,
+                body: comment.body,
+                line_text,
+                outdated: false,
+                from_question: comment.from_question,
+            };
+            pending.comments.push(added.clone());
+            Ok(added)
+        })
+    }
+
+    /// Changes the text of a comment in the Pending review.
+    pub async fn edit_review_comment(
+        &self,
+        number: u64,
+        id: u64,
+        body: &str,
+    ) -> Result<(), CoreError> {
+        self.change_pending(number, |pending| {
+            let comment = pending
+                .comments
+                .iter_mut()
+                .find(|c| c.id == id)
+                .ok_or(CoreError::UnknownReviewComment)?;
+            comment.body = body.to_owned();
+            Ok(())
+        })
+    }
+
+    /// Takes a comment out of the Pending review.
+    pub async fn remove_review_comment(&self, number: u64, id: u64) -> Result<(), CoreError> {
+        self.change_pending(number, |pending| {
+            let before = pending.comments.len();
+            pending.comments.retain(|c| c.id != id);
+            match pending.comments.len() == before {
+                true => Err(CoreError::UnknownReviewComment),
+                false => Ok(()),
+            }
+        })
+    }
+
+    /// Keeps the lines an "Ask Claude" was about, for their gutter marker.
+    pub async fn add_review_question(
+        &self,
+        number: u64,
+        question: Question,
+    ) -> Result<(), CoreError> {
+        self.change_pending(number, |pending| {
+            pending.questions.push(question);
+            Ok(())
+        })
+    }
+
+    /// Changes PR `number`'s Pending review with `change`; if it succeeds, saves it and says so.
+    fn change_pending<T>(
+        &self,
+        number: u64,
+        change: impl FnOnce(&mut PendingReview) -> Result<T, CoreError>,
+    ) -> Result<T, CoreError> {
+        let changed = {
+            let mut state = self.inner.state.lock().expect("state lock");
+            let saved = state
+                .code_reviews
+                .get_mut(&number)
+                .ok_or(CoreError::NoCodeReview(number))?;
+            change(&mut saved.pending)?
+        };
+        self.inner.persist();
+        let _ = self
+            .inner
+            .events
+            .send(CoreEvent::PendingReviewChanged { number });
+        Ok(changed)
     }
 
     /// The commit of the user's last review, fetched if it isn't here (a force-push since may have
