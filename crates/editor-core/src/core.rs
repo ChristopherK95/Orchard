@@ -482,6 +482,10 @@ pub enum CoreError {
     EmptyReview,
     #[error("GitHub didn't take the review: {message}")]
     SubmitFailed { message: String, paths: Vec<String> },
+    #[error("this is a Review Worktree: its files are the PR's and can't be changed")]
+    ReadOnlyWorktree,
+    #[error("an Agent session in a Review Worktree stays in Plan mode")]
+    ModeLocked,
     #[error(transparent)]
     Acp(#[from] AcpError),
 }
@@ -2558,10 +2562,15 @@ impl Core {
             .request("session/new", json!({ "cwd": root, "mcpServers": [] }))
             .await?;
         let acp_id = created["sessionId"].as_str().unwrap_or_default().to_owned();
-        // Every Tab starts in Ask for edits, whatever the Agent's own settings default to.
+        // Every Tab starts in Ask for edits, whatever the Agent's own settings default to; one in a
+        // Review Worktree in Plan mode, where it stays (nothing there may be edited).
+        let mode = match self.is_review_worktree(&root) {
+            Some(_) => PermissionMode::Plan,
+            None => PermissionMode::AskForEdits,
+        };
         let current_mode = created["modes"]["currentModeId"].as_str();
-        if current_mode.is_some_and(|mode| mode != PermissionMode::AskForEdits.acp_id()) {
-            apply_mode(&connection, &acp_id, PermissionMode::AskForEdits).await?;
+        if current_mode.is_some_and(|current| current != mode.acp_id()) {
+            apply_mode(&connection, &acp_id, mode).await?;
         }
 
         // Registered under the same lock `remove_worktree` marks the Worktree under, so a session
@@ -2575,7 +2584,7 @@ impl Core {
                     acp_id: acp_id.clone(),
                     name: state.new_name(),
                     worktree: root,
-                    permission_mode: PermissionMode::AskForEdits,
+                    permission_mode: mode,
                     files: vec![],
                     started: false,
                     model: model_of(&created["configOptions"]),
@@ -2715,10 +2724,26 @@ impl Core {
     /// Opens a file for the Manual editor: one of the Workspace's Worktrees', or the settings file.
     pub async fn read_file(&self, path: &Path) -> Result<OpenedFile, CoreError> {
         let path = self.editable(path)?;
-        tokio::task::spawn_blocking(move || documents::read(&path))
+        let read_only = self.in_review_worktree(&path);
+        let opened = tokio::task::spawn_blocking(move || documents::read(&path))
             .await
             .map_err(|e| CoreError::File(e.to_string()))?
-            .map_err(CoreError::File)
+            .map_err(CoreError::File)?;
+        Ok(match read_only {
+            true => opened.read_only(),
+            false => opened,
+        })
+    }
+
+    /// Whether `path` (canonical) is in a Review Worktree, whose files are the PR's.
+    fn in_review_worktree(&self, path: &Path) -> bool {
+        self.inner
+            .state
+            .lock()
+            .expect("state lock")
+            .code_reviews
+            .values()
+            .any(|review| path.starts_with(&review.worktree))
     }
 
     /// Saves a Manual editor's text (`\n` line endings, written as `line_ending`) if `over`
@@ -2733,6 +2758,9 @@ impl Core {
         window: &str,
     ) -> Result<String, CoreError> {
         let path = self.editable(path)?;
+        if self.in_review_worktree(&path) {
+            return Err(CoreError::ReadOnlyWorktree);
+        }
         let is_settings = self
             .inner
             .config
@@ -4220,6 +4248,9 @@ impl Core {
     /// or deleted if it's new. The drawer asks first.
     pub async fn discard(&self, worktree: &Path, path: &str) -> Result<(), CoreError> {
         let worktree = self.known_worktree(worktree)?;
+        if self.is_review_worktree(&worktree).is_some() {
+            return Err(CoreError::ReadOnlyWorktree);
+        }
         let done = git::discard(&worktree, path).await.map_err(CoreError::Git);
         self.inner.status_due(worktree);
         done
@@ -5014,6 +5045,9 @@ impl Core {
         mode: PermissionMode,
     ) -> Result<(), CoreError> {
         let session = self.session(id)?;
+        if mode != PermissionMode::Plan && session.info.lock().expect("info lock").mode_locked {
+            return Err(CoreError::ModeLocked);
+        }
         let stopped = session.update(|control| {
             let stopped = control.in_transition() || control.suspended || control.exited;
             if stopped {
@@ -5651,16 +5685,21 @@ impl Inner {
         state.next_session += 1;
         let id = SessionId(state.next_session);
         let stopped = connection.is_none();
+        let mode_locked = state.review_of(&saved.worktree).is_some();
         let info = SessionInfo {
             id,
             name: saved.name,
-            worktree: saved.worktree,
+            mode_locked,
             state: if stopped {
                 SessionState::Suspended
             } else {
                 SessionState::Idle
             },
-            permission_mode: saved.permission_mode,
+            permission_mode: match mode_locked {
+                true => PermissionMode::Plan,
+                false => saved.permission_mode,
+            },
+            worktree: saved.worktree,
             unread: 0,
             model: saved.model,
             last_active: saved.last_active,
@@ -5835,6 +5874,14 @@ impl Inner {
             for s in saved.tabs.iter().chain(&saved.recent) {
                 state.note_name(&s.name);
             }
+            // (Before the Tabs: a session in a Review Worktree is locked in Plan mode.)
+            state.code_reviews = saved
+                .code_reviews
+                .into_iter()
+                .filter(|(_, review)| {
+                    listing_failed || state.worktrees.iter().any(|w| w.path == review.worktree)
+                })
+                .collect();
             for tab in saved.tabs {
                 if live(&state, &tab) && !state.by_acp_id.contains_key(&tab.acp_id) {
                     created.push(self.register_session(&mut state, tab, None));
@@ -5864,13 +5911,6 @@ impl Inner {
                 .into_iter()
                 .filter(|(worktree, _)| {
                     listing_failed || state.worktrees.iter().any(|w| &w.path == worktree)
-                })
-                .collect();
-            state.code_reviews = saved
-                .code_reviews
-                .into_iter()
-                .filter(|(_, review)| {
-                    listing_failed || state.worktrees.iter().any(|w| w.path == review.worktree)
                 })
                 .collect();
             let mut listed = std::mem::take(&mut state.worktrees);
@@ -6490,8 +6530,13 @@ impl Inner {
                             .as_str()
                             .and_then(PermissionMode::from_acp_id)
                         {
-                            session.set_mode(mode);
-                            self.persist();
+                            let locked = session.info.lock().expect("info lock").mode_locked;
+                            if locked && mode != PermissionMode::Plan {
+                                session.back_to_plan();
+                            } else {
+                                session.set_mode(mode);
+                                self.persist();
+                            }
                         }
                     }
                     _ => {}
@@ -6682,6 +6727,24 @@ impl Session {
             model,
         });
         true
+    }
+
+    /// The Agent left Plan mode in a Review Worktree: it's put back, and the Tab told it's Plan
+    /// (the mode it never stopped showing).
+    fn back_to_plan(&self) {
+        if let Some(connection) = self.connection() {
+            let acp_id = self.acp_id.clone();
+            // (Not awaited here: the Agent's messages are read on this task, its answer too.)
+            tokio::spawn(async move {
+                let _ = apply_mode(&connection, &acp_id, PermissionMode::Plan).await;
+            });
+        }
+        let mut info = self.info.lock().expect("info lock");
+        info.permission_mode = PermissionMode::Plan;
+        let _ = self.events.send(CoreEvent::PermissionModeChanged {
+            session_id: info.id,
+            mode: PermissionMode::Plan,
+        });
     }
 
     fn set_mode(&self, mode: PermissionMode) {

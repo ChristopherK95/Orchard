@@ -363,7 +363,7 @@ Checkpoint:
 - Commit: `Code review: new commits pushed mid-review, and Refresh`
 
 ## Task 10: A Review Worktree is read-only
-Status: pending
+Status: completed
 Risk: high
 Dependencies: Task 3
 Files:

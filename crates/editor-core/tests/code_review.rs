@@ -7,8 +7,8 @@ mod support;
 use std::path::{Path, PathBuf};
 
 use editor_core::{
-    CodeReview, Core, CoreError, CoreEvent, DiffSide, NewReviewComment, Question, SetupStatus,
-    Verdict,
+    CodeReview, Core, CoreError, CoreEvent, DiffSide, FileContent, NewReviewComment,
+    PermissionMode, Question, SaveOver, SetupStatus, Verdict,
 };
 use support::*;
 use tokio::sync::broadcast;
@@ -700,4 +700,124 @@ async fn refresh_keeps_comments_and_clears_viewed_on_changed_files() {
         matches!(err, CoreError::OutdatedComments { count: 1 }),
         "{err:?}"
     );
+}
+
+/// Waits until the Review Worktree's setup isn't running (it has none here, so it ends at once).
+async fn setup_over(core: &Core, worktree: &Path) {
+    eventually("setup to be over", || {
+        !matches!(
+            core.setup(worktree).map(|s| s.status),
+            Some(SetupStatus::Running { .. } | SetupStatus::StartingSession)
+        )
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_review_worktree_is_read_only() {
+    let setup = RepoWithOrigin::new();
+    let head = push_pr(&setup, &[("a", "first\n")], "A");
+    let fake = FakeAgent::new(r#"{"turns":[{"chunks":["Done planning"],"setMode":"default"}]}"#);
+    let gh = review_gh(&pr_view(&head, true, "[]"), "");
+    let core = core_with_gh(&fake, &gh);
+    open(&core, &setup.repo()).await;
+    let review = core.open_code_review(7).await.unwrap();
+    let file = review.worktree.join("a");
+
+    let opened = core.read_file(&file).await.unwrap();
+    assert!(
+        matches!(
+            opened.content,
+            FileContent::Text {
+                read_only: true,
+                ..
+            }
+        ),
+        "{:?}",
+        opened.content
+    );
+    let write = core
+        .save_file(&file, "changed\n", "\n", SaveOver::Anything, "main")
+        .await
+        .unwrap_err();
+    assert!(matches!(write, CoreError::ReadOnlyWorktree), "{write:?}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "first\n");
+    let discard = core.discard(&review.worktree, "a").await.unwrap_err();
+    assert!(
+        matches!(discard, CoreError::ReadOnlyWorktree),
+        "{discard:?}"
+    );
+
+    setup_over(&core, &review.worktree).await;
+    let session = core.new_session_in(&review.worktree).await.unwrap();
+    let info = core.session_info(session).unwrap();
+    assert_eq!(info.permission_mode, PermissionMode::Plan);
+    assert!(info.mode_locked);
+    let set_mode = fake.received("session/set_mode");
+    assert_eq!(set_mode.len(), 1);
+    assert_eq!(set_mode[0]["params"]["modeId"], "plan");
+    let refused = core
+        .set_permission_mode(session, PermissionMode::AcceptEdits)
+        .await
+        .unwrap_err();
+    assert!(matches!(refused, CoreError::ModeLocked), "{refused:?}");
+
+    // The Agent leaving Plan mode by itself is put back in it.
+    let mut events = core.subscribe();
+    core.send_prompt(session, "Plan it").await.unwrap();
+    next_event(&mut events, "Plan mode again", |e| match e {
+        CoreEvent::PermissionModeChanged {
+            session_id,
+            mode: PermissionMode::Plan,
+        } if session_id == session => Some(()),
+        CoreEvent::PermissionModeChanged { mode, .. } => panic!("left Plan mode for {mode:?}"),
+        _ => None,
+    })
+    .await;
+    eventually("plan to be set again", || {
+        fake.received("session/set_mode").len() == 2
+    })
+    .await;
+    assert_eq!(
+        fake.received("session/set_mode")[1]["params"]["modeId"],
+        "plan"
+    );
+    assert_eq!(
+        core.session_info(session).unwrap().permission_mode,
+        PermissionMode::Plan
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_review_session_is_still_locked_in_plan_mode_after_a_restart() {
+    let setup = RepoWithOrigin::new();
+    let head = push_pr(&setup, &[("a", "first\n")], "A");
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let gh = review_gh(&pr_view(&head, true, "[]"), "");
+    let state = fake.state_path();
+    let core = core_with_gh_and_state(&fake, &gh, &state);
+    open(&core, &setup.repo()).await;
+    let review = core.open_code_review(7).await.unwrap();
+    setup_over(&core, &review.worktree).await;
+    let session = core.new_session_in(&review.worktree).await.unwrap();
+    // (Only a session that has had a turn is kept as a Tab.)
+    core.send_prompt(session, "What does it do?").await.unwrap();
+    eventually("the Agent to answer", || {
+        core.transcript(session)
+            .unwrap()
+            .iter()
+            .any(|item| matches!(item, editor_core::TranscriptItem::Agent { .. }))
+    })
+    .await;
+    drop(core);
+
+    let core = core_with_gh_and_state(&fake, &gh, &state);
+    open(&core, &setup.repo()).await;
+    let restored = core
+        .sessions()
+        .into_iter()
+        .find(|s| s.worktree == review.worktree)
+        .expect("restored");
+    assert!(restored.mode_locked);
+    assert_eq!(restored.permission_mode, PermissionMode::Plan);
 }

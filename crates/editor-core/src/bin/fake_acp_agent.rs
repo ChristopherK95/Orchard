@@ -39,7 +39,8 @@
 //! A top-level `"models": [{ "value": "default", "name": "Default", "description": "Opus 4.8" }, …]`
 //! is the model option in each `session/new`, `session/resume` and `session/load` result's
 //! `configOptions` (the first is current), like the real adapter's. A turn's `"setModel": "<value>"`
-//! makes another current, sent as a `config_option_update` (after its chunks).
+//! makes another current, sent as a `config_option_update` (after its chunks). A turn's
+//! `"setMode": "<id>"` is the Agent changing mode by itself, sent as a `current_mode_update`.
 //!
 //! Each `session/prompt` consumes the next turn (across all sessions); once the script runs out, the
 //! agent echoes the prompt. A `permission` turn first announces the tool call, then asks
@@ -145,6 +146,9 @@ struct Turn {
     prompt_usage: Option<Value>,
     /// Make this model current (sent as a `config_option_update` after the chunks).
     set_model: Option<String>,
+    /// Change mode by itself, as on leaving plan mode (sent as a `current_mode_update` after the
+    /// chunks).
+    set_mode: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -464,6 +468,12 @@ impl Agent {
             notify_update(
                 &session_id,
                 json!({ "sessionUpdate": "config_option_update", "configOptions": self.config_options() }),
+            );
+        }
+        if let Some(mode) = &turn.set_mode {
+            notify_update(
+                &session_id,
+                json!({ "sessionUpdate": "current_mode_update", "currentModeId": mode }),
             );
         }
         if turn.exit {
