@@ -611,7 +611,7 @@ Checkpoint:
 - Commit: `Code review: go through a PR's files, comment and submit a review`
 
 ## Task 17: Claude docked in the Code review
-Status: pending
+Status: completed
 Risk: high
 Dependencies: Task 16
 Files:

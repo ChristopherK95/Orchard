@@ -24,7 +24,7 @@ import {
 } from "./core";
 import { DiffView, type DiffSelection } from "./DiffView";
 import { languageOfPath } from "./highlight";
-import { ChevronLeft, ChevronRight, CircleCheck, GitPullRequest, Loader, MessageSquare, MoveRight, Pencil, RefreshCw, Send, Sparkles, Trash2, TriangleAlert, X } from "./icons";
+import { ChevronLeft, ChevronRight, CircleCheck, GitPullRequest, Loader, MessageSquare, MoveRight, PanelRight, Pencil, RefreshCw, Send, Sparkles, Trash2, TriangleAlert, X } from "./icons";
 import { handleTranscriptClick, renderMarkdown } from "./markdown";
 import { LETTER, ReviewFiles, useReviewKeys } from "./ReviewFiles";
 import { Setup, type SetupView } from "./Setup";
@@ -48,6 +48,8 @@ export interface ReviewDock {
   questions: () => Question[];
   /** "Use as comment": opens a comment box on the question's lines with `body` in it. */
   draftComment: (question: Question, body: string) => void;
+  /** The question whose gutter marker was clicked last (set again on each click): scrolled to. */
+  question: () => Question | null;
   /** Collapses the dock. */
   onCollapse: () => void;
 }
@@ -74,7 +76,7 @@ export function CodeReviewOverlay(props: {
   /** Claude docked on the right (ReviewChat), once the review has a session; without it "Claude
    *  review" offers the session's Tab. */
   dock?: (dock: ReviewDock) => JSX.Element;
-  /** A gutter marker was clicked: the question about those lines (the dock scrolls to it). */
+  /** A gutter marker was clicked: the question about those lines (the dock opens and scrolls to it either way). */
   onQuestion?: (question: Question) => void;
   onClose: () => void;
 }) {
@@ -304,6 +306,7 @@ export function CodeReviewOverlay(props: {
   const [session, setSession] = createSignal<SessionId | null>(null);
   const [dockOpen, setDockOpen] = createSignal(false);
   const [asked, setAsked] = createSignal<Attachment[]>([]);
+  const [shownQuestion, setShownQuestion] = createSignal<Question | null>(null, { equals: false });
   const [claudeBusy, setClaudeBusy] = createSignal(false);
   const claudeReview = async () => {
     setClaudeBusy(true);
@@ -335,6 +338,18 @@ export function CodeReviewOverlay(props: {
       else setNotice({ text: `${attachment.name} is kept for your question to Claude.` });
     } catch (err) {
       fail("Couldn't ask Claude")(err);
+    }
+  };
+  /** A gutter marker: the dock opens on the message that asked it. */
+  const showQuestion = async (q: Question) => {
+    props.onQuestion?.(q);
+    if (!props.dock) return;
+    try {
+      if (session() === null) setSession(await core.codeReviewSession(props.number));
+      setDockOpen(true);
+      setShownQuestion(q);
+    } catch (err) {
+      fail("Couldn't open the review session")(err);
     }
   };
   /** The question whose first line this is, for its gutter marker. */
@@ -387,7 +402,9 @@ export function CodeReviewOverlay(props: {
     next: () => go(at() + 1),
     previous: () => go(at() - 1),
     toggleViewed: () => current() && toggleViewed(current()!),
-    close: () => {
+    close: (e) => {
+      // Esc in Claude's composer is the composer's (it stops a turn); the next one closes.
+      if (e.target instanceof HTMLElement && e.target.closest(".cr-dock textarea")) return e.target.blur();
       if (submitOpen()) return !submitting() && setSubmitOpen(false);
       if (menuAt()) return closeMenu();
       if (drafting() || editing() !== null || replyingTo() !== null || moving()) {
@@ -519,7 +536,7 @@ export function CodeReviewOverlay(props: {
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
-            props.onQuestion?.(q());
+            void showQuestion(q());
           }}
         >
           <Sparkles />
@@ -580,6 +597,11 @@ export function CodeReviewOverlay(props: {
             </Show>
             Claude review
           </button>
+          <Show when={props.dock && session() !== null && !dockOpen()}>
+            <button class="ghost icon" onClick={() => setDockOpen(true)} title="Show Claude (the review session)" aria-label="Show Claude">
+              <PanelRight />
+            </button>
+          </Show>
           <button class="primary" onClick={() => (setSubmitted(null), setSubmitOpen(true))} disabled={!review()} title="Approve, request changes or comment, with the pending comments">
             <Send />
             Submit review
@@ -727,6 +749,7 @@ export function CodeReviewOverlay(props: {
                             return all;
                           },
                           questions: () => pending.questions,
+                          question: shownQuestion,
                           draftComment: (q, body) => {
                             const i = files().findIndex((f) => f.path === q.path);
                             if (i >= 0) setAt(i);

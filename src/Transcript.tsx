@@ -23,6 +23,12 @@ const TOOL_ICON: Record<string, typeof Wrench> = {
   read: BookOpen, edit: Pencil, delete: Trash2, move: MoveRight, search: TextSearch, execute: Play, think: Brain, fetch: Globe,
 };
 
+/** What a transcript's owner can do to it. */
+export interface TranscriptHandle {
+  /** Scrolls to the latest item `match` picks, loading earlier pages until it's found; whether it was. */
+  scrollTo: (match: (item: TranscriptItem) => boolean) => Promise<boolean>;
+}
+
 export function Transcript(props: {
   sessionId: SessionId;
   /** The items from absolute index `start` on; `start > 0` means earlier pages exist. */
@@ -38,6 +44,10 @@ export function Transcript(props: {
   answerKeys?: () => boolean;
   /** How much of the bottom the floating composer covers: the list ends that far up. */
   bottomInset?: () => number;
+  /** Takes the handle to scroll it from outside (the Code review's gutter markers do). */
+  handle?: (handle: TranscriptHandle) => void;
+  /** Shown under an Agent message (by its absolute index), e.g. the Code review's "Use as comment". */
+  underAgent?: (index: number, text: string) => JSX.Element;
 }) {
   let scroller!: HTMLDivElement;
   let following = true;
@@ -128,6 +138,26 @@ export function Transcript(props: {
     }
   };
 
+  props.handle?.({
+    scrollTo: async (match) => {
+      for (;;) {
+        let at = props.items.length - 1;
+        while (at >= 0 && !match(props.items[at])) at--;
+        if (at >= 0) {
+          // The row holding it (it may be inside a group of tool calls).
+          const index = props.start + at;
+          const keys = rows().keys;
+          let row = keys.length - 1;
+          while (row > 0 && keys[row] > index) row--;
+          following = false;
+          requestAnimationFrame(() => virtualizer.scrollToIndex(row, { align: "start" }));
+          return true;
+        }
+        if (props.start === 0 || (await props.onLoadEarlier()) === 0) return false;
+      }
+    },
+  });
+
   const onScroll = () => {
     following = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < FOLLOW_SLACK;
     if (scroller.scrollTop < LOAD_EARLIER_AT) void loadEarlier();
@@ -154,7 +184,7 @@ export function Transcript(props: {
               >
                 <Show
                   when={groupEnd()}
-                  fallback={renderItem(props.sessionId, props.items[key - props.start], props.answerKeys ?? always, props.onOpenProposal)}
+                  fallback={renderItem(props.sessionId, props.items[key - props.start], props.answerKeys ?? always, props.onOpenProposal, props.underAgent && ((text) => props.underAgent!(key, text)))}
                 >
                   {(end) => (
                     <ToolCallGroup
@@ -179,11 +209,17 @@ function renderItem(
   item: TranscriptItem | undefined,
   answerKeys: () => boolean,
   onOpenProposal: (sessionId: SessionId, request: PermissionRequest) => void,
+  underAgent?: (text: string) => JSX.Element,
 ): JSX.Element {
   if (!item) return null;
   switch (item.kind) {
     case "agent":
-      return <div class="msg agent markdown" innerHTML={renderMarkdown(item.text)} />;
+      return (
+        <>
+          <div class="msg agent markdown" innerHTML={renderMarkdown(item.text)} />
+          {underAgent?.(item.text)}
+        </>
+      );
     case "permission":
       return (
         <PermissionCard

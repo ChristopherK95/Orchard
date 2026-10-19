@@ -199,10 +199,12 @@ function ModeIcon(props: { mode: PermissionMode }) {
   );
 }
 
-/** The permission modes as a row of icon tabs, the current one lit. */
-function ModeTabs(props: { mode: PermissionMode; onPick: (mode: PermissionMode) => void }) {
+/** The permission modes as a row of icon tabs, the current one lit. `locked`: a review session's,
+ *  which stays in Plan mode (its Review Worktree is read-only). */
+function ModeTabs(props: { mode: PermissionMode; locked?: boolean; onPick: (mode: PermissionMode) => void }) {
+  const title = (mode: PermissionMode) => (props.locked ? `Read-only review: it stays in ${MODE_LABEL[props.mode]} mode` : MODE_LABEL[mode]);
   return (
-    <div class="mode-tabs" role="radiogroup" aria-label="Permission mode">
+    <div class="mode-tabs" classList={{ locked: props.locked }} role="radiogroup" aria-label="Permission mode">
       <For each={Object.keys(MODE_LABEL) as PermissionMode[]}>
         {(mode) => (
           <button
@@ -211,7 +213,8 @@ function ModeTabs(props: { mode: PermissionMode; onPick: (mode: PermissionMode) 
             role="radio"
             aria-checked={mode === props.mode}
             aria-label={MODE_LABEL[mode]}
-            title={MODE_LABEL[mode]}
+            title={title(mode)}
+            disabled={props.locked}
             onClick={() => mode !== props.mode && props.onPick(mode)}
           >
             <ModeIcon mode={mode} />
@@ -246,15 +249,26 @@ export function answerInDraft(sessionId: SessionId, line: string) {
   drafts.set(sessionId, { ...draft, text: withAnswer(draft.text, line) });
 }
 
-/** The composers showing now, by session: each takes a draft put in while it's up. */
-const shownComposers = new Map<SessionId, Set<(text: string) => void>>();
+/** The composers showing now, by session: each takes a draft, or an attachment, put in while it's up. */
+const shownComposers = new Map<SessionId, Set<{ text: (text: string) => void; attach: (attachment: Attachment) => void }>>();
 
 /** Puts `text` in a session's composer, unsent: read when its composer is next shown, or put in
  *  the one showing now if nothing's been typed there yet (what has been is kept). */
 export function setDraft(session: SessionId, text: string) {
   const shown = shownComposers.get(session);
-  if (shown?.size) shown.forEach((take) => take(text));
+  if (shown?.size) shown.forEach((take) => take.text(text));
   else drafts.set(session, { text, attachments: drafts.get(session)?.attachments ?? [] });
+}
+
+/** Attaches `attachment` to a session's next message: in the composer showing now (which takes the
+ *  keyboard), or in its draft for when one is next shown. */
+export function addAttachment(session: SessionId, attachment: Attachment) {
+  const shown = shownComposers.get(session);
+  if (shown?.size) shown.forEach((take) => take.attach(attachment));
+  else {
+    const draft = drafts.get(session) ?? { text: "", attachments: [] };
+    drafts.set(session, { ...draft, attachments: [...draft.attachments, attachment] });
+  }
 }
 
 /** The input's height, set by dragging the composer's top edge: one for every composer. */
@@ -304,10 +318,17 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
     setRawAttachments(list);
     keepDraft();
   };
-  const takeDraft = (value: string) => !text().trim() && setText(value);
+  const take = {
+    text: (value: string) => !text().trim() && setText(value),
+    attach: (attachment: Attachment) => {
+      setAttachments([...attachments(), attachment]);
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    },
+  };
   const shown = shownComposers.get(props.session.id) ?? new Set();
-  shownComposers.set(props.session.id, shown.add(takeDraft));
-  onCleanup(() => shown.delete(takeDraft) && !shown.size && shownComposers.delete(props.session.id));
+  shownComposers.set(props.session.id, shown.add(take));
+  onCleanup(() => shown.delete(take) && !shown.size && shownComposers.delete(props.session.id));
   const [error, setError] = createSignal("");
   // Typing `/` lists the Agent's slash commands and skills.
   const commands = useSlashCommands(() => props.session);
@@ -730,7 +751,10 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
             >
               <Paperclip />
             </button>
-            <ModeTabs mode={props.session.permissionMode} onPick={(mode) => void setMode(mode)} />
+            <ModeTabs mode={props.session.permissionMode} locked={props.session.modeLocked} onPick={(mode) => void setMode(mode)} />
+            <Show when={props.session.modeLocked}>
+              <span class="hint">Read-only review</span>
+            </Show>
             <Show when={props.session.state === "suspended"}>
               <span class="hint">Sending resumes this session</span>
             </Show>

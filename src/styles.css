@@ -871,6 +871,8 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .mode-tab.on, .mode-tab.on:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-1); }
 .mode-tab.on.acceptEdits, .mode-tab.on.auto { border-color: var(--needs-border); color: var(--needs-text); }
 .mode-tab.on.plan { border-color: var(--info-border); color: var(--info); }
+/* A review session's: the others are greyed out, its Plan stays lit. */
+.mode-tabs.locked .mode-tab.on { opacity: 1; }
 
 /* Edit notes: chips above the composer, removable one by one. */
 .edit-notes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -1612,6 +1614,22 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .cr-notice .lucide { flex: none; width: 13px; height: 13px; }
 .review-body.docked { grid-template-columns: minmax(200px, 260px) minmax(0, 1fr) minmax(320px, 420px); }
 .cr-dock { min-width: 0; min-height: 0; display: flex; flex-direction: column; margin-left: 8px; border-radius: var(--r-lg); background: var(--bg-1); overflow: hidden; }
+.cr-dock-head { flex: none; display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.cr-dock-head > .lucide { flex: none; width: 14px; height: 14px; color: var(--c, var(--fg-2)); }
+.cr-dock-head .muted { min-width: 0; }
+.cr-dock-head .grow { flex: 1; }
+.cr-dock-note { flex: none; display: flex; align-items: center; gap: 6px; margin: 0; padding: 4px 6px 4px 12px; font-size: 12px; color: var(--fg-2); background: var(--bg-2); }
+.cr-dock-note.error { color: var(--danger); }
+.cr-dock-note .grow { flex: 1; }
+.cr-dock-note .icon { min-height: 22px; width: 22px; }
+.cr-dock-note .lucide { width: 13px; height: 13px; }
+/* The review session's transcript, with its composer floating over the bottom as in a column. */
+.cr-dock-body { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.cr-dock .composer { padding: 18px 8px 8px; }
+.cr-dock .composer > * { width: 100%; }
+.cr-use { padding: 2px 0 6px; }
+.cr-use .link { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.cr-use .lucide { width: 12px; height: 12px; }
 .cr-failed { flex: none; width: 13px; height: 13px; color: var(--danger); }
 .diff-inline .pr-thread, .diff-inline .cr-box, .cr-outdated .pr-thread { max-width: 900px; margin: 0; }
 .diff-inline > * + * { margin-top: 8px; }

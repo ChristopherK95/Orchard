@@ -34,6 +34,7 @@ import { reviewRequests, statistics, watchAttention, watchCleanUp, watchReviewRe
 import { PrButton, PrOverlay } from "./PrOverlay";
 import { ReviewOverlay } from "./ReviewOverlay";
 import { CodeReviewOverlay } from "./CodeReviewOverlay";
+import { ReviewChat } from "./ReviewChat";
 import type { OpenRequest } from "./ManualEditor";
 // CodeMirror loads with the first file opened, not at startup.
 const ManualEditor = lazy(() => import("./ManualEditor").then((m) => ({ default: m.ManualEditor })));
@@ -1454,6 +1455,22 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
               void show(id);
             }}
             onRemoveWorktree={(path) => setRemoving(rowWorktrees().find((w) => w.path === path) ?? null)}
+            dock={(dock) => (
+              <ReviewChat
+                dock={dock}
+                session={sessions[dock.session]}
+                onOpenSnippet={(code, label) => {
+                  setCodeReviewOf(null);
+                  toMainView();
+                  openInEditor({ kind: "snippet", code, label });
+                }}
+                onOpenProposal={(sessionId, request) => {
+                  setCodeReviewOf(null);
+                  toMainView();
+                  openInEditor({ kind: "proposal", sessionId, request });
+                }}
+              />
+            )}
             onClose={() => setCodeReviewOf(null)}
           />
         )}
