@@ -5,6 +5,7 @@
 // Agent session (so a failure there doesn't leave the dialog stuck on an already-created branch).
 import { createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { type BranchInfo, core, type CreatedWorktree, type NewWorktree } from "./core";
+import { branchesThenFetched, SHOWN_AT_MOST } from "./BranchPicker";
 import { ChevronDown, GitBranch, X } from "./icons";
 
 /** A "Start from" choice: `value` is "" for the default (`origin/<default>`), else what to start
@@ -31,8 +32,10 @@ export function NewWorktreeDialog(props: {
   const [error, setError] = createSignal("");
   const [taken, setTaken] = createSignal<BranchInfo | null>(null);
   const [defaultStart] = createResource(() => core.defaultStartPoint());
-  // Fetching for the branch list can take a moment: "Start from" offers the default until it's in.
-  const [branchList] = createResource(() => core.branches());
+  // Fetching for the branch list can take a moment: the branches as last fetched are offered until
+  // it's in ("Start from" offers the default if even those aren't).
+  const branches = branchesThenFetched();
+  const branchList = branches.list;
   // The suggested name, awaited by Enter if it hasn't arrived yet.
   const suggestion = core.suggestBranchName();
   let nameInput!: HTMLInputElement;
@@ -57,20 +60,24 @@ export function NewWorktreeDialog(props: {
   const startBranches = createMemo(() => {
     const def = defaultStart();
     // (A listing that failed leaves just the default and "a tag or commit".)
-    const listed = branchList.state === "ready" ? branchList().branches : [];
+    const listed = branchList()?.branches ?? [];
     return listed.filter((b) => b.remote && b.name.startsWith("origin/") && b.name !== def).map((b) => b.name);
   });
 
   /** The default, then the branches, filtered by what's typed; something typed that isn't a branch
    *  can be started from as a tag or commit. */
-  const startOptions = createMemo((): StartOption[] => {
-    const words = startQuery().trim();
+  const allStarts = createMemo((): StartOption[] => {
     const def = defaultStart() ?? "origin/<default>";
-    const all: StartOption[] = [
+    return [
       { value: "", label: def, note: def.startsWith("origin/") ? "default, fetched first" : "default" },
       ...startBranches().map((b) => ({ value: b, label: b })),
     ];
-    const matching = all.filter((o) => o.label.includes(words)); // (case-sensitive, as git's names are)
+  });
+  const startOptions = createMemo((): StartOption[] => {
+    const words = startQuery().trim();
+    const all = allStarts();
+    // (Case-sensitive, as git's names are; the first few hundred, as the branch lists show.)
+    const matching = all.filter((o) => o.label.includes(words)).slice(0, SHOWN_AT_MOST);
     if (words && !all.some((o) => o.label === words)) matching.push({ value: words, label: words, note: "tag or commit" });
     return matching;
   });
@@ -221,7 +228,7 @@ export function NewWorktreeDialog(props: {
                     </button>
                   )}
                 </For>
-                <Show when={branchList.loading}>
+                <Show when={branches.fetching()}>
                   <p class="muted small">Fetching branches…</p>
                 </Show>
               </div>
@@ -243,9 +250,12 @@ export function NewWorktreeDialog(props: {
           <div class="modal-body">
             <input placeholder="Filter branches" value={filter()} onInput={(e) => setFilter(e.currentTarget.value)} autofocus />
             <Show when={branchList()?.warning}>{(w) => <p class="warning small">{w()}</p>}</Show>
+            <Show when={!branches.loading() && branches.fetching()}>
+              <p class="muted small">Fetching…</p>
+            </Show>
             <div class="branch-list">
-              <Show when={!branchList.loading} fallback={<p class="muted">Fetching branches…</p>}>
-                <For each={shown()} fallback={<p class="muted">No matching branches.</p>}>
+              <Show when={!branches.loading()} fallback={<p class="muted">Fetching branches…</p>}>
+                <For each={shown().slice(0, SHOWN_AT_MOST)} fallback={<p class="muted">No matching branches.</p>}>
                   {(b) => (
                     <button class="branch" classList={{ taken: !!b.checkedOutIn }} disabled={!!busy()} onClick={() => pick(b)}>
                       <GitBranch />
@@ -258,6 +268,9 @@ export function NewWorktreeDialog(props: {
                     </button>
                   )}
                 </For>
+                <Show when={shown().length > SHOWN_AT_MOST}>
+                  <p class="muted small">{shown().length - SHOWN_AT_MOST} more: type to narrow them down.</p>
+                </Show>
               </Show>
             </div>
             <Show when={taken()}>

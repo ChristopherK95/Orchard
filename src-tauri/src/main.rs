@@ -297,6 +297,11 @@ async fn branches(core: State<'_, Core>) -> CommandResult<BranchList> {
 }
 
 #[tauri::command]
+async fn branches_as_fetched(core: State<'_, Core>) -> CommandResult<BranchList> {
+    core.branches_as_fetched().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn suggest_branch_name(core: State<'_, Core>) -> CommandResult<String> {
     core.suggest_branch_name().await.map_err(|e| e.to_string())
 }
@@ -1566,6 +1571,7 @@ fn main() {
             removal_check,
             remove_worktree,
             branches,
+            branches_as_fetched,
             suggest_branch_name,
             default_start_point,
             settings,

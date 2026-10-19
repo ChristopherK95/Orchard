@@ -897,6 +897,8 @@ export const core = {
   removeWorktree: (worktree: string, options: RemoveWorktree) => invoke<RemovedWorktree>("remove_worktree", { worktree, options }),
   /** Fetches first, so remote branches are current. */
   branches: () => invoke<BranchList>("branches"),
+  /** As last fetched, without fetching: shown while `branches` fetches. */
+  branchesAsFetched: () => invoke<BranchList>("branches_as_fetched"),
   suggestBranchName: () => invoke<string>("suggest_branch_name"),
   defaultStartPoint: () => invoke<string>("default_start_point"),
   settings: () => invoke<LoadedSettings>("settings"),

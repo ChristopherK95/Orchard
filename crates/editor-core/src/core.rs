@@ -2394,6 +2394,16 @@ impl Core {
             .await
             .err()
             .map(|err| format!("Couldn't fetch origin ({err}); showing branches as last fetched."));
+        Ok(BranchList {
+            warning,
+            ..self.branches_as_fetched().await?
+        })
+    }
+
+    /// Local and remote branches as last fetched, without fetching: what a branch picker shows
+    /// while `branches` fetches (which can take a while with many branches, or a slow remote).
+    pub async fn branches_as_fetched(&self) -> Result<BranchList, CoreError> {
+        let root = self.workspace()?.root;
         let branches = git::branches(&root)
             .await
             .map_err(CoreError::Git)?
@@ -2403,7 +2413,10 @@ impl Core {
                 ..b
             })
             .collect();
-        Ok(BranchList { branches, warning })
+        Ok(BranchList {
+            branches,
+            warning: None,
+        })
     }
 
     /// A free `agent/task-N` name (not taken locally or on a remote) for a new Worktree's branch.
