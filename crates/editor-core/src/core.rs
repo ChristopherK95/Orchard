@@ -691,6 +691,10 @@ struct Inner {
     state_writable: bool,
     /// Serialises saves, so an older snapshot can't be written over a newer one.
     persist_lock: Mutex<()>,
+    /// The Workspace state last written to the app state file (under `persist_lock`): a save with
+    /// nothing new in it is skipped. Saves come often (each Tab switch, each turn's end, each file
+    /// a tool call names), and each reads and rewrites the whole file.
+    last_saved: Mutex<Option<(PathBuf, WorkspaceState)>>,
     memory_probe: Arc<dyn MemoryProbe>,
     clock: Arc<dyn Clock>,
     /// The memory monitor runs once a Workspace is open.
@@ -964,6 +968,7 @@ impl Core {
             app_state: Mutex::new(saved_state),
             state_writable,
             persist_lock: Mutex::new(()),
+            last_saved: Mutex::default(),
             memory_probe,
             clock,
             monitoring: AtomicBool::new(false),
@@ -1492,6 +1497,12 @@ impl Core {
             return Ok(());
         };
         let _in_order = self.inner.persist_lock.lock().expect("persist lock");
+        // (The file changed under the last save: the next one writes whatever it holds.)
+        self.inner
+            .last_saved
+            .lock()
+            .expect("last saved lock")
+            .take();
         app_state::hide_workspace(path, root).map_err(CoreError::StateNotSaved)
     }
 
@@ -5188,8 +5199,19 @@ impl Inner {
             };
             (workspace.root.clone(), saved)
         };
-        if let Err(err) = app_state::save_workspace(path, &root, &saved) {
-            eprintln!("couldn't save the open Tabs: {err}");
+        let mut last_saved = self.last_saved.lock().expect("last saved lock");
+        if last_saved
+            .as_ref()
+            .is_some_and(|(was_root, was)| *was_root == root && *was == saved)
+        {
+            return;
+        }
+        match app_state::save_workspace(path, &root, &saved) {
+            Ok(()) => *last_saved = Some((root, saved)),
+            Err(err) => {
+                last_saved.take();
+                eprintln!("couldn't save the open Tabs: {err}");
+            }
         }
     }
 

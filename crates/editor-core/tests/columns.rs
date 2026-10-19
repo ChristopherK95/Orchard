@@ -190,3 +190,24 @@ async fn column_widths_survive_a_restart_and_pinning_evens_them_out() {
     core.set_pinned(&root, true).unwrap();
     assert_eq!(core.column_shares(), [(root, 1200)].into());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_save_with_nothing_new_leaves_the_state_file_alone() {
+    let repo = git_repo();
+    let fake = FakeAgent::new(ECHO);
+    let core = core_with_state(&fake);
+    let root = core.open_workspace(repo.path()).await.unwrap().root;
+    core.set_pinned(&root, true).unwrap();
+    // (Something only a write of the file would undo.)
+    let marked = format!(
+        "{}\n\n",
+        std::fs::read_to_string(fake.state_path()).unwrap()
+    );
+    std::fs::write(fake.state_path(), &marked).unwrap();
+
+    core.set_pinned(&root, true).unwrap();
+    assert_eq!(std::fs::read_to_string(fake.state_path()).unwrap(), marked);
+
+    core.set_pinned(&root, false).unwrap();
+    assert_ne!(std::fs::read_to_string(fake.state_path()).unwrap(), marked);
+}
