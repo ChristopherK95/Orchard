@@ -545,7 +545,7 @@ Checkpoint:
 - Commit: `Review: filter the file list`
 
 ## Task 15: Selecting lines and showing comments in a diff
-Status: pending
+Status: completed
 Risk: high
 Dependencies: Task 13
 Files:
