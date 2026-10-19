@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::git;
 use crate::git_status::ChangeKind;
-use crate::pull_request::DiffSide;
+use crate::pull_request::{DiffSide, PullRequestComment};
 use crate::session::{DiffLine, DiffLineKind};
 use crate::setup::SetupInfo;
 
@@ -187,6 +187,34 @@ pub(crate) fn submit_failure(
         }
     }
     (message, named)
+}
+
+/// The comment GitHub made of a reply (what `POST …/comments/<id>/replies` prints).
+pub(crate) fn posted_reply(printed: &str) -> Result<PullRequestComment, String> {
+    #[derive(Deserialize)]
+    struct User {
+        login: String,
+    }
+    #[derive(Deserialize)]
+    struct Posted {
+        id: u64,
+        #[serde(default)]
+        body: String,
+        created_at: String,
+        html_url: Option<String>,
+        user: Option<User>,
+    }
+    let posted: Posted = serde_json::from_str(printed.trim())
+        .map_err(|e| format!("gh said something unexpected: {e}"))?;
+    Ok(PullRequestComment {
+        id: Some(posted.id),
+        author: posted.user.map_or_else(|| "ghost".into(), |u| u.login),
+        body: posted.body,
+        created_at: posted.created_at,
+        url: posted.html_url,
+        edited: false,
+        minimized: false,
+    })
 }
 
 /// Lines Claude was asked about ("Ask Claude"): their gutter marker, which leads to the question

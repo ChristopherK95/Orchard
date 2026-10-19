@@ -39,9 +39,9 @@ use crate::merged::{self, MergeState, WorktreeMerge};
 use crate::names;
 use crate::permissions;
 use crate::pull_request::{
-    CommitChanges, MyPullRequest, OpenPullRequest, PullRequestDetails, PullRequestOutcome,
-    PullRequestProgress, PullRequestRequest, PushToPullRequestOutcome, Review, ReviewCommit,
-    ReviewFile,
+    CommitChanges, MyPullRequest, OpenPullRequest, PullRequestComment, PullRequestDetails,
+    PullRequestOutcome, PullRequestProgress, PullRequestRequest, PushToPullRequestOutcome, Review,
+    ReviewCommit, ReviewFile,
 };
 use crate::remove_worktree::{self, RemovalCheck, RemoveWorktree, RemovedWorktree};
 use crate::session::{
@@ -3506,6 +3506,26 @@ impl Core {
             pending.questions.clear();
             Ok(())
         })
+    }
+
+    /// Replies to the thread on PR `number`'s code that starts with comment `comment_id`, at once
+    /// (GitHub's review submission can't carry replies), returning the reply as GitHub made it.
+    pub async fn reply_to_thread(
+        &self,
+        number: u64,
+        comment_id: u64,
+        body: &str,
+    ) -> Result<PullRequestComment, CoreError> {
+        let root = self.workspace()?.root;
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let replies =
+            format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments/{comment_id}/replies");
+        let body = format!("body={body}");
+        let args = ["api", "-X", "POST", &replies, "-f", &body];
+        let printed = crate::pull_request::gh_text(&gh, &root, &args)
+            .await
+            .map_err(CoreError::Git)?;
+        code_review::posted_reply(&printed).map_err(CoreError::Git)
     }
 
     /// Changes PR `number`'s Pending review with `change`; if it succeeds, saves it and says so.

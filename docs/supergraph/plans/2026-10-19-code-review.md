@@ -255,7 +255,7 @@ Checkpoint:
 - Commit: `Code review: Approve, Request changes or Comment, sent in one go`
 
 ## Task 7: Replying to an existing thread
-Status: pending
+Status: completed
 Risk: low
 Dependencies: Task 2
 Files:

@@ -465,3 +465,37 @@ async fn submit_sends_one_call_and_a_failure_keeps_the_pending_review() {
         .unwrap_err();
     assert!(matches!(empty, CoreError::EmptyReview), "{empty:?}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reply_is_posted_to_its_thread() {
+    let setup = RepoWithOrigin::new();
+    let head = push_pr(&setup, &[("a", "first\n")], "A");
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let reply = "'api -X POST repos/{owner}/{repo}/pulls/7/comments/41/replies'*) \
+         echo '{\"id\":42,\"in_reply_to_id\":41,\"body\":\"Fair point\",\"created_at\":\"2026-01-03T00:00:00Z\",\"html_url\":\"https://github.com/o/r/pull/7#discussion_r42\",\"user\":{\"login\":\"me\"}}' ;;";
+    let gh = review_gh(&pr_view(&head, true, "[]"), reply);
+    let core = core_with_gh(&fake, &gh);
+    open(&core, &setup.repo()).await;
+    core.open_code_review(7).await.unwrap();
+
+    let posted = core.reply_to_thread(7, 41, "Fair point").await.unwrap();
+    assert_eq!(
+        gh.args(),
+        [
+            "api",
+            "-X",
+            "POST",
+            "repos/{owner}/{repo}/pulls/7/comments/41/replies",
+            "-f",
+            "body=Fair point"
+        ]
+    );
+    assert_eq!(posted.id, Some(42));
+    assert_eq!(posted.author, "me");
+    assert_eq!(posted.body, "Fair point");
+    assert_eq!(posted.created_at, "2026-01-03T00:00:00Z");
+    assert_eq!(
+        posted.url.as_deref(),
+        Some("https://github.com/o/r/pull/7#discussion_r42")
+    );
+}
