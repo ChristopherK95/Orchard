@@ -27,12 +27,30 @@ pub struct WorktreeInfo {
     pub changed: u32,
 }
 
+/// How many Worktrees' `git status` run at once when all are listed: each scans its whole folder,
+/// so one after another is slow with many Worktrees, and all at once swamps the disk.
+const STATUS_AT_ONCE: usize = 6;
+
 /// Every Worktree of the repository whose main checkout is `root`, main checkout first.
 pub(crate) async fn list(root: &Path) -> Vec<WorktreeInfo> {
-    let mut worktrees = vec![];
-    for listed in git::worktree_list(root).await.unwrap_or_default() {
-        let status = git::status_summary(&listed.path).await.unwrap_or_default();
-        worktrees.push(WorktreeInfo {
+    let listed = git::worktree_list(root).await.unwrap_or_default();
+    let limit = Arc::new(tokio::sync::Semaphore::new(STATUS_AT_ONCE));
+    let mut reading = tokio::task::JoinSet::new();
+    for (i, worktree) in listed.iter().enumerate() {
+        let (limit, path) = (limit.clone(), worktree.path.clone());
+        reading.spawn(async move {
+            let _turn = limit.acquire().await;
+            (i, git::status_summary(&path).await.unwrap_or_default())
+        });
+    }
+    let mut statuses = vec![git::StatusSummary::default(); listed.len()];
+    while let Some(Ok((i, status))) = reading.join_next().await {
+        statuses[i] = status;
+    }
+    listed
+        .into_iter()
+        .zip(statuses)
+        .map(|(listed, status)| WorktreeInfo {
             path: normalize(listed.path),
             branch: listed.branch,
             head: listed.head.chars().take(7).collect(),
@@ -40,9 +58,8 @@ pub(crate) async fn list(root: &Path) -> Vec<WorktreeInfo> {
             ahead: status.ahead,
             behind: status.behind,
             changed: status.changed,
-        });
-    }
-    worktrees
+        })
+        .collect()
 }
 
 /// Like `list`, but only `refresh`'s branch status (and that of any Worktree not in `previous`)

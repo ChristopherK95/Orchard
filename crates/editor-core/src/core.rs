@@ -318,6 +318,8 @@ type ActorSlot = Arc<tokio::sync::OnceCell<Arc<WorktreeActor>>>;
 const STATUS_SETTLE: Duration = Duration::from_millis(200);
 /// A fetch on window focus waits at least this long since the Worktree was last fetched.
 const FOCUS_FETCH_EVERY: Duration = Duration::from_secs(5 * 60);
+/// The window getting focus re-lists every Worktree at most this often.
+const FOCUS_RELIST_EVERY: Duration = Duration::from_secs(30);
 /// A disk check that raced the editor's own save (or an open) is done again after this.
 const RECHECK_AFTER: Duration = Duration::from_millis(150);
 /// Diffs longer than this are cut short in the Manual editor's diff view.
@@ -696,6 +698,8 @@ struct Inner {
     shown_worktree: Mutex<Option<PathBuf>>,
     /// When the Workspace's repo was last fetched (by `clock`), so a fetch on focus waits its turn.
     last_fetch: Mutex<Option<std::time::Instant>>,
+    /// When the window getting focus last re-listed every Worktree (by `clock`).
+    last_focus_relist: Mutex<Option<std::time::Instant>>,
     /// One push, fetch or pull at a time: every Worktree shares the repo's remote refs, and two
     /// fetches would fight over them.
     remote_op: tokio::sync::Mutex<()>,
@@ -956,6 +960,7 @@ impl Core {
             fallback_told: Mutex::default(),
             shown_worktree: Mutex::new(None),
             last_fetch: Mutex::default(),
+            last_focus_relist: Mutex::default(),
             remote_op: tokio::sync::Mutex::new(()),
             documents: Mutex::default(),
             fonts: tokio::sync::OnceCell::new(),
@@ -3450,7 +3455,24 @@ impl Core {
     /// hasn't been for `FOCUS_FETCH_EVERY`. The Worktrees fetched for (failures are quiet: a manual
     /// fetch says what went wrong).
     pub async fn window_focused(&self) -> Vec<PathBuf> {
-        self.refresh_worktrees().await;
+        // The watched Worktrees are kept current anyway, so the rest are read again at most every
+        // `FOCUS_RELIST_EVERY` (alt-tabbing shouldn't rescan every Worktree's folder each time).
+        let now = self.inner.clock.now();
+        let relist = {
+            let mut last = self
+                .inner
+                .last_focus_relist
+                .lock()
+                .expect("focus relist lock");
+            let due = last.is_none_or(|last| now.duration_since(last) >= FOCUS_RELIST_EVERY);
+            if due {
+                *last = Some(now);
+            }
+            due
+        };
+        if relist {
+            self.refresh_worktrees().await;
+        }
         let live = self.inner.live_worktrees();
         let shown = self
             .inner
@@ -3465,7 +3487,6 @@ impl Core {
             return vec![];
         };
         // Due, and claimed, under one lock (two focus events can't both go).
-        let now = self.inner.clock.now();
         {
             let mut last_fetch = self.inner.last_fetch.lock().expect("last fetch lock");
             if last_fetch.is_some_and(|last| now.duration_since(last) < FOCUS_FETCH_EVERY) {
@@ -4514,9 +4535,10 @@ impl Inner {
                     notes: notes.notes(),
                 });
             }
-            // The Agent may have committed or changed files: refresh ahead/changed counts.
-            let refresh = inner.clone();
-            tokio::spawn(async move { refresh.refresh_worktrees().await });
+            // The Agent may have committed or changed files: refresh its Worktree's ahead/changed
+            // counts (not every Worktree's: a new Worktree is the `worktrees/` watcher's).
+            let worktree = session.info.lock().expect("info lock").worktree.clone();
+            inner.status_due(worktree);
             let next = session.update(|control| {
                 // The adapter crashed and the session has been resumed elsewhere since (or closed):
                 // this turn's ending is old news.
