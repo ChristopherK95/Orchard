@@ -216,7 +216,7 @@ Checkpoint:
 - Commit: `Code review: comments on lines are kept as a Pending review`
 
 ## Task 6: Submitting the Pending review
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 5
 Files:

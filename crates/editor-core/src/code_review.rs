@@ -106,6 +106,89 @@ pub struct NewReviewComment {
     pub from_question: bool,
 }
 
+/// What a submitted review says of the PR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Verdict {
+    Approve,
+    RequestChanges,
+    Comment,
+}
+
+impl Verdict {
+    /// GitHub's review `event`.
+    fn event(self) -> &'static str {
+        match self {
+            Verdict::Approve => "APPROVE",
+            Verdict::RequestChanges => "REQUEST_CHANGES",
+            Verdict::Comment => "COMMENT",
+        }
+    }
+}
+
+/// The body of the one `POST …/pulls/<N>/reviews` that submits the review on `head`.
+pub(crate) fn submission(
+    head: &str,
+    verdict: Verdict,
+    summary: &str,
+    comments: &[PendingComment],
+) -> serde_json::Value {
+    let comments: Vec<serde_json::Value> = comments
+        .iter()
+        .map(|c| {
+            let mut comment = serde_json::json!({
+                "path": c.path,
+                "side": c.side.github(),
+                "line": c.line,
+                "body": c.body,
+            });
+            if let Some(start) = c.start_line.filter(|start| *start != c.line) {
+                comment["start_line"] = start.into();
+                comment["start_side"] = c.side.github().into();
+            }
+            comment
+        })
+        .collect();
+    serde_json::json!({
+        "commit_id": head,
+        "event": verdict.event(),
+        "body": summary,
+        "comments": comments,
+    })
+}
+
+/// What GitHub said when it turned a submission down: its message and its errors (a 422's
+/// `errors[]`, strings or objects with a `message`), and which of `paths` they name.
+pub(crate) fn submit_failure(
+    printed: &str,
+    failure: &str,
+    paths: &[&str],
+) -> (String, Vec<String>) {
+    let mut said: Vec<String> = vec![];
+    if let Ok(body) = serde_json::from_str::<serde_json::Value>(printed.trim()) {
+        if let Some(message) = body["message"].as_str() {
+            said.push(message.to_owned());
+        }
+        for error in body["errors"].as_array().into_iter().flatten() {
+            match error.as_str().or_else(|| error["message"].as_str()) {
+                Some(text) => said.push(text.to_owned()),
+                None => said.push(error.to_string()),
+            }
+        }
+    }
+    let message = match said.is_empty() {
+        true => failure.trim().to_owned(),
+        false => said.join("\n"),
+    };
+    let mut named: Vec<String> = vec![];
+    for path in paths {
+        if message.contains(path) && !named.iter().any(|p| p == path) {
+            named.push((*path).to_owned());
+        }
+    }
+    (message, named)
+}
+
 /// Lines Claude was asked about ("Ask Claude"): their gutter marker, which leads to the question
 /// in the review session by its attachment's name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -271,6 +354,24 @@ mod tests {
             None,
             "backwards"
         );
+    }
+
+    #[test]
+    fn a_failed_submit_names_the_files_githubs_errors_name() {
+        let printed = r#"{"message":"Validation Failed","errors":[{"message":"pull_request_review_thread.line must be part of the diff","path":"x"},"src/b.rs is outdated"]}"#;
+        let (message, paths) = submit_failure(
+            printed,
+            "gh: HTTP 422",
+            &["src/a.rs", "src/b.rs", "src/b.rs"],
+        );
+        assert!(message.starts_with("Validation Failed\n"), "{message}");
+        assert!(message.contains("must be part of the diff"), "{message}");
+        assert_eq!(paths, ["src/b.rs"]);
+        // A network failure prints no body: gh's own words then.
+        let (message, paths) =
+            submit_failure("", "error connecting to api.github.com", &["src/a.rs"]);
+        assert_eq!(message, "error connecting to api.github.com");
+        assert!(paths.is_empty());
     }
 
     #[test]

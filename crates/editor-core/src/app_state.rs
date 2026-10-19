@@ -70,6 +70,9 @@ pub(crate) struct SavedCodeReview {
     /// Its Worktree setup has finished, so it isn't run again.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) setup_done: bool,
+    /// The review was submitted (so the Review Worktree can go).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) submitted: bool,
     /// The comments not submitted yet.
     #[serde(default, skip_serializing_if = "PendingReview::is_empty")]
     pub(crate) pending: PendingReview,
@@ -236,6 +239,7 @@ mod tests {
                     merge_base: "def".into(),
                     last_review: Some("123".into()),
                     setup_done: true,
+                    submitted: true,
                     pending: PendingReview::default(),
                 },
             )]

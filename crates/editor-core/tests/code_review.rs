@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use editor_core::{
     CodeReview, Core, CoreError, CoreEvent, DiffSide, NewReviewComment, Question, SetupStatus,
+    Verdict,
 };
 use support::*;
 use tokio::sync::broadcast;
@@ -384,4 +385,83 @@ async fn the_pending_review_survives_a_restart() {
     assert!(core.remove_review_comment(7, single.id).await.is_err());
     let review = core.open_code_review(7).await.unwrap();
     assert_eq!(review.pending.comments.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn submit_sends_one_call_and_a_failure_keeps_the_pending_review() {
+    let setup = RepoWithOrigin::new();
+    std::fs::create_dir_all(setup.root().join("seed/src")).unwrap();
+    let head = push_pr(
+        &setup,
+        &[("src/a.rs", "fn a() {}\n"), ("src/b.rs", "fn b() {\n}\n")],
+        "A and B",
+    );
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let sent = setup.root().join("stdin");
+    let marker = setup.root().join("failed-once");
+    let submit = format!(
+        "'api -X POST repos/{{owner}}/{{repo}}/pulls/7/reviews --input -') cat > {sent}\n\
+         if [ ! -f {marker} ]; then touch {marker}\n\
+         echo '{{\"message\":\"Unprocessable Entity\",\"errors\":[\"Line could not be resolved in src/b.rs\"],\"status\":\"422\"}}'\n\
+         echo 'gh: Unprocessable Entity (HTTP 422)' >&2; exit 1; fi\n\
+         echo '{{\"id\":1}}' ;;",
+        sent = sent.display(),
+        marker = marker.display()
+    );
+    let gh = review_gh(&pr_view(&head, true, "[]"), &submit);
+    let core = core_with_gh(&fake, &gh);
+    open(&core, &setup.repo()).await;
+    core.open_code_review(7).await.unwrap();
+    core.add_review_comment(7, comment_on("src/a.rs", None, 1, "Name it better"))
+        .await
+        .unwrap();
+    core.add_review_comment(7, comment_on("src/b.rs", Some(1), 2, "Empty?"))
+        .await
+        .unwrap();
+
+    let err = core
+        .submit_review(7, Verdict::RequestChanges, "A few things")
+        .await
+        .unwrap_err();
+    let CoreError::SubmitFailed { message, paths } = err else {
+        panic!("not a failed submit: {err:?}");
+    };
+    assert!(message.contains("could not be resolved"), "{message}");
+    assert_eq!(paths, ["src/b.rs"]);
+    let review = core.open_code_review(7).await.unwrap();
+    assert_eq!(review.pending.comments.len(), 2, "a failure keeps them");
+
+    let mut events = core.subscribe();
+    core.submit_review(7, Verdict::RequestChanges, "A few things")
+        .await
+        .unwrap();
+    next_event(&mut events, "the Pending review to empty", |e| match e {
+        CoreEvent::PendingReviewChanged { number: 7 } => Some(()),
+        _ => None,
+    })
+    .await;
+    let body: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sent).unwrap()).unwrap();
+    assert_eq!(body["commit_id"], head.as_str());
+    assert_eq!(body["event"], "REQUEST_CHANGES");
+    assert_eq!(body["body"], "A few things");
+    let comments = body["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 2);
+    assert_eq!(comments[0]["path"], "src/a.rs");
+    assert_eq!(comments[0]["side"], "RIGHT");
+    assert_eq!(comments[0]["line"], 1);
+    assert!(comments[0].get("start_line").is_none());
+    assert_eq!(comments[1]["start_line"], 1);
+    assert_eq!(comments[1]["start_side"], "RIGHT");
+    assert_eq!(comments[1]["line"], 2);
+    assert_eq!(comments[1]["body"], "Empty?");
+    let review = core.open_code_review(7).await.unwrap();
+    assert!(review.pending.comments.is_empty());
+
+    // As GitHub, a comment or change request needs something said.
+    let empty = core
+        .submit_review(7, Verdict::Comment, " ")
+        .await
+        .unwrap_err();
+    assert!(matches!(empty, CoreError::EmptyReview), "{empty:?}");
 }

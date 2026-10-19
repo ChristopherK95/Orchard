@@ -1345,12 +1345,44 @@ fn threads(stdout: &str) -> Result<Vec<CodeThread>, String> {
     Ok(threads)
 }
 
+/// What `gh` printed, given `input` on stdin (`gh api --input -`). If it fails, what it printed
+/// (`gh api` prints GitHub's error body) and why it failed.
+pub(crate) async fn gh_text_with_input(
+    gh: &Path,
+    worktree: &Path,
+    args: &[&str],
+    input: &str,
+) -> Result<String, (String, String)> {
+    let out = run_gh_with(gh, worktree, args, None, Some(input))
+        .await
+        .map_err(|e| (String::new(), e))?;
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    match out.status.success() {
+        true => Ok(stdout),
+        false => {
+            let failure = gh_failure(&stdout, &String::from_utf8_lossy(&out.stderr));
+            Err((stdout, failure))
+        }
+    }
+}
+
 /// Runs `gh` with `args` in `worktree`, never prompting, its output going to `sink` as it comes.
 async fn run_gh(
     gh: &Path,
     worktree: &Path,
     args: &[&str],
     sink: Option<crate::process::Sink<'_>>,
+) -> Result<std::process::Output, String> {
+    run_gh_with(gh, worktree, args, sink, None).await
+}
+
+/// `run_gh`, with `input` written to its stdin if given.
+async fn run_gh_with(
+    gh: &Path,
+    worktree: &Path,
+    args: &[&str],
+    sink: Option<crate::process::Sink<'_>>,
+    input: Option<&str>,
 ) -> Result<std::process::Output, String> {
     let mut cmd = crate::process::command(gh);
     for (key, value) in gh_env().await {
@@ -1361,15 +1393,26 @@ async fn run_gh(
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_NO_UPDATE_NOTIFIER", "1")
         .env("NO_COLOR", "1")
-        .stdin(std::process::Stdio::null())
+        .stdin(match input {
+            Some(_) => std::process::Stdio::piped(),
+            None => std::process::Stdio::null(),
+        })
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     crate::process::ProcessTree::own_group(&mut cmd);
-    let child = cmd.spawn().map_err(|e| match e.kind() {
+    let mut child = cmd.spawn().map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => GH_HINT.to_owned(),
         _ => format!("could not run gh: {e}"),
     })?;
     let _tree = crate::process::ProcessTree::attach(&child);
+    // Written while the output is read, so a big input can't fill both pipes and stall.
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        let input = input.to_owned();
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            let _ = stdin.write_all(input.as_bytes()).await;
+        }); // (dropping stdin ends the input)
+    }
     tokio::time::timeout(GH_TIMEOUT, crate::process::collect(child, sink))
         .await
         .map_err(|_| format!("gh took over {} s and was stopped.", GH_TIMEOUT.as_secs()))?

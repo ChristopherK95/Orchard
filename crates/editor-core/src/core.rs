@@ -19,6 +19,7 @@ use crate::auto_suspend::{
 };
 use crate::code_review::{
     self, CodeReview, NewReviewComment, PendingComment, PendingReview, Question, SinceLastReview,
+    Verdict,
 };
 use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 use crate::dashboard::{self, ReviewRequest, WorktreeAttention};
@@ -476,6 +477,12 @@ pub enum CoreError {
     NotInDiff,
     #[error("that comment isn't in the Pending review")]
     UnknownReviewComment,
+    #[error("{count} comment(s) are outdated: move or remove them, then submit")]
+    OutdatedComments { count: usize },
+    #[error("say something in the summary, or comment on a line, to submit this")]
+    EmptyReview,
+    #[error("GitHub didn't take the review: {message}")]
+    SubmitFailed { message: String, paths: Vec<String> },
     #[error(transparent)]
     Acp(#[from] AcpError),
 }
@@ -3320,6 +3327,7 @@ impl Core {
                 .remove(&number)
                 .filter(|saved| saved.worktree == worktree);
             let done = setup_done || kept.as_ref().is_some_and(|saved| saved.setup_done);
+            let kept_submitted = kept.as_ref().is_some_and(|saved| saved.submitted);
             let pending = kept.map(|saved| saved.pending).unwrap_or_default();
             state.code_reviews.insert(
                 number,
@@ -3329,6 +3337,7 @@ impl Core {
                     merge_base: merge_base.clone(),
                     last_review: last_review.clone(),
                     setup_done: done,
+                    submitted: kept_submitted,
                     pending: pending.clone(),
                 },
             );
@@ -3437,6 +3446,64 @@ impl Core {
     ) -> Result<(), CoreError> {
         self.change_pending(number, |pending| {
             pending.questions.push(question);
+            Ok(())
+        })
+    }
+
+    /// Submits the Pending review of PR `number` with `verdict` and `summary`, all its comments in
+    /// one `gh api` call, on the head the Review Worktree is at. Refused while a comment is
+    /// outdated, and (as GitHub does) for a comment or change request saying nothing. A failure
+    /// leaves the Pending review as it was and names the files GitHub's error names.
+    pub async fn submit_review(
+        &self,
+        number: u64,
+        verdict: Verdict,
+        summary: &str,
+    ) -> Result<(), CoreError> {
+        let root = self.workspace()?.root;
+        let saved = self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .code_reviews
+            .get(&number)
+            .cloned()
+            .ok_or(CoreError::NoCodeReview(number))?;
+        let comments = &saved.pending.comments;
+        let outdated = comments.iter().filter(|c| c.outdated).count();
+        if outdated > 0 {
+            return Err(CoreError::OutdatedComments { count: outdated });
+        }
+        if verdict != Verdict::Approve && summary.trim().is_empty() && comments.is_empty() {
+            return Err(CoreError::EmptyReview);
+        }
+        let body = code_review::submission(&saved.head, verdict, summary, comments);
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let reviews = format!("repos/{{owner}}/{{repo}}/pulls/{number}/reviews");
+        let args = ["api", "-X", "POST", &reviews, "--input", "-"];
+        if let Err((printed, failure)) =
+            crate::pull_request::gh_text_with_input(&gh, &root, &args, &body.to_string()).await
+        {
+            let paths: Vec<&str> = comments.iter().map(|c| c.path.as_str()).collect();
+            let (message, paths) = code_review::submit_failure(&printed, &failure, &paths);
+            return Err(CoreError::SubmitFailed { message, paths });
+        }
+        if let Some(saved) = self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .code_reviews
+            .get_mut(&number)
+        {
+            saved.submitted = true;
+        }
+        // (Only the comments sent go: one added meanwhile stays pending.)
+        let sent: Vec<u64> = comments.iter().map(|c| c.id).collect();
+        self.change_pending(number, |pending| {
+            pending.comments.retain(|c| !sent.contains(&c.id));
+            pending.questions.clear();
             Ok(())
         })
     }

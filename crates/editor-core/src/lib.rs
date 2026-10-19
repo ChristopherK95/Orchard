@@ -37,7 +37,7 @@ pub use crate::attachments::Attachment;
 pub use crate::auto_suspend::{AutoSuspendReason, Clock, MemoryProbe, MemorySample};
 pub use crate::code_review::{
     CodeReview, CodeReviewFile, NewReviewComment, PendingComment, PendingReview, Question,
-    SinceLastReview,
+    SinceLastReview, Verdict,
 };
 pub use crate::core::{
     AutoSuspension, Core, CoreConfig, CoreError, CoreEvent, OtherConversation, QueuedPrompt,
