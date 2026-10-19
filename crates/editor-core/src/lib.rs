@@ -54,8 +54,8 @@ pub use crate::node::NodeInstall;
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};
 pub use crate::process::host_env;
 pub use crate::pull_request::{
-    ActionsJob, Check, CheckOutcome, CodeThread, CommitChanges, MyPullRequest, OpenPullRequest,
-    PullRequestComment, PullRequestCommit, PullRequestDetails, PullRequestLabel,
+    ActionsJob, Check, CheckOutcome, CodeThread, CommitChanges, DiffSide, MyPullRequest,
+    OpenPullRequest, PullRequestComment, PullRequestCommit, PullRequestDetails, PullRequestLabel,
     PullRequestOutcome, PullRequestProgress, PullRequestRequest, PullRequestStage,
     PullRequestState, PushToPullRequestOutcome, Review, ReviewCommit, ReviewFile, Reviewer,
     ReviewerState, SubmittedReview, Team,

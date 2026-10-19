@@ -415,6 +415,8 @@ fn stage_of(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullRequestDetails {
+    /// Its GraphQL node id (what GitHub's mutations, like marking a file Viewed, take).
+    pub id: String,
     pub number: u64,
     pub title: String,
     pub url: String,
@@ -431,6 +433,13 @@ pub struct PullRequestDetails {
     /// The branch it comes from, and the one it goes into.
     pub head: String,
     pub base: String,
+    /// The commits its head and base branches are at.
+    pub head_oid: String,
+    pub base_oid: String,
+    /// The user is asked to review it, or has: it can have a Code review.
+    pub viewer_is_reviewer: bool,
+    /// The commit the user's latest submitted review was made on, if they've reviewed it.
+    pub viewer_last_review_oid: Option<String>,
     pub additions: u64,
     pub deletions: u64,
     pub changed_files: u64,
@@ -611,6 +620,9 @@ pub enum CheckOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullRequestComment {
+    /// Its id on GitHub, for a comment on code (what a reply is posted under); None in the
+    /// conversation.
+    pub id: Option<u64>,
     pub author: String,
     pub body: String,
     pub created_at: String,
@@ -639,10 +651,34 @@ pub struct CodeThread {
     pub line: Option<u64>,
     /// The line it was made on.
     pub original_line: Option<u64>,
+    /// Which side of the diff its lines are on, and the first of them for a range.
+    pub side: DiffSide,
+    pub start_line: Option<u32>,
+    /// The code it was on has changed since (GitHub no longer places it in the diff).
+    pub outdated: bool,
     pub url: String,
     /// The few lines of diff it's about, ending at its line.
     pub diff_hunk: String,
     pub comments: Vec<PullRequestComment>,
+}
+
+/// A diff's old side (the base's lines) or new side (the head's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DiffSide {
+    Left,
+    #[default]
+    Right,
+}
+
+impl DiffSide {
+    /// GitHub's `LEFT` / `RIGHT`.
+    pub(crate) fn github(self) -> &'static str {
+        match self {
+            DiffSide::Left => "LEFT",
+            DiffSide::Right => "RIGHT",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -655,10 +691,10 @@ pub struct PullRequestCommit {
 }
 
 /// What `gh pr view` is asked for.
-const DETAIL_FIELDS: &str = "number,title,url,state,isDraft,body,author,createdAt,updatedAt,mergedAt,mergedBy,closedAt,headRefName,baseRefName,additions,deletions,changedFiles,reviewDecision,mergeable,mergeStateStatus,labels,milestone,assignees,reviewRequests,latestReviews,reviews,statusCheckRollup,comments,commits";
+const DETAIL_FIELDS: &str = "id,headRefOid,baseRefOid,number,title,url,state,isDraft,body,author,createdAt,updatedAt,mergedAt,mergedBy,closedAt,headRefName,baseRefName,additions,deletions,changedFiles,reviewDecision,mergeable,mergeStateStatus,labels,milestone,assignees,reviewRequests,latestReviews,reviews,statusCheckRollup,comments,commits";
 
 /// The comments on the PR's code, one JSON object a line (`gh api --paginate` with this `--jq`).
-const THREAD_JQ: &str = ".[] | {id, in_reply_to_id, path, line, original_line, html_url, diff_hunk, body, created_at, user: .user.login}";
+const THREAD_JQ: &str = ".[] | {id, in_reply_to_id, path, line, original_line, start_line, side, position, html_url, diff_hunk, body, created_at, user: .user.login}";
 
 /// The PR `which` names (`gh pr view`: a number, or a branch's open PR, else its latest), if there
 /// is one, with the comments on its code (`gh api`).
@@ -682,11 +718,19 @@ pub(crate) async fn details_for(
         }
         return Err(gh_failure(&stdout, &stderr));
     }
-    let mut details = viewed(&stdout)?;
+    let (mut details, reviewers) = viewed(&stdout)?;
     let comments_of = format!("repos/{{owner}}/{{repo}}/pulls/{}/comments", details.number);
     let args = ["api", &comments_of, "--paginate", "--jq", THREAD_JQ];
-    let (threads_read, teams_read) =
-        tokio::join!(gh_text(gh, worktree, &args), teams_for(gh, worktree));
+    let viewer_args = ["api", "user", "--jq", ".login"];
+    let (threads_read, teams_read, viewer) = tokio::join!(
+        gh_text(gh, worktree, &args),
+        teams_for(gh, worktree),
+        gh_text(gh, worktree, &viewer_args)
+    );
+    // (Not knowing who the user is only means no Code review is offered.)
+    if let Ok(viewer) = viewer {
+        reviewers.apply_to(&mut details, viewer.trim());
+    }
     match threads_read.and_then(|out| threads(&out)) {
         Ok(threads) => details.threads = threads,
         Err(e) => details.threads_error = Some(e),
@@ -849,6 +893,36 @@ struct GhReview {
     body: String,
     #[serde(default)]
     submitted_at: Option<String>,
+    #[serde(default)]
+    commit: Option<ReviewCommitOid>,
+}
+
+#[derive(Deserialize)]
+struct ReviewCommitOid {
+    oid: String,
+}
+
+/// Who's asked to review a PR and who has (latest last, with the commit each review was on),
+/// for telling whether the user is one of them.
+struct ViewerReviewers {
+    requested: Vec<String>,
+    reviewed: Vec<(String, Option<String>)>,
+}
+
+impl ViewerReviewers {
+    fn apply_to(self, details: &mut PullRequestDetails, viewer: &str) {
+        if viewer.is_empty() {
+            return;
+        }
+        let last = self
+            .reviewed
+            .into_iter()
+            .rev()
+            .find(|(login, _)| login == viewer);
+        details.viewer_is_reviewer =
+            last.is_some() || self.requested.iter().any(|login| login == viewer);
+        details.viewer_last_review_oid = last.and_then(|(_, oid)| oid);
+    }
 }
 
 /// A check run or commit status, as `gh --json statusCheckRollup` gives it.
@@ -979,8 +1053,9 @@ fn reviewers_of(latest_reviews: Vec<GhReview>, review_requests: Vec<Actor>) -> V
     reviewers
 }
 
-/// Reads `gh pr view --json DETAIL_FIELDS` (without the comments on its code).
-fn viewed(stdout: &str) -> Result<PullRequestDetails, String> {
+/// Reads `gh pr view --json DETAIL_FIELDS` (without the comments on its code), with who's asked to
+/// review it and who has.
+fn viewed(stdout: &str) -> Result<(PullRequestDetails, ViewerReviewers), String> {
     #[derive(Deserialize)]
     struct Label {
         name: String,
@@ -1025,6 +1100,12 @@ fn viewed(stdout: &str) -> Result<PullRequestDetails, String> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Viewed {
+        #[serde(default)]
+        id: String,
+        #[serde(default)]
+        head_ref_oid: String,
+        #[serde(default)]
+        base_ref_oid: String,
         number: u64,
         title: String,
         url: String,
@@ -1076,10 +1157,28 @@ fn viewed(stdout: &str) -> Result<PullRequestDetails, String> {
     let pr: Viewed = serde_json::from_str(stdout.trim())
         .map_err(|e| format!("gh said something unexpected: {e}"))?;
     let state = PullRequestState::read(&pr.state);
+    let mut reviews = pr.reviews;
+    reviews.retain(|r| r.state != "PENDING");
+    reviews.sort_by(|a, b| a.submitted_at.cmp(&b.submitted_at));
+    let viewer = ViewerReviewers {
+        requested: pr
+            .review_requests
+            .iter()
+            .filter_map(|r| r.login.clone())
+            .collect(),
+        reviewed: reviews
+            .iter()
+            .map(|r| {
+                let oid = r.commit.as_ref().map(|c| c.oid.clone());
+                (r.author.login.clone().unwrap_or_default(), oid)
+            })
+            .collect(),
+    };
     let reviewers = reviewers_of(pr.latest_reviews, pr.review_requests);
     let checks = latest_checks(pr.status_check_rollup);
 
-    Ok(PullRequestDetails {
+    let details = PullRequestDetails {
+        id: pr.id,
         number: pr.number,
         title: pr.title,
         url: pr.url,
@@ -1094,6 +1193,10 @@ fn viewed(stdout: &str) -> Result<PullRequestDetails, String> {
         closed_at: pr.closed_at.filter(|t| !t.is_empty()),
         head: pr.head_ref_name,
         base: pr.base_ref_name,
+        head_oid: pr.head_ref_oid,
+        base_oid: pr.base_ref_oid,
+        viewer_is_reviewer: false,
+        viewer_last_review_oid: None,
         additions: pr.additions,
         deletions: pr.deletions,
         changed_files: pr.changed_files,
@@ -1116,6 +1219,7 @@ fn viewed(stdout: &str) -> Result<PullRequestDetails, String> {
             .comments
             .into_iter()
             .map(|c| PullRequestComment {
+                id: None,
                 author: c.author.login(),
                 body: c.body,
                 created_at: c.created_at,
@@ -1124,10 +1228,8 @@ fn viewed(stdout: &str) -> Result<PullRequestDetails, String> {
                 minimized: c.is_minimized,
             })
             .collect(),
-        reviews: pr
-            .reviews
+        reviews: reviews
             .into_iter()
-            .filter(|r| r.state != "PENDING")
             .map(|r| SubmittedReview {
                 author: r.author.login(),
                 state: r.state,
@@ -1154,7 +1256,8 @@ fn viewed(stdout: &str) -> Result<PullRequestDetails, String> {
                 date: c.committed_date,
             })
             .collect(),
-    })
+    };
+    Ok((details, viewer))
 }
 
 /// Reads the comments on the PR's code (`THREAD_JQ`'s lines) into threads: each first comment
@@ -1167,6 +1270,12 @@ fn threads(stdout: &str) -> Result<Vec<CodeThread>, String> {
         path: String,
         line: Option<u64>,
         original_line: Option<u64>,
+        #[serde(default)]
+        start_line: Option<u32>,
+        #[serde(default)]
+        side: Option<String>,
+        #[serde(default)]
+        position: Option<u64>,
         html_url: String,
         #[serde(default)]
         diff_hunk: String,
@@ -1185,6 +1294,7 @@ fn threads(stdout: &str) -> Result<Vec<CodeThread>, String> {
             continue;
         }
         let comment = PullRequestComment {
+            id: Some(c.id),
             author: c.user.unwrap_or_else(|| "ghost".into()),
             body: c.body,
             created_at: c.created_at,
@@ -1198,6 +1308,12 @@ fn threads(stdout: &str) -> Result<Vec<CodeThread>, String> {
                 path: c.path,
                 line: c.line,
                 original_line: c.original_line,
+                side: match c.side.as_deref() {
+                    Some("LEFT") => DiffSide::Left,
+                    _ => DiffSide::Right,
+                },
+                start_line: c.start_line,
+                outdated: c.position.is_none(),
                 url: c.html_url,
                 diff_hunk: c.diff_hunk,
                 comments: vec![comment],
@@ -1211,6 +1327,7 @@ fn threads(stdout: &str) -> Result<Vec<CodeThread>, String> {
             .find(|(id, _)| Some(*id) == c.in_reply_to_id)
         {
             thread.comments.push(PullRequestComment {
+                id: Some(c.id),
                 author: c.user.unwrap_or_else(|| "ghost".into()),
                 body: c.body,
                 created_at: c.created_at,
@@ -1527,7 +1644,7 @@ mod tests {
             "statusCheckRollup":[{"__typename":"CheckRun","name":"build","workflowName":"CI","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"d"},
                                  {"__typename":"CheckRun","name":"lint","workflowName":"","status":"IN_PROGRESS","conclusion":"","detailsUrl":""},
                                  {"__typename":"StatusContext","context":"deploy","state":"ERROR","targetUrl":"t"}]}"#;
-        let pr = viewed(out).unwrap();
+        let (pr, _) = viewed(out).unwrap();
         assert_eq!(pr.state, PullRequestState::Open);
         assert!(pr.draft);
         assert_eq!(pr.review_decision, None);

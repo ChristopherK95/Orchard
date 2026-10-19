@@ -50,7 +50,7 @@ Checkpoint:
 - Commit: `Git: fetch a pull request's head and check it out detached`
 
 ## Task 2: PR data a Code review needs
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: none
 Files:

@@ -380,3 +380,79 @@ async fn a_merge_commit_shows_only_its_conflict_resolutions() {
         .unwrap();
     assert!(clean.files.is_empty(), "{:?}", clean.files);
 }
+
+/// A `gh` answering `pr view` with `view` (JSON), `api user` with the login `me`, and the PR's
+/// code comments with `comments` (one JSON object a line, as `--jq` would leave them).
+pub fn details_gh(view: &str, comments: &str) -> FakeGh {
+    FakeGh::new(&format!(
+        "case \"$1 $2\" in\n\
+         'pr view') cat <<'JSON'\n{view}\nJSON\n;;\n\
+         'api user') echo me ;;\n\
+         'api repos/{{owner}}/{{repo}}') echo 'User o' ;;\n\
+         'api repos/{{owner}}/{{repo}}/pulls/'*) cat <<'JSON'\n{comments}\nJSON\n;;\n\
+         *) exit 1 ;;\n\
+         esac"
+    ))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn details_carry_what_a_code_review_needs() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let view = r#"{"id":"PR_kw7","number":7,"title":"T","url":"https://github.com/o/r/pull/7","state":"OPEN","createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z","mergedAt":null,"mergedBy":null,"closedAt":null,"headRefName":"feat","baseRefName":"main","headRefOid":"aaa","baseRefOid":"bbb","milestone":null,
+        "reviewRequests":[{"login":"someone"}],
+        "reviews":[{"author":{"login":"me"},"state":"COMMENTED","submittedAt":"2026-01-02T00:00:00Z","commit":{"oid":"old1"}},{"author":{"login":"me"},"state":"APPROVED","submittedAt":"2026-01-03T00:00:00Z","commit":{"oid":"old2"}},{"author":{"login":"other"},"state":"APPROVED","submittedAt":"2026-01-04T00:00:00Z","commit":{"oid":"old3"}}]}"#;
+    let comments = [
+        r#"{"id":11,"in_reply_to_id":null,"path":"a.rs","line":5,"original_line":5,"start_line":3,"side":"RIGHT","position":4,"html_url":"u11","diff_hunk":"","body":"range","created_at":"2026-01-02T00:00:00Z","user":"other"}"#,
+        r#"{"id":12,"in_reply_to_id":11,"path":"a.rs","line":5,"original_line":5,"start_line":null,"side":"RIGHT","position":4,"html_url":"u12","diff_hunk":"","body":"reply","created_at":"2026-01-02T01:00:00Z","user":"me"}"#,
+        r#"{"id":13,"in_reply_to_id":null,"path":"b.rs","line":null,"original_line":2,"start_line":null,"side":"LEFT","position":null,"html_url":"u13","diff_hunk":"","body":"old","created_at":"2026-01-03T00:00:00Z","user":"other"}"#,
+    ]
+    .join("\n");
+    let gh = details_gh(view, &comments);
+    let core = core_with_gh(&fake, &gh);
+    let root = open(&core, &setup.repo()).await;
+
+    let details = core
+        .pull_request_details(&root, Some(7))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(details.id, "PR_kw7");
+    assert_eq!(details.head_oid, "aaa");
+    assert_eq!(details.base_oid, "bbb");
+    assert!(details.viewer_is_reviewer, "the viewer has reviewed");
+    assert_eq!(details.viewer_last_review_oid.as_deref(), Some("old2"));
+    assert_eq!(details.threads_error, None);
+    let range = &details.threads[0];
+    assert_eq!(range.side, editor_core::DiffSide::Right);
+    assert_eq!(range.start_line, Some(3));
+    assert!(!range.outdated);
+    let ids: Vec<Option<u64>> = range.comments.iter().map(|c| c.id).collect();
+    assert_eq!(ids, [Some(11), Some(12)]);
+    let old = &details.threads[1];
+    assert_eq!(old.side, editor_core::DiffSide::Left);
+    assert!(old.outdated);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_a_requested_or_past_reviewer_is_the_prs_reviewer() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let view = |requests: &str| {
+        format!(
+            r#"{{"id":"PR_kw7","number":7,"title":"T","url":"u","state":"OPEN","createdAt":"","updatedAt":"","mergedAt":null,"mergedBy":null,"closedAt":null,"headRefName":"feat","baseRefName":"main","headRefOid":"aaa","baseRefOid":"bbb","milestone":null,"reviewRequests":{requests},"reviews":[{{"author":{{"login":"other"}},"state":"APPROVED","commit":{{"oid":"x"}}}}]}}"#
+        )
+    };
+    for (requests, reviewer) in [(r#"[{"login":"me"}]"#, true), ("[]", false)] {
+        let gh = details_gh(&view(requests), "");
+        let core = core_with_gh(&fake, &gh);
+        let root = open(&core, &setup.repo()).await;
+        let details = core
+            .pull_request_details(&root, Some(7))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(details.viewer_is_reviewer, reviewer, "{requests}");
+        assert_eq!(details.viewer_last_review_oid, None);
+    }
+}
