@@ -24,6 +24,8 @@ pub struct CodeReview {
     pub base: String,
     pub merge_base: String,
     pub files: Vec<CodeReviewFile>,
+    /// What changed since the user's last review, when they've reviewed it before.
+    pub since_last_review: Option<SinceLastReview>,
     /// The Review Worktree's setup, while it runs (or after it failed) in this run of the editor.
     pub setup: Option<SetupInfo>,
 }
@@ -41,6 +43,15 @@ pub struct CodeReviewFile {
     pub deletions: u32,
 }
 
+/// The files changed since the user last reviewed the PR (a re-requested review).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SinceLastReview {
+    /// The commit their last review was on.
+    pub commit: String,
+    pub files: Vec<CodeReviewFile>,
+}
+
 /// Where GitHub keeps PR `number`'s head, which a fork's PR has too.
 pub(crate) fn pull_head_ref(number: u64) -> String {
     format!("refs/pull/{number}/head")
@@ -49,6 +60,11 @@ pub(crate) fn pull_head_ref(number: u64) -> String {
 /// Where the fetched head is kept, so it outlives `git gc` and a force-push of the PR.
 pub(crate) fn review_ref(number: u64) -> String {
     format!("refs/orchard/review/{number}")
+}
+
+/// Where the commit of the user's last review is kept, if it had to be fetched.
+pub(crate) fn last_review_ref(number: u64) -> String {
+    format!("refs/orchard/review/{number}-last")
 }
 
 /// The Review Worktree's folder name (made free with `-2`, … if taken).

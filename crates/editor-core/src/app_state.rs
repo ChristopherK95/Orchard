@@ -60,6 +60,12 @@ pub(crate) struct SavedCodeReview {
     pub(crate) worktree: PathBuf,
     /// The PR head the Review Worktree is at.
     pub(crate) head: String,
+    /// Where the head split from the PR's base branch, which its diff runs from.
+    #[serde(default)]
+    pub(crate) merge_base: String,
+    /// The commit the user's last review (before this one) was on, for "since last review".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) last_review: Option<String>,
     /// Its Worktree setup has finished, so it isn't run again.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) setup_done: bool,
@@ -223,6 +229,8 @@ mod tests {
                 SavedCodeReview {
                     worktree: PathBuf::from("C:/repo.worktrees/review-pr-7"),
                     head: "abc".into(),
+                    merge_base: "def".into(),
+                    last_review: Some("123".into()),
                     setup_done: true,
                 },
             )]

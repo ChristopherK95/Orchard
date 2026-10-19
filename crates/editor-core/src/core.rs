@@ -17,7 +17,7 @@ use crate::attachments::{self, Attachment};
 use crate::auto_suspend::{
     self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, SystemClock, SystemProbe,
 };
-use crate::code_review::{self, CodeReview};
+use crate::code_review::{self, CodeReview, SinceLastReview};
 use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 use crate::dashboard::{self, ReviewRequest, WorktreeAttention};
 use crate::documents::{
@@ -468,6 +468,8 @@ pub enum CoreError {
     UnknownPullRequest(u64),
     #[error("you aren't a reviewer of this PR, so it can't have a Code review here")]
     NotAReviewer,
+    #[error("PR #{0} has no Code review open")]
+    NoCodeReview(u64),
     #[error(transparent)]
     Acp(#[from] AcpError),
 }
@@ -3285,6 +3287,20 @@ impl Core {
                 (worktrees::normalize(path), head, false)
             }
         };
+        // (The base branch as it is now: its merge base with the head is where the diff starts.)
+        let _ = git::fetch_origin(&root).await;
+        let base = format!("origin/{}", details.base);
+        let merge_base = match git::merge_base_of(&root, &head, &base).await {
+            Ok(merge_base) => merge_base,
+            Err(err) if details.base_oid.is_empty() => return Err(CoreError::Git(err)),
+            Err(_) => git::merge_base_of(&root, &head, &details.base_oid)
+                .await
+                .map_err(CoreError::Git)?,
+        };
+        let last_review = match &details.viewer_last_review_oid {
+            Some(commit) => self.reachable_last_review(&root, number, commit).await,
+            None => None,
+        };
         let setup_done = {
             let mut state = self.inner.state.lock().expect("state lock");
             // (A setup finishing meanwhile has said so here.)
@@ -3298,6 +3314,8 @@ impl Core {
                 SavedCodeReview {
                     worktree: worktree.clone(),
                     head: head.clone(),
+                    merge_base: merge_base.clone(),
+                    last_review: last_review.clone(),
                     setup_done: done,
                 },
             );
@@ -3314,20 +3332,20 @@ impl Core {
         if !setup_done && !running {
             self.start_setup(&root, &worktree).await;
         }
-        // (The base branch as it is now: its merge base with the head is where the diff starts.)
-        let _ = git::fetch_origin(&root).await;
-        let base = format!("origin/{}", details.base);
-        let merge_base = match git::merge_base_of(&root, &head, &base).await {
-            Ok(merge_base) => merge_base,
-            Err(err) if details.base_oid.is_empty() => return Err(CoreError::Git(err)),
-            Err(_) => git::merge_base_of(&root, &head, &details.base_oid)
-                .await
-                .map_err(CoreError::Git)?,
-        };
         let files = code_review::files(&root, &merge_base, &head)
             .await
             .map_err(CoreError::Git)?;
+        let since_last_review = match last_review {
+            Some(commit) => Some(SinceLastReview {
+                files: code_review::files(&root, &commit, &head)
+                    .await
+                    .map_err(CoreError::Git)?,
+                commit,
+            }),
+            None => None,
+        };
         Ok(CodeReview {
+            since_last_review,
             number,
             title: details.title,
             setup: self.setup(&worktree),
@@ -3337,6 +3355,58 @@ impl Core {
             merge_base,
             files,
         })
+    }
+
+    /// The commit of the user's last review, fetched if it isn't here (a force-push since may have
+    /// left it on no branch); None if it can't be had.
+    async fn reachable_last_review(
+        &self,
+        root: &Path,
+        number: u64,
+        commit: &str,
+    ) -> Option<String> {
+        if let Some(commit) = git::resolve_commit(root, commit).await {
+            return Some(commit);
+        }
+        let _one_at_a_time = self.inner.remote_op.lock().await;
+        git::fetch_ref(root, commit, &code_review::last_review_ref(number))
+            .await
+            .ok()
+    }
+
+    /// One file's change in the Code review of PR `number`: from the merge base (or, with
+    /// `since_last_review`, from the commit of the user's last review) to the fetched head; never
+    /// the Review Worktree's files. Empty if the file didn't change in that range.
+    pub async fn code_review_diff(
+        &self,
+        number: u64,
+        path: &str,
+        since_last_review: bool,
+    ) -> Result<Vec<crate::session::DiffLine>, CoreError> {
+        let root = self.workspace()?.root;
+        let saved = self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .code_reviews
+            .get(&number)
+            .cloned()
+            .ok_or(CoreError::NoCodeReview(number))?;
+        let from = match (since_last_review, saved.last_review) {
+            (true, Some(commit)) => commit,
+            _ => saved.merge_base,
+        };
+        let changes = git::changes_between(&root, &from, &saved.head)
+            .await
+            .map_err(CoreError::Git)?;
+        let Some((letter, _, renamed_from)) = changes.into_iter().find(|(_, p, _)| p == path)
+        else {
+            return Ok(vec![]);
+        };
+        let before = git::file_at(&root, &from, renamed_from.as_deref().unwrap_or(path)).await;
+        let after = git::file_at(&root, &saved.head, path).await;
+        text_diff(path, before, after, ChangeKind::from_letter(letter))
     }
 
     /// Fetches PR `number`'s head into its review ref, returning the commit.

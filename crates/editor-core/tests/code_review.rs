@@ -242,3 +242,58 @@ async fn a_failed_setup_runs_again_on_the_next_open() {
     assert!(review.setup.is_some(), "a failed setup runs again");
     assert!(setup_outcome(&mut events, &review.worktree).await);
 }
+
+fn added(lines: &[editor_core::DiffLine]) -> Vec<&str> {
+    lines
+        .iter()
+        .filter(|l| l.kind == editor_core::DiffLineKind::Added)
+        .map(|l| l.text.as_str())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_diff_is_the_prs_and_can_narrow_to_since_the_last_review() {
+    let setup = RepoWithOrigin::new();
+    let a = push_pr(&setup, &[("a", "first\n"), ("b", "one\n")], "A");
+    let head = push_pr(&setup, &[("b", "one\ntwo\n")], "B");
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let reviews = format!(
+        r#"[{{"author":{{"login":"me"}},"state":"COMMENTED","submittedAt":"2026-01-02T00:00:00Z","commit":{{"oid":"{a}"}}}}]"#
+    );
+    let gh = review_gh(&pr_view(&head, true, &reviews), "");
+    let core = core_with_gh(&fake, &gh);
+    open(&core, &setup.repo()).await;
+
+    let review = core.open_code_review(7).await.unwrap();
+    let since = review.since_last_review.expect("reviewed before");
+    assert_eq!(since.commit, a);
+    let since_paths: Vec<&str> = since.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(since_paths, ["b"]);
+
+    let full = core.code_review_diff(7, "b", false).await.unwrap();
+    assert_eq!(added(&full), ["one", "two"]);
+    let narrowed = core.code_review_diff(7, "b", true).await.unwrap();
+    assert_eq!(added(&narrowed), ["two"]);
+
+    // The diff is the PR's, whatever is in the Review Worktree's files.
+    std::fs::write(review.worktree.join("a"), "junk\n").unwrap();
+    let a_diff = core.code_review_diff(7, "a", false).await.unwrap();
+    assert_eq!(added(&a_diff), ["first"]);
+    assert!(core
+        .code_review_diff(7, "a", true)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_first_review_has_no_since_last_review() {
+    let setup = RepoWithOrigin::new();
+    let head = push_pr(&setup, &[("a", "first\n")], "A");
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let gh = review_gh(&pr_view(&head, true, "[]"), "");
+    let core = core_with_gh(&fake, &gh);
+    open(&core, &setup.repo()).await;
+    let review = core.open_code_review(7).await.unwrap();
+    assert_eq!(review.since_last_review, None);
+}

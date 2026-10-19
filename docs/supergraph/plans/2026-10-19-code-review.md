@@ -138,7 +138,7 @@ Checkpoint:
 - Commit: `Code review: opening one makes a read-only Review Worktree at the PR's head`
 
 ## Task 4: The Code review's diffs, full and since the last review
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 3
 Files:
