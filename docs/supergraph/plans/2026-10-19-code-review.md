@@ -11,7 +11,7 @@ Decisions made while planning (beyond the spec):
 - New commits are found by the overlay polling `code_review_new_commits` (one `git ls-remote`) every 60 s while it's open, like the Dashboard's polling.
 
 ## Task 1: git helpers for fetching a PR head, detached Worktrees and hard resets
-Status: pending
+Status: completed
 Risk: low
 Dependencies: none
 Files:
