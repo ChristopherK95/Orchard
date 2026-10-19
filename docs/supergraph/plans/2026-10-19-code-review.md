@@ -513,7 +513,7 @@ Checkpoint:
 - Commit: `Code review: commands and bindings for the frontend`
 
 ## Task 14: The Review's file list and diff, shared and filterable
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: none
 Files:
