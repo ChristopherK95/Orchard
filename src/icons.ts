@@ -82,3 +82,14 @@ export { default as GitPullRequestClosed } from "lucide-solid/icons/git-pull-req
 export { default as GitPullRequestDraft } from "lucide-solid/icons/git-pull-request-draft";
 export { default as MessageSquare } from "lucide-solid/icons/message-square";
 export { default as MessageSquareCode } from "lucide-solid/icons/message-square-code";
+export { default as AtSign } from "lucide-solid/icons/at-sign";
+export { default as Bold } from "lucide-solid/icons/bold";
+export { default as Code } from "lucide-solid/icons/code";
+export { default as Heading } from "lucide-solid/icons/heading";
+export { default as Italic } from "lucide-solid/icons/italic";
+export { default as Link } from "lucide-solid/icons/link";
+export { default as List } from "lucide-solid/icons/list";
+export { default as ListOrdered } from "lucide-solid/icons/list-ordered";
+export { default as ListTodo } from "lucide-solid/icons/list-todo";
+export { default as SquareSlash } from "lucide-solid/icons/square-slash";
+export { default as TextQuote } from "lucide-solid/icons/text-quote";
