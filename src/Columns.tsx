@@ -18,7 +18,7 @@ import { shellRunning } from "./shells";
 import { StateBadge } from "./StateDot";
 import { createTabView, type TabView } from "./TabView";
 import { Transcript } from "./Transcript";
-import { worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
+import { ReviewBadge, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 
 // (xterm.js loads with the first Terminal tab shown.)
 const TerminalPanel = lazy(() => import("./TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
@@ -60,6 +60,8 @@ export interface ColumnsProps {
   onSwitchBranch: (worktree: string, anchor: Element) => void;
   /** The PR of the Worktree's branch, in the PR overlay. */
   onOpenPr: (worktree: string) => void;
+  /** A Review Worktree's badge: its Code review, of PR `number`. */
+  onCodeReview: (number: number) => void;
   onOpenSettings: () => void;
   onOpenSnippet: (code: string, label: string) => void;
   /** "Open in editor" on a permission card: the column takes focus too. */
@@ -358,19 +360,31 @@ function ColumnHeader(props: ColumnsProps & { worktree: WorktreeTab; isFocused: 
   return (
     <div class="column-head">
       <span class="swatch" />
-      <Show
-        when={!props.worktree.removed}
+      <Switch
         fallback={
+          <button class="branch opens-branches" onClick={(e) => props.onSwitchBranch(path, e.currentTarget)} title={`${path}: switch branch`}>
+            {worktreeLabel(props.worktree)}
+            <ChevronDown class="chev" />
+          </button>
+        }
+      >
+        <Match when={props.worktree.removed}>
           <span class="branch" title={path}>
             {path.split(/[\\/]/).pop()}
           </span>
-        }
-      >
-        <button class="branch opens-branches" onClick={(e) => props.onSwitchBranch(path, e.currentTarget)} title={`${path}: switch branch`}>
-          {worktreeLabel(props.worktree)}
-          <ChevronDown class="chev" />
-        </button>
-      </Show>
+        </Match>
+        {/* (A Review Worktree stays on its PR's head: no branch to switch.) */}
+        <Match when={props.worktree.review}>
+          {(n) => (
+            <>
+              <span class="branch" title={path}>
+                {worktreeLabel(props.worktree)}
+              </span>
+              <ReviewBadge number={n()} onOpen={props.onCodeReview} />
+            </>
+          )}
+        </Match>
+      </Switch>
       <Show when={props.worktree.removed}>
         <span class="gone">folder removed</span>
       </Show>

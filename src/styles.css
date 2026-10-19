@@ -1161,6 +1161,11 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .dashboard-row-meta { color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dashboard-row .pr-number { font: 11.5px var(--mono); color: var(--fg-3); }
 .dashboard-tag { flex: none; height: 18px; display: inline-flex; align-items: center; padding: 0 7px; border-radius: 999px; background: rgba(245, 158, 11, 0.12); color: var(--needs-text); font-size: 11px; font-weight: 500; }
+/* A Review Worktree's badge (issue 44): in the sidebar, on its column or breadcrumb, in the overview. */
+.review-badge { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 18px; min-height: 18px; padding: 0 7px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--info) 14%, transparent); color: var(--info); font: 500 11px var(--ui); white-space: nowrap; }
+.review-badge .lucide { width: 11px; height: 11px; }
+.wt-head .review-badge, button.review-badge { cursor: pointer; }
+.wt-head .review-badge:hover, button.review-badge:hover:not(:disabled) { background: color-mix(in srgb, var(--info) 24%, transparent); color: var(--info); }
 .dashboard-checks { margin-left: auto; flex: none; flex-wrap: nowrap; }
 .dashboard-row-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 0 0 8px; cursor: default; }
 .dashboard-row-actions button { min-height: 26px; padding: 0 10px; gap: 6px; font-size: 12.5px; font-weight: 400; }

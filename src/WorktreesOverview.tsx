@@ -8,18 +8,22 @@ import { createEffect, createMemo, createResource, createSignal, For, Match, onC
 import { core, type MergeState, type RemovalCheck, type WorktreeMerge } from "./core";
 import { Check, GitBranch, GitMerge, Loader, Trash2, TriangleAlert, X } from "./icons";
 import { mergeKey, mergeOverview } from "./dashboardData";
-import { worktreeColour, type WorktreeTab } from "./Worktrees";
+import { ReviewBadge, worktreeColour, type WorktreeTab } from "./Worktrees";
 
 const plural = (n: number, thing: string) => `${n} ${thing}${n === 1 ? "" : "s"}`;
 
 /** Its branch is in the Base, so removing it (and the branch) loses no committed work. */
 const merged = (m: MergeState | null) => m?.kind === "merged" || m?.kind === "changesInBase";
 
-/** Can go: merged, with nothing uncommitted. */
-const ready = (row: WorktreeMerge) => merged(row.merge) && row.changed === 0;
+/** Can go: merged (a Review Worktree: its review done), with nothing uncommitted. */
+const ready = (row: WorktreeMerge) => (row.review ? row.review.done : merged(row.merge)) && row.changed === 0;
 
 function status(row: WorktreeMerge): { text: string; tone: "ok" | "warn" | "muted" | "error" } {
   if (row.error) return { text: row.error, tone: "error" };
+  if (row.review)
+    return row.review.done
+      ? { text: `Code review of #${row.review.number} done`, tone: "ok" }
+      : { text: `Code review of #${row.review.number} not submitted yet`, tone: "muted" };
   const m = row.merge;
   switch (m?.kind) {
     case "merged":
@@ -316,8 +320,8 @@ export function WorktreesOverview(props: {
                   {sorted().length === 0
                     ? "There are no Worktrees besides the main checkout."
                     : readyCount() === 0
-                      ? "None of the Worktrees' branches are merged yet."
-                      : `${plural(readyCount(), "Worktree")} can be removed: ${readyCount() === 1 ? "its branch is" : "their branches are"} merged, with nothing uncommitted.`}
+                      ? "None of the Worktrees' branches are merged (or their reviews done) yet."
+                      : `${plural(readyCount(), "Worktree")} can be removed: merged (or, for a Review Worktree, reviewed), with nothing uncommitted.`}
                 </p>
                 <ul class="overview-list">
                   <For each={sorted()}>
@@ -337,6 +341,7 @@ export function WorktreesOverview(props: {
                             <span class="overview-name">
                               <GitBranch />
                               <span class="mono">{props.label(row.path)}</span>
+                              <Show when={row.review}>{(r) => <ReviewBadge number={r().number} />}</Show>
                             </span>
                             <span class={`overview-status ${s().tone}`}>
                               <Show when={merged(row.merge)}>

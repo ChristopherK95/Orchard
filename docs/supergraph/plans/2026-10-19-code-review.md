@@ -649,7 +649,7 @@ Checkpoint:
 - Commit: `Code review: ask Claude to review the PR or about selected lines`
 
 ## Task 18: Ways into a Code review
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 16
 Files:

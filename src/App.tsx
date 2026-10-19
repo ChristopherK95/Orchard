@@ -43,7 +43,7 @@ const TerminalPanel = lazy(() => import("./TerminalPanel").then((m) => ({ defaul
 import { Board } from "./Board";
 import { Dashboard, type PrStart } from "./Dashboard";
 import { Transcript } from "./Transcript";
-import { ContextStrip, removedWorktree, Sidebar, unfoldWorktree, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
+import { ContextStrip, removedWorktree, ReviewBadge, Sidebar, unfoldWorktree, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 import { notify, onNotificationClicked } from "./notify";
 import { keepOutput, Setup, type SetupView } from "./Setup";
 import { StateBadge } from "./StateDot";
@@ -1059,6 +1059,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         onSettings={() => openSettingsPage()}
         onOpenMyPr={openMyPr}
         onPrBoard={() => openBoard("prs")}
+        onCodeReview={(number) => setCodeReviewOf({ number })}
       />
       <Show when={recentOpen() && mainView() === "tabs"}>
         <div class="menu scroll" style={{ left: `${recentAt().left}px`, top: `${recentAt().top}px` }}>
@@ -1102,17 +1103,34 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           >
             <Show when={worktree()} fallback={<span class="crumb" />}>
               {(w) => (
-                <Show when={!w().removed} fallback={<span class="crumb">{worktreeLabel(w())}</span>}>
-                  <button
-                    class="crumb branch-crumb opens-branches"
-                    classList={{ current: !session() }}
-                    onClick={(e) => toggleBranches(w().path, e.currentTarget)}
-                    title="Switch this Worktree's branch"
-                  >
-                    {worktreeLabel(w())}
-                    <ChevronDown class="chev" />
-                  </button>
-                </Show>
+                <Switch
+                  fallback={
+                    <button
+                      class="crumb branch-crumb opens-branches"
+                      classList={{ current: !session() }}
+                      onClick={(e) => toggleBranches(w().path, e.currentTarget)}
+                      title="Switch this Worktree's branch"
+                    >
+                      {worktreeLabel(w())}
+                      <ChevronDown class="chev" />
+                    </button>
+                  }
+                >
+                  <Match when={w().removed}>
+                    <span class="crumb">{worktreeLabel(w())}</span>
+                  </Match>
+                  {/* (A Review Worktree stays on its PR's head: no branch to switch.) */}
+                  <Match when={w().review}>
+                    {(n) => (
+                      <>
+                        <span class="crumb" classList={{ current: !session() }}>
+                          {worktreeLabel(w())}
+                        </span>
+                        <ReviewBadge number={n()} onOpen={(number) => setCodeReviewOf({ number })} />
+                      </>
+                    )}
+                  </Match>
+                </Switch>
               )}
             </Show>
             <Show when={session()}>
@@ -1229,7 +1247,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             if (mainView() === "columns" || id !== activeId()) void show(id);
           }}
           onPr={openMyPr}
-          onReviewRequest={(r) => setPrOf({ worktree: mainWorktree(), number: r.number })}
+          onReviewRequest={(r) => setCodeReviewOf({ number: r.number })}
           onWorktree={(path) => {
             toMainView();
             selectWorktree(path);
@@ -1434,6 +1452,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
                 toMainView();
                 openInEditor({ kind: "snippet", code, label });
               }}
+              onCodeReview={(number) => setCodeReviewOf({ number })}
               onClose={() => setPrOf(null)}
             />
           );
@@ -1548,6 +1567,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onRemove={setRemoving}
           onSwitchBranch={toggleBranches}
           onOpenPr={openPrOf}
+          onCodeReview={(number) => setCodeReviewOf({ number })}
           onOpenSettings={() => openSettingsPage("repo")}
           onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })}
           onOpenProposal={(sessionId, request) => openInEditor({ kind: "proposal", sessionId, request })}

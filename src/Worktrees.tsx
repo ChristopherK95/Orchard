@@ -23,6 +23,7 @@ import {
   LayoutGrid,
   ListTree,
   Loader,
+  MessageSquareCode,
   Plus,
   RefreshCw,
   Search,
@@ -86,6 +87,29 @@ function ShellBadge(props: { path: string }) {
   );
 }
 
+/** A Review Worktree's badge, with its PR's number. With `onOpen` it's a button opening its Code review. */
+export function ReviewBadge(props: { number: number; onOpen?: (number: number) => void }) {
+  const title = () => `A Review Worktree: the head of PR #${props.number}, read-only${props.onOpen ? ". Open its Code review" : ""}`;
+  return (
+    <Show
+      when={props.onOpen}
+      fallback={
+        <span class="review-badge" title={title()}>
+          <MessageSquareCode />
+          Review #{props.number}
+        </span>
+      }
+    >
+      {(open) => (
+        <button class="review-badge" onClick={() => open()(props.number)} title={title()}>
+          <MessageSquareCode />
+          Review #{props.number}
+        </button>
+      )}
+    </Show>
+  );
+}
+
 export interface SidebarProps {
   workspaceName: string;
   workspaceRoot: string;
@@ -118,6 +142,8 @@ export interface SidebarProps {
   onSettings: () => void;
   onOpenMyPr: (pr: MyPullRequest) => void;
   onPrBoard: () => void;
+  /** A Review Worktree's badge: its Code review, of PR `number`. */
+  onCodeReview: (number: number) => void;
 }
 
 /** Which Worktrees were folded open (true) or shut by hand, by Workspace root: kept across restarts. */
@@ -150,12 +176,18 @@ export function Sidebar(props: SidebarProps) {
   const isOpen = (path: string) =>
     foldsIn(props.workspaceRoot)[path] ?? (path === props.active || props.sessionsIn(path).some((s) => s.state === "needsYou"));
   const fold = (path: string, open: boolean) => setFold(props.workspaceRoot, path, open);
-  /** A click on a header's shell badge shows the terminal; anywhere else folds it open or shut
-   *  (only a session card switches to a session). */
-  const choose = (e: MouseEvent, path: string) =>
-    (e.target as Element).closest(".shell-badge") ? props.onShowTerminal(path) : fold(path, !isOpen(path));
+  /** A click on a header's shell badge shows the terminal, on a Review Worktree's badge its Code
+   *  review; anywhere else folds it open or shut (only a session card switches to a session). */
+  const choose = (e: MouseEvent, w: WorktreeTab) => {
+    const on = e.target as Element;
+    if (on.closest(".shell-badge")) props.onShowTerminal(w.path);
+    else if (on.closest(".review-badge") && w.review !== null) props.onCodeReview(w.review);
+    else fold(w.path, !isOpen(w.path));
+  };
   const title = (w: WorktreeTab) =>
-    w.removed ? `${w.path}: no longer a Worktree; its sessions still run` : dimmed(w) ? `${worktreeLabel(w)}: give it a column` : w.path;
+    w.removed
+      ? `${w.path}: no longer a Worktree; its sessions still run`
+      : `${dimmed(w) ? `${worktreeLabel(w)}: give it a column` : w.path}${w.review !== null ? `\nThe Review Worktree of PR #${w.review}` : ""}`;
   return (
     <Show
       when={!props.collapsed}
@@ -232,7 +264,7 @@ export function Sidebar(props: SidebarProps) {
                       class="wt-head-main"
                       title={w.removed ? title(w) : `${w.path}\n${open() ? "Fold" : "Unfold"}`}
                       aria-expanded={open()}
-                      onClick={(e) => choose(e, w.path)}
+                      onClick={(e) => choose(e, w)}
                     >
                       <span class="fold">
                         <ChevronRight />
@@ -244,6 +276,7 @@ export function Sidebar(props: SidebarProps) {
                           <span class="wt-count"> ({sessions().length})</span>
                         </Show>
                       </span>
+                      <Show when={w.review}>{(n) => <ReviewBadge number={n()} />}</Show>
                       <ShellBadge path={w.path} />
                       <Show when={!open()} fallback={props.settingUp(w.path) && <Loader class="spin setting-up" aria-label="Setting up" />}>
                         {worktreeSignal(sessions(), props.settingUp(w.path))}
