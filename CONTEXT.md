@@ -33,7 +33,7 @@ The branch or commit a Worktree's branch is compared against in "Changes vs base
 _Avoid_: Upstream (that's the branch it pushes to), target
 
 **Worktrees overview**:
-Every Worktree of the Workspace but the main checkout (which can't be removed) in one list, with whether its branch is merged into its Base (or into another branch its PR targeted, such as a project branch), so finished ones can be removed. Merged counts however the PR landed: a merge commit or fast-forward (the branch's commits are in the Base), or a squash or rebase (its changes are). A remote branch that was deleted is shown, but doesn't count as merged by itself.
+Every Worktree of the Workspace but the main checkout (which can't be removed) in one list, with whether its branch is merged into its Base (or into another branch its PR targeted, such as a project branch), so finished ones can be removed. Merged counts however the PR landed: a merge commit or fast-forward (the branch's commits are in the Base), or a squash or rebase (its changes are). A remote branch that was deleted is shown, but doesn't count as merged by itself. A Review Worktree counts once its Code review is done.
 _Avoid_: Clean-up, prune
 
 **Tool call**:
@@ -60,7 +60,7 @@ The overview of every Agent session in the Workspace, grouped by Agent session s
 _Avoid_: Overview (the Dashboard is the overview of the user's work; the Board is only the sessions)
 
 **Dashboard**:
-The live status wall of the user's own work in the Workspace, and the view a Workspace opens on: the Agent sessions that need them, reviews requested from them, their open PRs by stage, Worktrees that need attention or can be cleaned up. Each item leads to where it lives (a Tab, the PR overlay, a Worktree); a PR with failing checks or review feedback can start an Agent session on it; and, in a column beside them, statistics of the user's work over a chosen period.
+The live status wall of the user's own work in the Workspace, and the view a Workspace opens on: the Agent sessions that need them, reviews requested from them, their open PRs by stage, Worktrees that need attention or can be cleaned up. Each item leads to where it lives (a Tab, the PR overlay, a Code review, a Worktree); a PR with failing checks or review feedback can start an Agent session on it; and, in a column beside them, statistics of the user's work over a chosen period.
 _Avoid_: Home, Board (that's only the Agent sessions)
 
 **Columns view**:
@@ -90,8 +90,16 @@ Going through everything a Worktree's pull request would bring, file by file (co
 _Avoid_: Code review (that's reviewing someone else's PR), diff view
 
 **Code review**:
-Going through someone else's pull request file by file (its head fetched and diffed locally, no Worktree needed), marking each viewed as on GitHub, commenting on lines into a pending review, and submitting it as Approve, Request changes or Comment.
-_Avoid_: Review (that's the user's own Worktree before its PR is opened)
+Going through a pull request the user is a reviewer on, file by file, in its Review Worktree: the PR's head against its merge base with the PR's base branch (or, on a re-requested review, only what changed since the user's last review), Viewed ticks shared with GitHub, the PR's threads under their lines (with Reply), comments on lines held in the Pending review, and a verdict (Approve, Request changes or Comment) submitted with them. New commits pushed meanwhile are offered with Refresh. One review Agent session per PR, docked beside it, can review the whole PR ("Claude review") or answer a question about selected lines ("Ask Claude"); nothing it writes is posted without the user.
+_Avoid_: Review (that's the user's own Worktree before its PR is opened), PR review screen
+
+**Review Worktree**:
+The Worktree a Code review is read in: `review-pr-<N>`, detached at the PR's fetched head (so a fork's PR works too), never on a branch and never the user's own Worktree on the PR's branch. Read-only: its files open read-only in the Manual editor and its Agent sessions stay in Plan mode. It carries a "Review" badge, and the Worktrees overview counts it ready to remove once its review is submitted or the PR is merged or closed.
+_Avoid_: Review checkout, PR worktree
+
+**Pending review**:
+The comments on lines of a Code review not sent yet, with the lines asked Claude about, kept by the editor (they survive closing the overlay and restarts) and sent in one go with the verdict. A failed submit keeps it as it was. A comment whose line went away with new commits stays on its file as outdated, to be moved or removed.
+_Avoid_: Draft review, GitHub's pending review (the editor keeps it, not GitHub)
 
 **Agent**:
 The coding-agent program driving an Agent session. Claude Code first; others may be supported later behind the same boundary.

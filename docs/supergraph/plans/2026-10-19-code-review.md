@@ -687,7 +687,7 @@ Checkpoint:
 - Commit: `Dashboard: a review request opens the Code review`
 
 ## Task 19: Glossary, issue 44 and final verification
-Status: pending
+Status: completed
 Risk: low
 Dependencies: Task 17, Task 18
 Files:
