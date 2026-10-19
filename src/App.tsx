@@ -29,7 +29,7 @@ import { FilesDrawer } from "./FilesDrawer";
 import { type BranchPopover, BranchSwitcher, popoverUnder } from "./BranchPicker";
 import { GitDrawer } from "./GitDrawer";
 import { myPrs, PrBoard, watchMyPrs } from "./PrBoard";
-import { cleanUp, reviewRequests, statistics, watchAttention, watchCleanUp, watchReviewRequests, watchStatistics } from "./dashboardData";
+import { reviewRequests, statistics, watchAttention, watchCleanUp, watchReviewRequests, watchStatistics } from "./dashboardData";
 import { PrButton, PrOverlay } from "./PrOverlay";
 import { ReviewOverlay } from "./ReviewOverlay";
 import type { OpenRequest } from "./ManualEditor";
@@ -57,8 +57,10 @@ import { applyAppearance } from "./appearance";
 import orchardMark from "./assets/orchard-mark-small.svg?raw";
 import { Bell, ChevronDown, ChevronRight, GitBranch, GitCompareArrows, GitPullRequest, Loader, PanelLeft, PanelRight, Search, Sparkles, SquareTerminal, X } from "./icons";
 
-/** The PRs and review requests read this lately aren't asked for again when the window gets focus. */
+/** The PRs and review requests read this lately aren't asked for again when the window gets focus,
+ *  or the Dashboard is shown. */
 const FOCUS_FRESH_MS = 60_000;
+const stale = (at: number | null) => at === null || Date.now() - at >= FOCUS_FRESH_MS;
 
 export function App() {
   const [problems, setProblems] = createSignal<MissingPrerequisite[] | null>(null);
@@ -512,12 +514,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   };
   const worktree = () => rowWorktrees().find((w) => w.path === activeWorktree());
   watchMyPrs(mainWorktree);
-  // (What the Dashboard shows besides the sessions, kept current whether or not it's showing.)
+  // (What the Dashboard shows besides the sessions: the review requests kept current whether or not
+  // it's showing; its Worktree lists and statistics only while it is.)
   watchReviewRequests(mainWorktree);
-  watchAttention();
-  watchCleanUp();
-  // (The statistics, though, only while it's showing.)
-  watchStatistics(mainWorktree, () => view() === "dashboard");
+  const dashboardShown = () => view() === "dashboard";
+  watchAttention(dashboardShown);
+  watchCleanUp(dashboardShown);
+  watchStatistics(mainWorktree, dashboardShown);
   /** The Dashboard entry's badge: what waits on the user (not Worktree hygiene). */
   const dashboardBadge = () =>
     needYou() +
@@ -527,9 +530,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   let openedOnDashboard = false;
   // The view has changed since the Workspace opened (the user's choice, the open-on-start one stands down).
   let viewChosen = false;
-  // Showing the Dashboard asks GitHub again, and reads the Worktrees ready to clean up. The
-  // statistics are read only when there are none, or they're an hour old: even when the Workspace
-  // opened on it, as the watchers don't ask for them unless the Dashboard is up.
+  // Showing the Dashboard asks GitHub again, unless it was asked under a minute ago (its Worktree
+  // lists are read again by their watchers). The statistics are read only when there are none, or
+  // they're an hour old: even when the Workspace opened on it, as the watchers don't ask for them
+  // unless the Dashboard is up.
   createEffect(
     on(
       view,
@@ -541,9 +545,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           openedOnDashboard = false;
           return;
         }
-        myPrs.refresh();
-        reviewRequests.refresh();
-        cleanUp.refresh();
+        if (stale(myPrs.refreshedAt())) myPrs.refresh();
+        if (stale(reviewRequests.refreshedAt())) reviewRequests.refresh();
       },
       { defer: true },
     ),
@@ -905,7 +908,6 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     // review requests are asked for again too, unless they were read under a minute ago.
     const onFocus = () => {
       void core.windowFocused().catch(() => {});
-      const stale = (at: number | null) => at === null || Date.now() - at >= FOCUS_FRESH_MS;
       if (stale(myPrs.refreshedAt())) myPrs.refresh();
       if (stale(reviewRequests.refreshedAt())) reviewRequests.refresh();
     };
