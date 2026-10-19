@@ -105,27 +105,41 @@ pub(crate) fn normalize(path: PathBuf) -> PathBuf {
     }
 }
 
+/// What changed in the repository's shared git folder, as `Discovery` tells it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum RepoChange {
+    /// A Worktree may have been added or removed.
+    Worktrees,
+    /// A local branch moved (it may be checked out in a Worktree).
+    Branch(String),
+    /// Remote branches moved (a fetch, a push), so any branch's ahead/behind may have.
+    Remotes,
+}
+
 /// Watches `<git common dir>` and its `worktrees/` folder (non-recursively, so ordinary git activity
-/// inside each Worktree's admin folder isn't noise) and sends a signal when a Worktree may have
-/// been added or removed. Dropping it stops the watch.
+/// inside each Worktree's admin folder isn't noise), and the shared `refs/`, and sends what may have
+/// changed: a Worktree added or removed, a branch moved, remote branches moved. One watch for the
+/// whole repository, so a ref change wakes only the Worktrees it concerns (each Worktree's own git
+/// folder is its actor's). Dropping it stops the watch.
 pub(crate) struct Discovery {
     watcher: Arc<Mutex<notify::RecommendedWatcher>>,
     worktrees_dir: PathBuf,
 }
 
 impl Discovery {
-    pub(crate) fn start(common_dir: &Path) -> Option<(Self, mpsc::UnboundedReceiver<()>)> {
+    pub(crate) fn start(common_dir: &Path) -> Option<(Self, mpsc::UnboundedReceiver<RepoChange>)> {
         let (tx, rx) = mpsc::unbounded_channel();
         let worktrees_dir = common_dir.join("worktrees");
-        let filter_dir = worktrees_dir.clone();
+        let common = common_dir.to_owned();
         let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            // Only `worktrees/` itself or its entries: index/HEAD writes in `.git` are noise.
-            // (Listing them, as `git worktree list` does, is no change.)
-            let touches_worktrees = event.is_ok_and(|e| {
-                crate::files::is_change(&e) && e.paths.iter().any(|p| p.starts_with(&filter_dir))
-            });
-            if touches_worktrees {
-                let _ = tx.send(());
+            let Ok(event) = event else { return };
+            if !crate::files::is_change(&event) {
+                return; // (listing `worktrees/`, as `git worktree list` does, is no change)
+            }
+            for path in &event.paths {
+                if let Some(change) = repo_change(&common, path) {
+                    let _ = tx.send(change);
+                }
             }
         })
         .ok()?;
@@ -133,12 +147,14 @@ impl Discovery {
             watcher: Arc::new(Mutex::new(watcher)),
             worktrees_dir,
         };
-        discovery
-            .watcher
-            .lock()
-            .expect("watcher lock")
-            .watch(common_dir, RecursiveMode::NonRecursive)
-            .ok()?;
+        {
+            let mut watcher = discovery.watcher.lock().expect("watcher lock");
+            watcher
+                .watch(common_dir, RecursiveMode::NonRecursive)
+                .ok()?;
+            // (Without it, branches are still seen by the Worktrees' own watches of their HEAD.)
+            let _ = watcher.watch(&common_dir.join("refs"), RecursiveMode::Recursive);
+        }
         discovery.watch_worktrees_dir();
         Some((discovery, rx))
     }
@@ -153,4 +169,28 @@ impl Discovery {
                 .watch(&self.worktrees_dir, RecursiveMode::NonRecursive);
         }
     }
+}
+
+/// What a change to `path` in the shared git folder `common` means for the Worktrees, if anything:
+/// `worktrees/` and its entries; a local branch's ref; remote refs, or `packed-refs` (which holds
+/// both). Index and HEAD writes in the folder itself (the main checkout's) are its actor's, and
+/// tags, the stash and lock files are noise.
+fn repo_change(common: &Path, path: &Path) -> Option<RepoChange> {
+    let rel = path.strip_prefix(common).ok()?;
+    let rel: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let rel = rel.join("/");
+    if rel.ends_with(".lock") {
+        return None;
+    }
+    if rel == "worktrees" || rel.starts_with("worktrees/") {
+        return Some(RepoChange::Worktrees);
+    }
+    if rel == "packed-refs" || rel.starts_with("refs/remotes/") {
+        return Some(RepoChange::Remotes);
+    }
+    let branch = rel.strip_prefix("refs/heads/")?;
+    Some(RepoChange::Branch(branch.to_owned()))
 }

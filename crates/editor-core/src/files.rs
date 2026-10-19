@@ -295,19 +295,22 @@ impl WorktreeActor {
             }
         }
         // Branch state: the Worktree's git folder (its top level and reflog: `objects/` churns for
-        // nothing) and the shared refs. On Windows the main checkout's `.git` is already in the
-        // recursive watch.
+        // nothing). Not the shared refs: one watch of those (the core's) tells the Worktrees a ref
+        // change concerns, rather than every Worktree's actor reading its status again each time
+        // any branch moves. On Windows the main checkout's `.git` is already in the recursive watch.
         let inside = |path: &Path| cfg!(windows) && path.starts_with(&self.root);
         let mut git_targets = vec![];
         if let Some(git_dir) = &self.git_dir {
             git_targets.push((git_dir.clone(), RecursiveMode::NonRecursive));
             git_targets.push((git_dir.join("logs"), RecursiveMode::NonRecursive));
         }
-        if let Some(common) = &self.common_dir {
-            if Some(common) != self.git_dir.as_ref() {
-                git_targets.push((common.clone(), RecursiveMode::NonRecursive));
-            }
-            git_targets.push((common.join("refs"), RecursiveMode::Recursive));
+        // (A linked Worktree's ignore rules include the shared `info/exclude`.)
+        if let Some(common) = self
+            .common_dir
+            .as_ref()
+            .filter(|c| Some(*c) != self.git_dir.as_ref())
+        {
+            git_targets.push((common.join("info"), RecursiveMode::NonRecursive));
         }
         for (path, mode) in git_targets {
             if path.is_dir() && !inside(&path) && !targets.iter().any(|(p, _)| *p == path) {

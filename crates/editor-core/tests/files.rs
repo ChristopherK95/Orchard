@@ -395,3 +395,50 @@ async fn a_linked_worktree_follows_commits_and_fetches_live() {
     git(&path, &["fetch", "--quiet"]);
     until("behind by one", || async { info().behind == Some(1) }).await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_commit_in_one_worktree_doesnt_refresh_another() {
+    let repo = project();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let feature = elsewhere.path().join("feature");
+    git(
+        repo.path(),
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "feat/b",
+            feature.to_str().unwrap(),
+        ],
+    );
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let core = core_with(&fake);
+    let root = core.open_workspace(repo.path()).await.unwrap().root;
+    let feature = canonical(&feature);
+    core.show_worktree(&feature).await.unwrap();
+    // (Whatever showing it set off has settled.)
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let mut events = core.subscribe();
+
+    write(repo.path(), "more.txt", "more");
+    git(repo.path(), &["add", "more.txt"]);
+    commit_all(repo.path(), "more");
+
+    // The main checkout's branch moved: it looks again, and the feature Worktree doesn't.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let mut seen = vec![];
+    while let Ok(event) = events.try_recv() {
+        if let CoreEvent::GitStatusChanged { worktree } = event {
+            seen.push(worktree);
+        }
+    }
+    assert!(
+        !seen.contains(&feature),
+        "the feature Worktree looked again: {seen:?}"
+    );
+    assert!(
+        seen.contains(&root),
+        "the main checkout looked again: {seen:?}"
+    );
+}

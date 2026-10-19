@@ -49,7 +49,7 @@ use crate::settings::{self, LoadedSettings, RepoSettings, SettingChange, Windows
 use crate::setup::{self, SetupInfo, SetupStatus};
 use crate::statistics::{self, Statistics};
 use crate::terminal::{self, ActionShell, Terminal, TerminalId, TerminalInfo, TerminalStream};
-use crate::worktrees::{self, Discovery, WorktreeInfo};
+use crate::worktrees::{self, Discovery, RepoChange, WorktreeInfo};
 
 /// A slash command the Agent offers (one of Claude Code's, a custom command or a skill), from ACP's
 /// `available_commands_update`. Typing `/name args` as a prompt runs it.
@@ -5620,8 +5620,9 @@ impl Inner {
         }
     }
 
-    /// Re-lists the Worktrees whenever the repository's `worktrees/` folder changes (debounced, so
-    /// one `git worktree add` triggers one refresh).
+    /// Re-lists the Worktrees whenever the repository's `worktrees/` folder changes, and looks at
+    /// the Worktrees a ref change concerns again (debounced, so one `git worktree add` or fetch
+    /// triggers one refresh).
     async fn watch_worktrees(self: &Arc<Self>, root: &Path) {
         // Stop watching the previous Workspace first, even if watching this one fails.
         self.discovery.lock().expect("discovery lock").take();
@@ -5636,16 +5637,55 @@ impl Inner {
         *self.discovery.lock().expect("discovery lock") = Some(discovery.clone());
         let watching = Arc::downgrade(&discovery);
         tokio::spawn(async move {
-            while changes.recv().await.is_some() {
+            while let Some(first) = changes.recv().await {
                 tokio::time::sleep(Duration::from_millis(200)).await;
-                while changes.try_recv().is_ok() {}
+                let mut burst = HashSet::from([first]);
+                while let Ok(change) = changes.try_recv() {
+                    burst.insert(change);
+                }
                 let (Some(inner), Some(discovery)) = (weak.upgrade(), watching.upgrade()) else {
                     return; // the core, or this Workspace's watch, is gone
                 };
-                discovery.watch_worktrees_dir();
-                inner.refresh_worktrees().await;
+                if burst.remove(&RepoChange::Worktrees) {
+                    discovery.watch_worktrees_dir();
+                    inner.refresh_worktrees().await;
+                }
+                inner.refs_changed(burst);
             }
         });
+    }
+
+    /// Branches moved: the Worktree each is checked out in looks again; remote branches moved:
+    /// every followed Worktree does (its upstream may be one of them).
+    fn refs_changed(self: &Arc<Self>, changes: HashSet<RepoChange>) {
+        if changes.is_empty() {
+            return;
+        }
+        let mut due: BTreeSet<PathBuf> = BTreeSet::new();
+        if changes.contains(&RepoChange::Remotes) {
+            due.extend(self.live_worktrees());
+        }
+        let moved: Vec<&str> = changes
+            .iter()
+            .filter_map(|c| match c {
+                RepoChange::Branch(b) => Some(b.as_str()),
+                _ => None,
+            })
+            .collect();
+        if !moved.is_empty() {
+            due.extend(
+                self.state
+                    .lock()
+                    .expect("state lock")
+                    .worktrees
+                    .iter()
+                    .filter(|w| w.branch.as_deref().is_some_and(|b| moved.contains(&b)))
+                    .map(|w| w.path.clone()),
+            );
+        }
+        for worktree in due {
+            self.git_changed(worktree);
+        }
     }
 
     /// Handles what adapter process `generation` sends us, in arrival order (see `acp`).
