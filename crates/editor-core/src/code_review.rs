@@ -2,6 +2,7 @@
 //! its own detached at the PR's fetched head, read-only throughout. The diff is always the PR's
 //! (its head against the merge base with its base branch), never the Worktree's files.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -45,6 +46,8 @@ pub struct CodeReviewFile {
     pub renamed_from: Option<String>,
     pub additions: u32,
     pub deletions: u32,
+    /// Ticked Viewed on GitHub by the user.
+    pub viewed: bool,
 }
 
 /// The files changed since the user last reviewed the PR (a re-requested review).
@@ -336,9 +339,93 @@ pub(crate) async fn files(
                 renamed_from,
                 additions,
                 deletions,
+                viewed: false,
             }
         })
         .collect())
+}
+
+/// The files of a PR (by its GraphQL node id) and whether the user ticked them Viewed, a page of
+/// 100 at a time.
+const VIEWED_QUERY: &str = "query($id: ID!, $after: String) { node(id: $id) { ... on PullRequest { files(first: 100, after: $after) { nodes { path viewerViewedState } pageInfo { hasNextPage endCursor } } } } }";
+
+/// The paths of the PR's files the user has ticked Viewed on GitHub.
+pub(crate) async fn viewed_files(
+    gh: &Path,
+    repo: &Path,
+    pull_request_id: &str,
+) -> Result<HashSet<String>, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct File {
+        path: String,
+        viewer_viewed_state: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PageInfo {
+        has_next_page: bool,
+        end_cursor: Option<String>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Files {
+        nodes: Vec<File>,
+        page_info: PageInfo,
+    }
+    let mut viewed = HashSet::new();
+    let mut after: Option<String> = None;
+    loop {
+        let query = format!("query={VIEWED_QUERY}");
+        let id = format!("id={pull_request_id}");
+        let cursor = after.as_ref().map(|after| format!("after={after}"));
+        let mut args = vec!["api", "graphql", "-f", &query, "-f", &id];
+        if let Some(cursor) = &cursor {
+            args.extend(["-f", cursor]);
+        }
+        let printed = crate::pull_request::gh_text(gh, repo, &args).await?;
+        let answer: serde_json::Value = serde_json::from_str(printed.trim())
+            .map_err(|e| format!("gh said something unexpected: {e}"))?;
+        let files: Files = serde_json::from_value(answer["data"]["node"]["files"].clone())
+            .map_err(|e| format!("gh said something unexpected: {e}"))?;
+        viewed.extend(
+            files
+                .nodes
+                .into_iter()
+                .filter(|f| f.viewer_viewed_state == "VIEWED")
+                .map(|f| f.path),
+        );
+        match files.page_info {
+            PageInfo {
+                has_next_page: true,
+                end_cursor: Some(cursor),
+            } => after = Some(cursor),
+            _ => return Ok(viewed),
+        }
+    }
+}
+
+/// Ticks (or unticks) the PR's file `path` Viewed on GitHub.
+pub(crate) async fn set_viewed(
+    gh: &Path,
+    repo: &Path,
+    pull_request_id: &str,
+    path: &str,
+    viewed: bool,
+) -> Result<(), String> {
+    let mutation = match viewed {
+        true => "markFileAsViewed",
+        false => "unmarkFileAsViewed",
+    };
+    let query = format!(
+        "query=mutation($id: ID!, $path: String!) {{ {mutation}(input: {{pullRequestId: $id, path: $path}}) {{ clientMutationId }} }}"
+    );
+    let id = format!("id={pull_request_id}");
+    let path = format!("path={path}");
+    let args = ["api", "graphql", "-f", &query, "-f", &id, "-f", &path];
+    crate::pull_request::gh_text(gh, repo, &args)
+        .await
+        .map(drop)
 }
 
 #[cfg(test)]

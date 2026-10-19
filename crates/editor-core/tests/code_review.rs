@@ -31,6 +31,7 @@ fn review_gh(view: &str, extra: &str) -> FakeGh {
     FakeGh::new(&format!(
         "case \"$*\" in\n\
          {extra}\n\
+         'api graphql'*) echo '{{\"data\":{{\"node\":{{\"files\":{{\"nodes\":[],\"pageInfo\":{{\"hasNextPage\":false}}}}}}}}}}' ;;\n\
          'pr view'*) cat <<'JSON'\n{view}\nJSON\n;;\n\
          'api user'*) echo me ;;\n\
          'api repos/{{owner}}/{{repo}} '*) echo 'User o' ;;\n\
@@ -498,4 +499,41 @@ async fn a_reply_is_posted_to_its_thread() {
         posted.url.as_deref(),
         Some("https://github.com/o/r/pull/7#discussion_r42")
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn viewed_ticks_are_githubs() {
+    let setup = RepoWithOrigin::new();
+    let head = push_pr(&setup, &[("a", "first\n"), ("b", "second\n")], "A and B");
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    // (GitHub pages the files: `a` comes on the first page, `b` on the second.)
+    let graphql = "'api graphql'*unmarkFileAsViewed*) echo 'gh: Something went wrong' >&2; exit 1 ;;\n\
+         'api graphql'*markFileAsViewed*) echo '{\"data\":{}}' ;;\n\
+         'api graphql'*after=page2*) echo '{\"data\":{\"node\":{\"files\":{\"nodes\":[{\"path\":\"b\",\"viewerViewedState\":\"UNVIEWED\"}],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null}}}}}' ;;\n\
+         'api graphql'*viewerViewedState*) echo '{\"data\":{\"node\":{\"files\":{\"nodes\":[{\"path\":\"a\",\"viewerViewedState\":\"VIEWED\"}],\"pageInfo\":{\"hasNextPage\":true,\"endCursor\":\"page2\"}}}}}' ;;";
+    let gh = review_gh(&pr_view(&head, true, "[]"), graphql);
+    let core = core_with_gh(&fake, &gh);
+    open(&core, &setup.repo()).await;
+
+    let review = core.open_code_review(7).await.unwrap();
+    let viewed: Vec<(&str, bool)> = review
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.viewed))
+        .collect();
+    assert_eq!(viewed, [("a", true), ("b", false)]);
+
+    core.set_review_file_viewed(7, "b", true).await.unwrap();
+    let args = gh.args();
+    assert_eq!(&args[..2], ["api", "graphql"]);
+    assert!(
+        args.iter()
+            .any(|a| a.starts_with("query=") && a.contains("markFileAsViewed")),
+        "{args:?}"
+    );
+    assert!(args.iter().any(|a| a == "id=PR_kw7"), "{args:?}");
+    assert!(args.iter().any(|a| a == "path=b"), "{args:?}");
+
+    let failed = core.set_review_file_viewed(7, "a", false).await;
+    assert!(failed.is_err(), "a failure is said");
 }

@@ -59,6 +59,9 @@ pub(crate) struct WorkspaceState {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SavedCodeReview {
     pub(crate) worktree: PathBuf,
+    /// The PR's GraphQL node id, which its Viewed ticks are set with.
+    #[serde(default)]
+    pub(crate) pull_request_id: String,
     /// The PR head the Review Worktree is at.
     pub(crate) head: String,
     /// Where the head split from the PR's base branch, which its diff runs from.
@@ -235,6 +238,7 @@ mod tests {
                 7,
                 SavedCodeReview {
                     worktree: PathBuf::from("C:/repo.worktrees/review-pr-7"),
+                    pull_request_id: "PR_kw7".into(),
                     head: "abc".into(),
                     merge_base: "def".into(),
                     last_review: Some("123".into()),

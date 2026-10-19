@@ -3333,6 +3333,7 @@ impl Core {
                 number,
                 SavedCodeReview {
                     worktree: worktree.clone(),
+                    pull_request_id: details.id.clone(),
                     head: head.clone(),
                     merge_base: merge_base.clone(),
                     last_review: last_review.clone(),
@@ -3354,14 +3355,27 @@ impl Core {
         if !setup_done && !running {
             self.start_setup(&root, &worktree).await;
         }
-        let files = code_review::files(&root, &merge_base, &head)
+        let viewed = code_review::viewed_files(&gh, &root, &details.id)
             .await
             .map_err(CoreError::Git)?;
+        let ticked = |mut files: Vec<code_review::CodeReviewFile>| {
+            for file in &mut files {
+                file.viewed = viewed.contains(&file.path);
+            }
+            files
+        };
+        let files = ticked(
+            code_review::files(&root, &merge_base, &head)
+                .await
+                .map_err(CoreError::Git)?,
+        );
         let since_last_review = match last_review {
             Some(commit) => Some(SinceLastReview {
-                files: code_review::files(&root, &commit, &head)
-                    .await
-                    .map_err(CoreError::Git)?,
+                files: ticked(
+                    code_review::files(&root, &commit, &head)
+                        .await
+                        .map_err(CoreError::Git)?,
+                ),
                 commit,
             }),
             None => None,
@@ -3506,6 +3520,29 @@ impl Core {
             pending.questions.clear();
             Ok(())
         })
+    }
+
+    /// Ticks (or unticks) a file of PR `number` Viewed, on GitHub, where the tick is kept.
+    pub async fn set_review_file_viewed(
+        &self,
+        number: u64,
+        path: &str,
+        viewed: bool,
+    ) -> Result<(), CoreError> {
+        let root = self.workspace()?.root;
+        let pull_request_id = self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .code_reviews
+            .get(&number)
+            .map(|saved| saved.pull_request_id.clone())
+            .ok_or(CoreError::NoCodeReview(number))?;
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        code_review::set_viewed(&gh, &root, &pull_request_id, path, viewed)
+            .await
+            .map_err(CoreError::Git)
     }
 
     /// Replies to the thread on PR `number`'s code that starts with comment `comment_id`, at once

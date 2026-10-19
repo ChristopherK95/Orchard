@@ -290,7 +290,7 @@ Checkpoint:
 - Commit: `Code review: reply to a comment thread`
 
 ## Task 8: Viewed ticks are GitHub's
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 3
 Files:
