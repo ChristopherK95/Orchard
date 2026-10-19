@@ -12,11 +12,12 @@ use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::acp::{AcpError, AdapterCommand, Connection, Incoming, Responder, PROTOCOL_VERSION};
-use crate::app_state::{self, AppState, SavedSession, WorkspaceState};
+use crate::app_state::{self, AppState, SavedCodeReview, SavedSession, WorkspaceState};
 use crate::attachments::{self, Attachment};
 use crate::auto_suspend::{
     self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, SystemClock, SystemProbe,
 };
+use crate::code_review::{self, CodeReview};
 use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 use crate::dashboard::{self, ReviewRequest, WorktreeAttention};
 use crate::documents::{
@@ -463,6 +464,10 @@ pub enum CoreError {
     Terminal(String),
     #[error("statistics cover 7, 30 or 90 days, not {0}")]
     UnknownPeriod(u32),
+    #[error("there's no PR #{0} in this repository")]
+    UnknownPullRequest(u64),
+    #[error("you aren't a reviewer of this PR, so it can't have a Code review here")]
+    NotAReviewer,
     #[error(transparent)]
     Acp(#[from] AcpError),
 }
@@ -759,6 +764,8 @@ struct State {
     sessions: HashMap<SessionId, Arc<Session>>,
     by_acp_id: HashMap<String, SessionId>,
     next_session: u64,
+    /// The Code reviews with a Review Worktree, by PR number.
+    code_reviews: BTreeMap<u64, SavedCodeReview>,
 }
 
 impl State {
@@ -766,6 +773,21 @@ impl State {
     fn new_name(&mut self) -> String {
         self.last_name += 1;
         names::character_name(self.last_name)
+    }
+
+    /// The PR whose Code review `worktree` is the Review Worktree of.
+    fn review_of(&self, worktree: &Path) -> Option<u64> {
+        self.code_reviews
+            .iter()
+            .find(|(_, review)| review.worktree == worktree)
+            .map(|(number, _)| *number)
+    }
+
+    /// Marks the Review Worktrees in `listed` with their PR.
+    fn mark_reviews(&self, listed: &mut [WorktreeInfo]) {
+        for worktree in listed {
+            worktree.review = self.review_of(&worktree.path);
+        }
     }
 
     /// Keeps `new_name` clear of a remembered name.
@@ -1245,6 +1267,20 @@ impl Core {
                 return;
             }
         }
+        let review = {
+            let mut state = self.inner.state.lock().expect("state lock");
+            let number = state.review_of(&worktree);
+            if let Some(saved) = number.and_then(|n| state.code_reviews.get_mut(&n)) {
+                saved.setup_done = true;
+            }
+            number
+        };
+        if review.is_some() {
+            self.inner.persist();
+            self.inner
+                .set_setup_status(&worktree, SetupStatus::Finished);
+            return;
+        }
         self.inner
             .set_setup_status(&worktree, SetupStatus::StartingSession);
         self.start_first_session(worktree).await;
@@ -1252,7 +1288,13 @@ impl Core {
 
     /// Starts the Worktree's first session on a task of its own: stopping the setup mustn't drop a
     /// `session/new` half way (the Agent would start one nobody closes).
+    /// A Review Worktree's setup starts no session: its review session is the user's to start.
     async fn start_first_session(&self, worktree: PathBuf) {
+        if self.is_review_worktree(&worktree).is_some() {
+            self.inner
+                .set_setup_status(&worktree, SetupStatus::Finished);
+            return;
+        }
         let core = self.clone();
         let _ = tokio::spawn(async move { core.open_first_session(worktree).await }).await;
     }
@@ -2466,7 +2508,9 @@ impl Core {
             Some(SetupStatus::Failed { .. } | SetupStatus::SessionFailed { .. }) => {
                 Err(CoreError::SetupFailed)
             }
-            Some(SetupStatus::Done { .. }) | None => self.start_session_in(worktree).await,
+            Some(SetupStatus::Done { .. } | SetupStatus::Finished) | None => {
+                self.start_session_in(worktree).await
+            }
         }
     }
 
@@ -3190,6 +3234,131 @@ impl Core {
         crate::pull_request::details_for(&gh, &worktree, &which)
             .await
             .map_err(CoreError::Git)
+    }
+
+    /// Opens the Code review of PR `number`, which the user must be a reviewer of: its head is
+    /// fetched (as `refs/pull/<N>/head`, so a fork's PR works too) and checked out detached in the
+    /// PR's Review Worktree, made the first time (`review-pr-<N>`) and reused after. Its Worktree
+    /// setup runs until it has finished once; it starts no Agent session.
+    pub async fn open_code_review(&self, number: u64) -> Result<CodeReview, CoreError> {
+        let root = self.workspace()?.root;
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let details = crate::pull_request::details_for(&gh, &root, &number.to_string())
+            .await
+            .map_err(CoreError::Git)?
+            .ok_or(CoreError::UnknownPullRequest(number))?;
+        if !details.viewer_is_reviewer {
+            return Err(CoreError::NotAReviewer);
+        }
+        let review_ref = code_review::review_ref(number);
+        let saved = self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .code_reviews
+            .get(&number)
+            .cloned()
+            .filter(|saved| saved.worktree.is_dir());
+        let (worktree, head, setup_done) = match saved {
+            // (Its head moves on only with Refresh, so the diff stays the Worktree's.)
+            Some(saved) => {
+                let head = match git::resolve_commit(&root, &review_ref).await {
+                    Some(head) => head,
+                    None => {
+                        let head = self.fetch_review_head(&root, number).await?;
+                        git::reset_hard(&saved.worktree, &head)
+                            .await
+                            .map_err(CoreError::Git)?;
+                        head
+                    }
+                };
+                (saved.worktree, head, saved.setup_done)
+            }
+            None => {
+                let head = self.fetch_review_head(&root, number).await?;
+                let spec = NewWorktree::Detached {
+                    name: code_review::folder_name(number),
+                    commit: head.clone(),
+                };
+                let (path, _) = create_worktree::create(&root, &spec).await?;
+                (worktrees::normalize(path), head, false)
+            }
+        };
+        let setup_done = {
+            let mut state = self.inner.state.lock().expect("state lock");
+            // (A setup finishing meanwhile has said so here.)
+            let done = setup_done
+                || state
+                    .code_reviews
+                    .get(&number)
+                    .is_some_and(|saved| saved.worktree == worktree && saved.setup_done);
+            state.code_reviews.insert(
+                number,
+                SavedCodeReview {
+                    worktree: worktree.clone(),
+                    head: head.clone(),
+                    setup_done: done,
+                },
+            );
+            done
+        };
+        self.inner.persist();
+        self.inner.refresh_worktrees().await;
+        let running = self.setup(&worktree).is_some_and(|setup| {
+            matches!(
+                setup.status,
+                SetupStatus::Running { .. } | SetupStatus::StartingSession | SetupStatus::Finished
+            )
+        });
+        if !setup_done && !running {
+            self.start_setup(&root, &worktree).await;
+        }
+        // (The base branch as it is now: its merge base with the head is where the diff starts.)
+        let _ = git::fetch_origin(&root).await;
+        let base = format!("origin/{}", details.base);
+        let merge_base = match git::merge_base_of(&root, &head, &base).await {
+            Ok(merge_base) => merge_base,
+            Err(err) if details.base_oid.is_empty() => return Err(CoreError::Git(err)),
+            Err(_) => git::merge_base_of(&root, &head, &details.base_oid)
+                .await
+                .map_err(CoreError::Git)?,
+        };
+        let files = code_review::files(&root, &merge_base, &head)
+            .await
+            .map_err(CoreError::Git)?;
+        Ok(CodeReview {
+            number,
+            title: details.title,
+            setup: self.setup(&worktree),
+            worktree,
+            head,
+            base: details.base,
+            merge_base,
+            files,
+        })
+    }
+
+    /// Fetches PR `number`'s head into its review ref, returning the commit.
+    async fn fetch_review_head(&self, root: &Path, number: u64) -> Result<String, CoreError> {
+        let _one_at_a_time = self.inner.remote_op.lock().await;
+        git::fetch_ref(
+            root,
+            &code_review::pull_head_ref(number),
+            &code_review::review_ref(number),
+        )
+        .await
+        .map_err(CoreError::Git)
+    }
+
+    /// The PR number whose Review Worktree `worktree` is, if it's one.
+    pub fn is_review_worktree(&self, worktree: &Path) -> Option<u64> {
+        let worktree = worktrees::normalize(worktree.to_owned());
+        self.inner
+            .state
+            .lock()
+            .expect("state lock")
+            .review_of(&worktree)
     }
 
     /// Re-runs GitHub Actions jobs in the Worktree's repo: `job` (its id as its link has it, and its
@@ -5196,6 +5365,7 @@ impl Inner {
                 opened: state.opened,
                 // (Opening a Workspace lists it again.)
                 hidden: false,
+                code_reviews: state.code_reviews.clone(),
             };
             (workspace.root.clone(), saved)
         };
@@ -5284,6 +5454,16 @@ impl Inner {
                     listing_failed || state.worktrees.iter().any(|w| &w.path == worktree)
                 })
                 .collect();
+            state.code_reviews = saved
+                .code_reviews
+                .into_iter()
+                .filter(|(_, review)| {
+                    listing_failed || state.worktrees.iter().any(|w| w.path == review.worktree)
+                })
+                .collect();
+            let mut listed = std::mem::take(&mut state.worktrees);
+            state.mark_reviews(&mut listed);
+            state.worktrees = listed;
         }
         for (info, session) in created {
             session.log_opened();
@@ -5702,7 +5882,7 @@ impl Inner {
         let Some(root) = root_now() else {
             return;
         };
-        let listed = match only {
+        let mut listed = match only {
             Some(worktree) => {
                 let previous = self.state.lock().expect("state lock").worktrees.clone();
                 worktrees::list_refreshing(&root, &previous, worktree).await
@@ -5713,6 +5893,7 @@ impl Inner {
         if state.workspace.as_ref().map(|w| &w.root) != Some(&root) {
             return;
         }
+        state.mark_reviews(&mut listed);
         if state.worktrees != listed {
             let paths =
                 |list: &[WorktreeInfo]| list.iter().map(|w| w.path.clone()).collect::<Vec<_>>();

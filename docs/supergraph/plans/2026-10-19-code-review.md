@@ -90,7 +90,7 @@ Checkpoint:
 - Commit: `PR overlay: code threads know their side and ids, PRs their head commit`
 
 ## Task 3: Opening a Code review makes its Review Worktree
-Status: pending
+Status: completed
 Risk: high
 Dependencies: Task 1, Task 2
 Files:

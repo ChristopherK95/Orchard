@@ -24,6 +24,9 @@ pub enum NewWorktree {
     /// Check out an existing branch: local (`feat/x`) or remote (`origin/feat/x`, which gets a
     /// local branch tracking it).
     ExistingBranch { name: String },
+    /// HEAD detached at `commit` (already fetched), in a folder named after `name`: a Review
+    /// Worktree.
+    Detached { name: String, commit: String },
 }
 
 /// The created Worktree, and anything the user should know about how it was made.
@@ -88,6 +91,16 @@ pub(crate) async fn create(
                 )
             });
             Ok((path, warning))
+        }
+        NewWorktree::Detached { name, commit } => {
+            if commit.starts_with('-') || !git::is_commit(root, commit).await {
+                return Err(CoreError::UnknownStartPoint(commit.clone()));
+            }
+            let path = free_folder(root, name);
+            git::worktree_add_detached(root, &path, commit)
+                .await
+                .map_err(CoreError::Git)?;
+            Ok((path, None))
         }
         NewWorktree::ExistingBranch { name } => {
             let fetched = git::fetch_origin(root).await;

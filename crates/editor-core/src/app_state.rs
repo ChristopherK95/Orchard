@@ -48,6 +48,21 @@ pub(crate) struct WorkspaceState {
     /// Removed from the Recent Workspaces (opening it again lists it again); its Tabs are kept.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) hidden: bool,
+    /// The Code reviews with a Review Worktree, by PR number.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) code_reviews: BTreeMap<u64, SavedCodeReview>,
+}
+
+/// A Code review as it's remembered: its Review Worktree and how far it has got.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SavedCodeReview {
+    pub(crate) worktree: PathBuf,
+    /// The PR head the Review Worktree is at.
+    pub(crate) head: String,
+    /// Its Worktree setup has finished, so it isn't run again.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) setup_done: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -203,6 +218,15 @@ mod tests {
             statistics_days: Some(7),
             opened: Some(1_700_000_000_000),
             hidden: true,
+            code_reviews: [(
+                7,
+                SavedCodeReview {
+                    worktree: PathBuf::from("C:/repo.worktrees/review-pr-7"),
+                    head: "abc".into(),
+                    setup_done: true,
+                },
+            )]
+            .into(),
         };
         let other = WorkspaceState {
             tabs: vec![saved("d", "C:/other")],

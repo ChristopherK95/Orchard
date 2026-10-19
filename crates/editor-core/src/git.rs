@@ -1409,6 +1409,61 @@ pub(crate) async fn changes_to_disk(
     Ok(changes)
 }
 
+/// What changed from commit `from` to commit `to` (neither the index nor the files on disk), as
+/// `changes_since` gives it.
+pub(crate) async fn changes_between(
+    repo: &Path,
+    from: &str,
+    to: &str,
+) -> Result<Vec<(char, String, Option<String>)>, String> {
+    name_status(repo, &[from, to]).await
+}
+
+/// Lines added and deleted per file from `from` to `to` (renames found, under their new path; a
+/// binary file counts none).
+pub(crate) async fn numstat(
+    repo: &Path,
+    from: &str,
+    to: &str,
+) -> Result<std::collections::HashMap<String, (u32, u32)>, String> {
+    let out = run(
+        repo,
+        &[
+            "diff",
+            "--numstat",
+            "-z",
+            "--find-renames",
+            "--no-ext-diff",
+            from,
+            to,
+        ],
+    )
+    .await?;
+    let mut counts = std::collections::HashMap::new();
+    let mut entries = out.split('\0');
+    while let Some(entry) = entries.next() {
+        let mut fields = entry.splitn(3, '\t');
+        let (Some(added), Some(deleted), Some(path)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        // A rename leaves the path empty: its original and new paths follow as entries.
+        let path = match path {
+            "" => {
+                entries.next();
+                entries.next().unwrap_or_default()
+            }
+            path => path,
+        };
+        counts.insert(
+            path.to_owned(),
+            (added.parse().unwrap_or(0), deleted.parse().unwrap_or(0)),
+        );
+    }
+    Ok(counts)
+}
+
 /// `git diff --name-status` between `revs` (one: to the files on disk), renames found.
 async fn name_status(
     worktree: &Path,

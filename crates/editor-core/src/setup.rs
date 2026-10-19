@@ -44,6 +44,9 @@ pub enum SetupStatus {
     SessionFailed { message: String },
     #[serde(rename_all = "camelCase")]
     Done { session_id: SessionId },
+    /// Every command succeeded (or the user chose Start anyway) in a Review Worktree, where no
+    /// session starts by itself.
+    Finished,
 }
 
 /// How much setup output is kept for a view that opens late (the stream itself isn't capped).

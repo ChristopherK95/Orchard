@@ -532,6 +532,19 @@ pub fn core_with_gh(fake: &FakeAgent, gh: &FakeGh) -> Core {
     })
 }
 
+/// A core with a fake `gh`, keeping its app state at `state_path` and reading its settings from
+/// `settings.toml` in the fake agent's temp folder (if written); a second one made the same way is
+/// the editor after a restart.
+#[cfg(unix)]
+pub fn core_with_gh_and_state(fake: &FakeAgent, gh: &FakeGh, state_path: &Path) -> Core {
+    Core::new(CoreConfig {
+        gh: Some(gh.path()),
+        state_path: Some(state_path.to_owned()),
+        settings_path: Some(fake.settings_path()),
+        ..CoreConfig::new(fake.command())
+    })
+}
+
 pub fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).expect("canonicalize")
 }
