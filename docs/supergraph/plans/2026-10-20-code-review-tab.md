@@ -123,7 +123,7 @@ Checkpoint:
 - Commit: `Code review: a view of its own instead of an overlay`
 
 ## Task 4: The review Tab in the Tabs view, and the ways into it
-Status: pending
+Status: completed
 Risk: high
 Dependencies: Task 3
 Files:

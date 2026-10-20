@@ -8,7 +8,7 @@ import type { PermissionRequest, Question, SessionId, SessionInfo, TranscriptIte
 import { Loader, MessageSquare, PanelRight, Sparkles, X } from "./icons";
 import { StateDot } from "./StateDot";
 import { STATE_LABEL } from "./stateLabels";
-import { createTabView } from "./TabView";
+import { createTabView, type TabView } from "./TabView";
 import { Transcript, type TranscriptHandle } from "./Transcript";
 
 /** The user message asking `q`: it carries the question's attachment. */
@@ -20,16 +20,24 @@ export function ReviewChat(props: {
   session: SessionInfo | undefined;
   onOpenSnippet: (code: string, label: string) => void;
   onOpenProposal: (sessionId: SessionId, request: PermissionRequest) => void;
+  /** The view slot already showing the session (the Tabs view's, when the review is its Tab), so
+   *  it isn't streamed twice; without it, one of its own. */
+  view?: TabView;
+  /** `/clear` gave the review a fresh session. */
+  onCleared?: (id: SessionId) => void;
 }) {
   /** Said under the dock's head: a failure, or a question not found in the transcript. */
   const [note, setNote] = createSignal<{ text: string; error?: boolean } | null>(null);
   const onError = (message: string) => setNote({ text: message, error: true });
-  const view = createTabView(`review:${props.dock.number}`);
-  createEffect(() => {
-    const id = props.dock.session;
-    if (id !== view.shown()) view.show(id).catch((err) => onError(String(err)));
-  });
-  onCleanup(() => view.hide());
+  const own = !props.view;
+  const view = props.view ?? createTabView(`review:${props.dock.number}`);
+  if (own) {
+    createEffect(() => {
+      const id = props.dock.session;
+      if (id !== view.shown()) view.show(id).catch((err) => onError(String(err)));
+    });
+    onCleanup(() => view.hide());
+  }
   const [composerHeight, setComposerHeight] = createSignal(0);
 
   // "Ask Claude": each attachment goes into the composer (or its draft, until it shows).
@@ -130,7 +138,7 @@ export function ReviewChat(props: {
                 )}
               />
               {/* (It doesn't take the keyboard by itself: J / K / V are the review's.) */}
-              <Composer session={s} onHeight={setComposerHeight} takeFocus={false} />
+              <Composer session={s} onHeight={setComposerHeight} takeFocus={false} onCleared={props.onCleared} />
             </>
           )}
         </Show>

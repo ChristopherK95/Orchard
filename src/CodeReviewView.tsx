@@ -70,12 +70,23 @@ interface Kept {
 }
 const kept = new Map<number, Kept>();
 
+/** Openings under way, by PR: the way in and the Tab it shows ask once between them. */
+const opening = new Map<number, Promise<CodeReview>>();
+
 /** Opens PR `number`'s Code review (`core.openCodeReview`), keeping what it says for its Tab. */
-export async function openCodeReview(number: number): Promise<CodeReview> {
-  const r = await core.openCodeReview(number);
-  const before = kept.get(number);
-  kept.set(number, before ? { ...before, review: r } : { review: r, threads: [], since: !!r.sinceLastReview, at: 0, sideBySide: false, scrollTop: 0, dockOpen: dockPrefs().open });
-  return r;
+export function openCodeReview(number: number): Promise<CodeReview> {
+  const already = opening.get(number);
+  if (already) return already;
+  const open = core
+    .openCodeReview(number)
+    .then((r) => {
+      const before = kept.get(number);
+      kept.set(number, before ? { ...before, review: r } : { review: r, threads: [], since: !!r.sinceLastReview, at: 0, sideBySide: false, scrollTop: 0, dockOpen: dockPrefs().open });
+      return r;
+    })
+    .finally(() => opening.delete(number));
+  opening.set(number, open);
+  return open;
 }
 
 /** Claude's column: its width and whether it's open, the same for every Code review. */

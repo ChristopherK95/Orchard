@@ -289,7 +289,8 @@ export function Sidebar(props: SidebarProps) {
                             <Columns2 />
                           </button>
                         </Show>
-                        <Show when={!props.pinned}>
+                        {/* (A Review Worktree has only its Code review's session: nothing else to open there.) */}
+                        <Show when={!props.pinned && w.review === null}>
                           <button
                             class="ghost icon recent-menu"
                             onClick={(e) => props.onRecent(w.path, e.currentTarget.getBoundingClientRect())}
@@ -299,7 +300,7 @@ export function Sidebar(props: SidebarProps) {
                             <History />
                           </button>
                         </Show>
-                        <Show when={!props.settingUp(w.path)}>
+                        <Show when={!props.settingUp(w.path) && w.review === null}>
                           <button class="ghost icon" onClick={() => props.onNewSession(w.path)} title="New Agent session in this Worktree" aria-label="New session">
                             <Plus />
                           </button>
@@ -386,15 +387,29 @@ function SessionCards(props: SidebarProps & { worktree: WorktreeTab; sessions: S
       <For
         each={props.sessions}
         fallback={
-          <Show when={!props.worktree.removed && !props.settingUp(props.worktree.path)}>
-            <button class="session-empty" onClick={() => props.onNewSession(props.worktree.path)} title="New Agent session in this Worktree">
-              <Plus />
-              New session
-            </button>
+          <Show
+            when={props.worktree.review === null}
+            fallback={
+              <Show when={props.worktree.review}>
+                {(n) => (
+                  <button class="session-empty" onClick={() => props.onCodeReview(n())} title="Open its Code review (its review session starts once the setup is over)">
+                    <MessageSquareCode />
+                    Code review
+                  </button>
+                )}
+              </Show>
+            }
+          >
+            <Show when={!props.worktree.removed && !props.settingUp(props.worktree.path)}>
+              <button class="session-empty" onClick={() => props.onNewSession(props.worktree.path)} title="New Agent session in this Worktree">
+                <Plus />
+                New session
+              </button>
+            </Show>
           </Show>
         }
       >
-        {(s) => <SessionCard session={s} colour={worktreeColour(props.worktree.path)} on={s.id === props.activeSession} onShow={props.onShowSession} onClose={props.onCloseSession} />}
+        {(s) => <SessionCard session={s} colour={worktreeColour(props.worktree.path)} review={props.worktree.review} on={s.id === props.activeSession} onShow={props.onShowSession} onClose={props.onCloseSession} />}
       </For>
     </div>
   );
@@ -402,7 +417,7 @@ function SessionCards(props: SidebarProps & { worktree: WorktreeTab; sessions: S
 
 /** One session: its face and name, then where it stands, how long since it did anything, the
  *  model, how full its context is and what it has cost. */
-function SessionCard(props: { session: SessionInfo; colour: string; on: boolean; onShow: (id: SessionId) => void; onClose: (id: SessionId) => void }) {
+function SessionCard(props: { session: SessionInfo; colour: string; review?: number | null; on: boolean; onShow: (id: SessionId) => void; onClose: (id: SessionId) => void }) {
   const s = () => props.session;
   const { context, cost, active, model, title } = useSessionFacts(s);
   return (
@@ -417,6 +432,13 @@ function SessionCard(props: { session: SessionInfo; colour: string; on: boolean;
         <span class="session-card-body">
           <span class="session-card-line">
             <span class="name">{s().name}</span>
+            <Show when={props.review}>
+              {(n) => (
+                <span class="review-badge" title={`The Code review of PR #${n()}: its Tab`}>
+                  <MessageSquareCode />
+                </span>
+              )}
+            </Show>
             <Show when={s().unread > 0 && !props.on}>
               <span class="count-badge">{s().unread} new</span>
             </Show>

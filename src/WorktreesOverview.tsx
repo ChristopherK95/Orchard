@@ -82,6 +82,8 @@ export function WorktreesOverview(props: {
   /** A Worktree removed from here (with its warning, if any). */
   onRemoved: (path: string, warning: string | null) => void;
   onOpen: (path: string) => void;
+  /** A Review Worktree's row: its Code review (PR `number`'s Tab). */
+  onCodeReview: (number: number) => void;
   onClose: () => void;
 }) {
   const [fetching, setFetching] = createSignal(true);
@@ -337,7 +339,11 @@ export function WorktreesOverview(props: {
                             onChange={(e) => toggle(row.path, e.currentTarget.checked)}
                             aria-label={`Remove ${props.label(row.path)}`}
                           />
-                          <button class="overview-open" onClick={() => props.onOpen(row.path)} title={`Go to ${row.path}`}>
+                          <button
+                            class="overview-open"
+                            onClick={() => (row.review ? props.onCodeReview(row.review.number) : props.onOpen(row.path))}
+                            title={row.review ? `Open the Code review of #${row.review.number}` : `Go to ${row.path}`}
+                          >
                             <span class="overview-name">
                               <GitBranch />
                               <span class="mono">{props.label(row.path)}</span>

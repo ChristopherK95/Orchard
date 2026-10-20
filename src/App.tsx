@@ -33,7 +33,7 @@ import { myPrs, PrBoard, watchMyPrs } from "./PrBoard";
 import { reviewRequests, statistics, watchAttention, watchCleanUp, watchReviewRequests, watchStatistics } from "./dashboardData";
 import { PrButton, PrOverlay } from "./PrOverlay";
 import { ReviewOverlay } from "./ReviewOverlay";
-import { CodeReviewView } from "./CodeReviewView";
+import { CodeReviewView, openCodeReview } from "./CodeReviewView";
 import { ReviewChat } from "./ReviewChat";
 import type { OpenRequest } from "./ManualEditor";
 // CodeMirror loads with the first file opened, not at startup.
@@ -389,8 +389,6 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   /** The PR shown over everything else: the Worktree's branch's, or PR `number` of its repo. */
   const [prOf, setPrOf] = createSignal<{ worktree: string; number?: number } | null>(null);
   const openPrOf = (worktree: string) => setPrOf({ worktree });
-  /** The Code review over everything else (issue 44): PR `number`, which the user was asked to review. */
-  const [codeReviewOf, setCodeReviewOf] = createSignal<{ number: number } | null>(null);
   /** The Worktree the user's PRs are read in: the main one. */
   const mainWorktree = () => rowWorktrees().find((w) => w.isMain)?.path ?? props.workspace.root;
   /** One of the user's PRs: a Worktree on its branch shows it as its own; any other is shown from the main one. */
@@ -542,6 +540,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     return [...listed, ...removed];
   });
   const worktree = () => rowWorktrees().find((w) => w.path === activeWorktree());
+  /** The PR whose Code review the Tabs view shows: its Review Worktree is the active one (in place
+   *  of the review session's transcript, or of an empty Worktree while its setup runs). */
+  const shownReview = () => {
+    const w = worktree();
+    const s = session();
+    return w && !w.removed && w.review !== null && (!s || s.worktree === w.path) ? w.review : null;
+  };
   watchMyPrs(mainWorktree);
   // (What the Dashboard shows besides the sessions: the review requests kept current whether or not
   // it's showing; its Worktree lists and statistics only while it is.)
@@ -616,6 +621,34 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   };
 
 
+  const isReviewWorktree = (path: string) => (worktrees().find((w) => w.path === path)?.review ?? null) !== null;
+  /** The Tabs view on a Review Worktree: its review session's Tab, or (until that has started) the
+   *  Code review with its setup. */
+  const showReviewOf = (path: string) => {
+    toMainView();
+    setActiveWorktree(path);
+    if (mainView() === "columns") chooseView("tabs");
+    else selectWorktree(path);
+  };
+  /** Opens PR `number`'s Code review (the Dashboard, the PR overlay, a Review badge): its Tab. */
+  const openCodeReviewTab = async (number: number) => {
+    setError("");
+    const there = worktrees().find((w) => w.review === number);
+    if (there) showReviewOf(there.path);
+    else setNotice(`Opening the Code review of #${number} (the first time, this fetches the PR and makes its Review Worktree)…`);
+    try {
+      const r = await openCodeReview(number);
+      if (!there) setNotice("");
+      if (r.session !== null && sessions[r.session]) {
+        if (mainView() === "columns") chooseView("tabs");
+        if (activeId() !== r.session) await show(r.session);
+      } else if (!there) showReviewOf(r.worktree);
+    } catch (err) {
+      if (!there) setNotice("");
+      setError(String(err));
+    }
+  };
+
   /** Brings a closed session back in a new Tab and shows it. */
   const reopen = async (opening: Promise<SessionId | null>) => {
     setError("");
@@ -632,6 +665,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
 
   /** A new Agent session in the active Worktree (`quiet` as for `show`). */
   const newSession = async (path = activeWorktree(), opts: { quiet?: boolean } = {}): Promise<SessionId | undefined> => {
+    // (A Review Worktree has only its Code review's session.)
+    if (isReviewWorktree(path)) return;
     setError("");
     try {
       const id = await core.newSessionIn(path);
@@ -816,6 +851,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       } else if (event.kind === "sessionCreated") {
         setSessions(event.session.id, event.session);
         setOrder((ids) => [...ids, event.session.id]);
+        // A review session started (its setup over) while its Code review was on screen: its Tab.
+        const path = event.session.worktree;
+        if (mainView() === "tabs" && activeWorktree() === path && activeId() === null && isReviewWorktree(path)) void show(event.session.id, { quiet: true });
       } else if (
         event.kind === "documentChangedOnDisk" ||
         event.kind === "documentConflicted" ||
@@ -845,26 +883,26 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       // (Ctrl+P is never the browser's print, even with a dialog open.)
       if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !agentPickerOpen() && !switching() && !settingsAt() && !reviewing() && !prOf() && !codeReviewOf()) setPaletteOpen(true);
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !agentPickerOpen() && !switching() && !settingsAt() && !reviewing() && !prOf()) setPaletteOpen(true);
         return;
       }
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "o") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !agentPickerOpen() && !settingsAt() && !reviewing() && !prOf() && !codeReviewOf()) setSwitching(true);
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !agentPickerOpen() && !settingsAt() && !reviewing() && !prOf()) setSwitching(true);
         return;
       }
       // (Not when the Manual editor or the Terminal took it: there it's theirs.)
       if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k" && !e.defaultPrevented && !document.activeElement?.closest(".terminal-panel")) {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !switching() && !settingsAt() && !reviewing() && !prOf() && !codeReviewOf()) setAgentPickerOpen(true);
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !switching() && !settingsAt() && !reviewing() && !prOf()) setAgentPickerOpen(true);
         return;
       }
       if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ",") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !agentPickerOpen() && !switching() && !reviewing() && !prOf() && !codeReviewOf()) openSettingsPage();
+        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !agentPickerOpen() && !switching() && !reviewing() && !prOf()) openSettingsPage();
         return;
       }
-      if (removing() || overviewOpen() || creatingWorktree() || paletteOpen() || agentPickerOpen() || switching() || settingsAt() || reviewing() || prOf() || codeReviewOf()) return; // a dialog is open over the Tab
+      if (removing() || overviewOpen() || creatingWorktree() || paletteOpen() || agentPickerOpen() || switching() || settingsAt() || reviewing() || prOf()) return; // a dialog is open over the Tab
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
         return void toggleDrawer("files");
@@ -1059,7 +1097,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         onSettings={() => openSettingsPage()}
         onOpenMyPr={openMyPr}
         onPrBoard={() => openBoard("prs")}
-        onCodeReview={(number) => setCodeReviewOf({ number })}
+        onCodeReview={(number) => void openCodeReviewTab(number)}
       />
       <Show when={recentOpen() && mainView() === "tabs"}>
         <div class="menu scroll" style={{ left: `${recentAt().left}px`, top: `${recentAt().top}px` }}>
@@ -1126,7 +1164,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
                         <span class="crumb" classList={{ current: !session() }}>
                           {worktreeLabel(w())}
                         </span>
-                        <ReviewBadge number={n()} onOpen={(number) => setCodeReviewOf({ number })} />
+                        <ReviewBadge number={n()} onOpen={(number) => void openCodeReviewTab(number)} />
                       </>
                     )}
                   </Match>
@@ -1247,7 +1285,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             if (mainView() === "columns" || id !== activeId()) void show(id);
           }}
           onPr={openMyPr}
-          onReviewRequest={(r) => setCodeReviewOf({ number: r.number })}
+          onReviewRequest={(r) => void openCodeReviewTab(r.number)}
           onWorktree={(path) => {
             toMainView();
             selectWorktree(path);
@@ -1414,6 +1452,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             toMainView();
             selectWorktree(path);
           }}
+          onCodeReview={(number) => {
+            setOverviewOpen(false);
+            void openCodeReviewTab(number);
+          }}
           onClose={() => setOverviewOpen(false)}
         />
       </Show>
@@ -1452,47 +1494,11 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
                 toMainView();
                 openInEditor({ kind: "snippet", code, label });
               }}
-              onCodeReview={(number) => setCodeReviewOf({ number })}
+              onCodeReview={(number) => void openCodeReviewTab(number)}
               onClose={() => setPrOf(null)}
             />
           );
         }}
-      </Show>
-      <Show when={codeReviewOf()}>
-        {(of) => (
-          <div class="modal-backdrop review-backdrop" onClick={(e) => e.target === e.currentTarget && setCodeReviewOf(null)}>
-          <div class="modal review-overlay docked">
-          <CodeReviewView
-            number={of().number}
-            session={sessionsIn(worktrees().find((w) => w.review === of().number)?.path ?? "")[0]}
-            active={true}
-            colourOf={worktreeColour}
-            setupOf={(path) => setups[path]}
-            onOpenSettings={() => {
-              setCodeReviewOf(null);
-              openSettingsPage("repo");
-            }}
-            onRemoveWorktree={(path) => setRemoving(rowWorktrees().find((w) => w.path === path) ?? null)}
-            chat={(dock) => (
-              <ReviewChat
-                dock={dock}
-                session={sessions[dock.session]}
-                onOpenSnippet={(code, label) => {
-                  setCodeReviewOf(null);
-                  toMainView();
-                  openInEditor({ kind: "snippet", code, label });
-                }}
-                onOpenProposal={(sessionId, request) => {
-                  setCodeReviewOf(null);
-                  toMainView();
-                  openInEditor({ kind: "proposal", sessionId, request });
-                }}
-              />
-            )}
-          />
-          </div>
-          </div>
-        )}
       </Show>
       <Show when={branchPopover()}>
         {(at) => (
@@ -1567,7 +1573,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onRemove={setRemoving}
           onSwitchBranch={toggleBranches}
           onOpenPr={openPrOf}
-          onCodeReview={(number) => setCodeReviewOf({ number })}
+          onCodeReview={(number) => void openCodeReviewTab(number)}
           onOpenSettings={() => openSettingsPage("repo")}
           onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })}
           onOpenProposal={(sessionId, request) => openInEditor({ kind: "proposal", sessionId, request })}
@@ -1580,6 +1586,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       </Show>
       <Show when={mainView() === "tabs"}>
       <div class="main-col" classList={{ hidden: terminalOpen(activeWorktree()) && terminalMaximized() }}>
+      <Show
+        when={shownReview()}
+        keyed
+        fallback={
       <Show
         when={session()}
         keyed
@@ -1623,6 +1633,30 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             />
             <Composer session={s} onHeight={setComposerHeight} onCleared={(id) => void show(id)} />
           </>
+        )}
+      </Show>
+        }
+      >
+        {(number) => (
+          <CodeReviewView
+            number={number}
+            session={session()}
+            active={view() === "tabs"}
+            colourOf={worktreeColour}
+            setupOf={(path) => setups[path]}
+            onOpenSettings={() => openSettingsPage("repo")}
+            onRemoveWorktree={(path) => setRemoving(rowWorktrees().find((w) => w.path === path) ?? null)}
+            chat={(dock) => (
+              <ReviewChat
+                dock={dock}
+                session={sessions[dock.session]}
+                view={tabs}
+                onOpenSnippet={(code, label) => openInEditor({ kind: "snippet", code, label })}
+                onOpenProposal={(sessionId, request) => openInEditor({ kind: "proposal", sessionId, request })}
+                onCleared={(id) => void show(id)}
+              />
+            )}
+          />
         )}
       </Show>
       </div>
