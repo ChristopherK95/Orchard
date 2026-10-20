@@ -6,6 +6,7 @@ import { Avatar } from "./Avatar";
 import { ago } from "./Chat";
 import type { MyPullRequest, SessionId, SessionInfo, WorktreeInfo } from "./core";
 import { myPrs } from "./PrBoard";
+import { newCommits } from "./reviewWatch";
 import { shellsIn } from "./shells";
 import {
   ArrowDownUp,
@@ -87,6 +88,16 @@ function ShellBadge(props: { path: string }) {
   );
 }
 
+/** A dot on a Review badge (and the review's Tab) while new commits wait for a Refresh. */
+function NewCommitsDot(props: { number: number }) {
+  const count = () => newCommits.of(props.number);
+  return (
+    <Show when={count() > 0}>
+      <span class="new-commits-dot" title={`${count()} new commit${count() === 1 ? "" : "s"} pushed to the PR since: Refresh in its Code review`} />
+    </Show>
+  );
+}
+
 /** A Review Worktree's badge, with its PR's number. With `onOpen` it's a button opening its Code review. */
 export function ReviewBadge(props: { number: number; onOpen?: (number: number) => void }) {
   const title = () => `A Review Worktree: the head of PR #${props.number}, read-only${props.onOpen ? ". Open its Code review" : ""}`;
@@ -97,6 +108,7 @@ export function ReviewBadge(props: { number: number; onOpen?: (number: number) =
         <span class="review-badge" title={title()}>
           <MessageSquareCode />
           Review #{props.number}
+          <NewCommitsDot number={props.number} />
         </span>
       }
     >
@@ -104,6 +116,7 @@ export function ReviewBadge(props: { number: number; onOpen?: (number: number) =
         <button class="review-badge" onClick={() => open()(props.number)} title={title()}>
           <MessageSquareCode />
           Review #{props.number}
+          <NewCommitsDot number={props.number} />
         </button>
       )}
     </Show>
@@ -436,6 +449,7 @@ function SessionCard(props: { session: SessionInfo; colour: string; review?: num
               {(n) => (
                 <span class="review-badge" title={`The Code review of PR #${n()}: its Tab`}>
                   <MessageSquareCode />
+                  <NewCommitsDot number={n()} />
                 </span>
               )}
             </Show>

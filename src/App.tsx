@@ -34,6 +34,7 @@ import { reviewRequests, statistics, watchAttention, watchCleanUp, watchReviewRe
 import { PrButton, PrOverlay } from "./PrOverlay";
 import { ReviewOverlay } from "./ReviewOverlay";
 import { CodeReviewView, openCodeReview } from "./CodeReviewView";
+import { watchReviews } from "./reviewWatch";
 import { ReviewChat } from "./ReviewChat";
 import type { OpenRequest } from "./ManualEditor";
 // CodeMirror loads with the first file opened, not at startup.
@@ -551,6 +552,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   // (What the Dashboard shows besides the sessions: the review requests kept current whether or not
   // it's showing; its Worktree lists and statistics only while it is.)
   watchReviewRequests(mainWorktree);
+  watchReviews(() => worktrees().flatMap((w) => (w.review === null ? [] : [w.review])));
   const dashboardShown = () => view() === "dashboard";
   watchAttention(dashboardShown);
   watchCleanUp(dashboardShown);
@@ -1590,33 +1592,33 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         when={shownReview()}
         keyed
         fallback={
-      <Show
-        when={session()}
-        keyed
-        fallback={
           <Show
-            when={setups[activeWorktree()] && !setupOver(setups[activeWorktree()].status) && setups[activeWorktree()]}
+            when={session()}
+            keyed
             fallback={
-              <div class="center empty-worktree" style={{ "--c": worktreeColour(activeWorktree()) }}>
-                <GitBranch />
-                <p>No Agent sessions in this Worktree yet.</p>
-                <Show when={!worktree()?.removed}>
-                  <button class="primary" onClick={() => void newSession()}>
-                    <Sparkles />
-                    New Agent session here
-                  </button>
-                </Show>
-                <Show when={recent[activeWorktree()]?.length}>
-                  <RecentList sessions={recent[activeWorktree()] ?? []} onReopen={(r) => void reopen(core.reopenSession(r.acpId))} />
-                </Show>
-                <Show when={!worktree()?.removed}>
-                  <FindOtherConversations worktree={activeWorktree()} onOpen={(c) => void reopen(core.openConversation(c))} />
-                </Show>
-              </div>
-            }
-          >
-            {(setup) => <Setup worktree={activeWorktree()} setup={setup()} onError={setError} onOpenSettings={() => openSettingsPage("repo")} />}
-          </Show>
+              <Show
+                when={setups[activeWorktree()] && !setupOver(setups[activeWorktree()].status) && setups[activeWorktree()]}
+                fallback={
+                  <div class="center empty-worktree" style={{ "--c": worktreeColour(activeWorktree()) }}>
+                    <GitBranch />
+                    <p>No Agent sessions in this Worktree yet.</p>
+                    <Show when={!worktree()?.removed}>
+                      <button class="primary" onClick={() => void newSession()}>
+                        <Sparkles />
+                        New Agent session here
+                      </button>
+                    </Show>
+                    <Show when={recent[activeWorktree()]?.length}>
+                      <RecentList sessions={recent[activeWorktree()] ?? []} onReopen={(r) => void reopen(core.reopenSession(r.acpId))} />
+                    </Show>
+                    <Show when={!worktree()?.removed}>
+                      <FindOtherConversations worktree={activeWorktree()} onOpen={(c) => void reopen(core.openConversation(c))} />
+                    </Show>
+                  </div>
+                }
+              >
+                {(setup) => <Setup worktree={activeWorktree()} setup={setup()} onError={setError} onOpenSettings={() => openSettingsPage("repo")} />}
+              </Show>
         }
       >
         {(s) => (

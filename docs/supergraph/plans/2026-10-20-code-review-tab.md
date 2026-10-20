@@ -159,7 +159,7 @@ Checkpoint:
 - Commit: `Code review: a review is a Tab, so the user can switch to their own work and back`
 
 ## Task 5: Columns view and the new-commits dot
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: Task 4
 Files:

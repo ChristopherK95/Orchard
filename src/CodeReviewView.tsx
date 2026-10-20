@@ -29,6 +29,7 @@ import { languageOfPath } from "./highlight";
 import { ChevronLeft, ChevronRight, CircleCheck, GitPullRequest, Loader, MessageSquare, MoveRight, PanelRight, Pencil, RefreshCw, Send, Sparkles, Trash2, TriangleAlert, X } from "./icons";
 import { handleTranscriptClick, renderMarkdown } from "./markdown";
 import { LETTER, ReviewFiles, useReviewKeys } from "./ReviewFiles";
+import { newCommits } from "./reviewWatch";
 import { Setup, type SetupView } from "./Setup";
 
 const plural = (n: number, thing: string) => `${n} ${thing}${n === 1 ? "" : "s"}`;
@@ -144,7 +145,6 @@ export function CodeReviewView(props: {
   const [viewedNow, setViewedNow] = createStore<Record<string, boolean>>({});
   const [threads, setThreads] = createSignal<CodeThread[]>([]);
   const [pending, setPending] = createStore<{ comments: PendingComment[]; questions: Question[] }>({ comments: [], questions: [] });
-  const [newCommits, setNewCommits] = createSignal(0);
   const [refreshing, setRefreshing] = createSignal(false);
 
   const loadThreads = (r: CodeReview) =>
@@ -196,17 +196,13 @@ export function CodeReviewView(props: {
     kept.set(props.number, { review: saved, threads: threads(), since: since(), at: at(), sideBySide: sideBySide(), scrollTop, dockOpen: dockOpen() });
   });
 
-  // New commits pushed to the PR: asked every minute (quietly: offline is no news).
-  const poll = window.setInterval(() => {
-    if (review() && !refreshing()) core.codeReviewNewCommits(props.number).then(setNewCommits, () => {});
-  }, 60_000);
-  onCleanup(() => clearInterval(poll));
+  // (New commits pushed to the PR are asked about in reviewWatch, Tab shown or not.)
   const refresh = async () => {
     setRefreshing(true);
     try {
       const r = await core.refreshCodeReview(props.number);
       apply(r);
-      setNewCommits(0);
+      newCommits.seen(props.number);
       loadThreads(r);
       const outdated = r.pending.comments.filter((c) => c.outdated).length;
       setNotice({ text: outdated ? `Moved to the PR's latest commits. ${plural(outdated, "comment")} lost ${outdated === 1 ? "its line" : "their lines"}: move or remove ${outdated === 1 ? "it" : "them"} (at the top of the file).` : "Moved to the PR's latest commits." });
@@ -703,12 +699,12 @@ export function CodeReviewView(props: {
               Side by side
             </button>
           </div>
-          <Show when={newCommits() > 0}>
+          <Show when={newCommits.of(props.number) > 0}>
             <button class="outline" onClick={() => void refresh()} disabled={refreshing()} title="Move the Review Worktree to the PR's latest commits (pending comments follow their lines)">
               <Show when={refreshing()} fallback={<RefreshCw />}>
                 <Loader class="spin" />
               </Show>
-              {plural(newCommits(), "new commit")} — Refresh
+              {plural(newCommits.of(props.number), "new commit")} — Refresh
             </button>
           </Show>
           <button onClick={() => void claudeReview()} disabled={!review() || claudeBusy()} title="Ask Claude to review the whole PR in the review session (Plan mode: it changes nothing)">
