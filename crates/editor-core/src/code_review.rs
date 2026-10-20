@@ -11,10 +11,10 @@ use crate::attachments::Attachment;
 use crate::git;
 use crate::git_status::ChangeKind;
 use crate::pull_request::{DiffSide, PullRequestComment, PullRequestDetails};
-use crate::session::{DiffLine, DiffLineKind};
+use crate::session::{DiffLine, DiffLineKind, SessionId};
 use crate::setup::SetupInfo;
 
-/// A Code review, as its overlay shows it.
+/// A Code review, as its Tab shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodeReview {
@@ -34,6 +34,9 @@ pub struct CodeReview {
     pub pending: PendingReview,
     /// The Review Worktree's setup, while it runs (or after it failed) in this run of the editor.
     pub setup: Option<SetupInfo>,
+    /// The review Agent session, whose Tab the Code review is; None while the setup runs or after
+    /// it failed (it starts once the setup is finished).
+    pub session: Option<SessionId>,
 }
 
 /// A file the PR changes.

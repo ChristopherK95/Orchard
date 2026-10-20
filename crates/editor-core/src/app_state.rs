@@ -59,6 +59,9 @@ pub(crate) struct WorkspaceState {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SavedCodeReview {
     pub(crate) worktree: PathBuf,
+    /// The PR's title as last opened, which names the review Agent session.
+    #[serde(default)]
+    pub(crate) title: String,
     /// The PR's GraphQL node id, which its Viewed ticks are set with.
     #[serde(default)]
     pub(crate) pull_request_id: String,
@@ -248,6 +251,7 @@ mod tests {
                 7,
                 SavedCodeReview {
                     worktree: PathBuf::from("C:/repo.worktrees/review-pr-7"),
+                    title: "Make it better".into(),
                     pull_request_id: "PR_kw7".into(),
                     head: "abc".into(),
                     merge_base: "def".into(),

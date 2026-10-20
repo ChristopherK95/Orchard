@@ -168,10 +168,11 @@ async fn opening_a_code_review_makes_its_review_worktree_once() {
     assert!(review.setup.is_some(), "its setup runs");
     assert!(setup_outcome(&mut events, &review.worktree).await);
     assert_eq!(runs(&counter), 1);
-    assert!(
-        fake.received("session/new").is_empty(),
-        "no Agent session starts by itself"
-    );
+    // Its review session starts once the setup has finished.
+    eventually("the review session", || {
+        fake.received("session/new").len() == 1
+    })
+    .await;
     let listed = core
         .worktrees()
         .into_iter()
@@ -748,8 +749,7 @@ async fn a_review_worktree_is_read_only() {
         "{discard:?}"
     );
 
-    setup_over(&core, &review.worktree).await;
-    let session = core.new_session_in(&review.worktree).await.unwrap();
+    let session = review.session.expect("the review session");
     let info = core.session_info(session).unwrap();
     assert_eq!(info.permission_mode, PermissionMode::Plan);
     assert!(info.mode_locked);
@@ -798,8 +798,7 @@ async fn a_review_session_is_still_locked_in_plan_mode_after_a_restart() {
     let core = core_with_gh_and_state(&fake, &gh, &state);
     open(&core, &setup.repo()).await;
     let review = core.open_code_review(7).await.unwrap();
-    setup_over(&core, &review.worktree).await;
-    let session = core.new_session_in(&review.worktree).await.unwrap();
+    let session = review.session.expect("the review session");
     // (Only a session that has had a turn is kept as a Tab.)
     core.send_prompt(session, "What does it do?").await.unwrap();
     eventually("the Agent to answer", || {
@@ -1002,4 +1001,230 @@ async fn a_merged_prs_review_is_done() {
     assert_eq!(done(core.merge_overview().await.unwrap()), Some(false));
     std::fs::write(&marker, "").unwrap();
     assert_eq!(done(core.merge_overview().await.unwrap()), Some(true));
+}
+
+/// The ACP id of the conversation `session` last sent a prompt in (the Agent's own id for it).
+fn prompted_acp_id(fake: &FakeAgent) -> String {
+    let prompts = fake.received("session/prompt");
+    let last = prompts.last().expect("a prompt was sent");
+    last["params"]["sessionId"].as_str().unwrap().to_owned()
+}
+
+/// Waits for `session` to have the Agent's answer in its transcript.
+async fn answered(core: &Core, session: editor_core::SessionId) {
+    eventually("the Agent to answer", || {
+        core.transcript(session)
+            .unwrap()
+            .iter()
+            .any(|item| matches!(item, editor_core::TranscriptItem::Agent { .. }))
+    })
+    .await;
+}
+
+/// Takes `acp_id` out of every Recent sessions list in the state file, as if it had been closed so
+/// long ago it dropped out of them.
+fn forget_recent(state: &Path, acp_id: &str) {
+    fn walk(value: &mut serde_json::Value, acp_id: &str) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::Array(recent)) = map.get_mut("recent") {
+                    recent.retain(|s| s["acpId"] != acp_id);
+                }
+                map.values_mut().for_each(|v| walk(v, acp_id));
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(|v| walk(v, acp_id)),
+            _ => {}
+        }
+    }
+    let text = std::fs::read_to_string(state).unwrap();
+    assert!(text.contains(acp_id), "{acp_id} isn't in the state file");
+    let mut saved: serde_json::Value = serde_json::from_str(&text).unwrap();
+    walk(&mut saved, acp_id);
+    std::fs::write(state, serde_json::to_string(&saved).unwrap()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_review_conversation_survives_closing_restarting_and_leaving_recent() {
+    let setup = RepoWithOrigin::new();
+    let head = push_pr(&setup, &[("a", "first\n")], "A");
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let gh = review_gh(&pr_view(&head, true, "[]"), "");
+    let state = fake.state_path();
+    let core = core_with_gh_and_state(&fake, &gh, &state);
+    open(&core, &setup.repo()).await;
+
+    let review = core.open_code_review(7).await.unwrap();
+    let session = review.session.expect("the review session starts with it");
+    let info = core.session_info(session).unwrap();
+    assert_eq!(info.worktree, review.worktree);
+    assert_eq!(info.name, "Review #7 Make it better");
+    core.send_prompt(session, "What does it do?").await.unwrap();
+    answered(&core, session).await;
+    let acp_id = prompted_acp_id(&fake);
+
+    // Its Tab closed, it's in the Recent sessions and comes back from there.
+    core.close_tab(session).await.unwrap();
+    let recent = core.recent_sessions(&review.worktree);
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].acp_id, acp_id);
+    let reopened = core.code_review_session(7).await.unwrap();
+    assert_eq!(core.recent_sessions(&review.worktree).len(), 0);
+    core.send_prompt(reopened, "And then?").await.unwrap();
+    eventually("the second prompt", || {
+        fake.received("session/prompt").len() == 2
+    })
+    .await;
+    assert_eq!(prompted_acp_id(&fake), acp_id);
+    drop(core);
+
+    // After a restart its Tab is back, the same conversation.
+    let core = core_with_gh_and_state(&fake, &gh, &state);
+    open(&core, &setup.repo()).await;
+    let review = core.open_code_review(7).await.unwrap();
+    let restored = review.session.expect("its Tab is back");
+    let tabs: Vec<_> = core
+        .sessions()
+        .into_iter()
+        .filter(|s| s.worktree == review.worktree)
+        .collect();
+    assert_eq!(tabs.len(), 1, "{tabs:?}");
+    assert_eq!(tabs[0].id, restored);
+    assert_eq!(tabs[0].name, "Review #7 Make it better");
+    core.close_tab(restored).await.unwrap();
+    drop(core);
+
+    // Closed so long ago it left the Recent sessions: still that conversation, by its id.
+    forget_recent(&state, &acp_id);
+    let core = core_with_gh_and_state(&fake, &gh, &state);
+    open(&core, &setup.repo()).await;
+    assert!(core.recent_sessions(&review.worktree).is_empty());
+    let loads_before = fake.received("session/load").len();
+    let review = core.open_code_review(7).await.unwrap();
+    let again = review.session.expect("the review session");
+    assert_eq!(core.code_review_session(7).await.unwrap(), again);
+    let loads = fake.received("session/load");
+    assert!(loads.len() > loads_before, "the conversation was loaded");
+    assert_eq!(
+        loads.last().unwrap()["params"]["sessionId"],
+        acp_id.as_str()
+    );
+    assert_eq!(
+        core.session_info(again).unwrap().name,
+        "Review #7 Make it better"
+    );
+    assert_eq!(
+        fake.received("session/new").len(),
+        1,
+        "never started afresh"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn no_other_session_in_a_review_worktree() {
+    let setup = RepoWithOrigin::new();
+    let head = push_pr(&setup, &[("a", "first\n")], "A");
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let gh = review_gh(&pr_view(&head, true, "[]"), "");
+    let core = core_with_gh(&fake, &gh);
+    open(&core, &setup.repo()).await;
+    let review = core.open_code_review(7).await.unwrap();
+    setup_over(&core, &review.worktree).await;
+
+    let refused = core.new_session_in(&review.worktree).await.unwrap_err();
+    assert!(
+        matches!(refused, CoreError::ReviewWorktreeSession),
+        "{refused:?}"
+    );
+    let in_it = core
+        .sessions()
+        .into_iter()
+        .filter(|s| s.worktree == review.worktree)
+        .count();
+    assert_eq!(in_it, 1, "only the review session");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_review_session_starts_when_setup_finishes() {
+    let setup = RepoWithOrigin::new();
+    let head = push_pr(&setup, &[("a", "first\n")], "A");
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let long = "A title much too long to fit on a Tab in full";
+    let view = pr_view(&head, true, "[]").replace("Make it better", long);
+    let gh = review_gh(&view, "");
+    let release = setup.root().join("release-setup");
+    with_setup(
+        &fake,
+        &setup.repo(),
+        &print_then_wait("setting-up", &release),
+    );
+    let core = core_with_gh_and_state(&fake, &gh, &fake.state_path());
+    open(&core, &setup.repo()).await;
+    let mut events = core.subscribe();
+
+    let review = core.open_code_review(7).await.unwrap();
+    assert!(review.setup.is_some());
+    assert_eq!(review.session, None, "not while its setup runs");
+    assert!(fake.received("session/new").is_empty());
+
+    std::fs::write(&release, "").unwrap();
+    let created = next_event(&mut events, "the review session", |e| match e {
+        CoreEvent::SessionCreated { session } if session.worktree == review.worktree => {
+            Some(session)
+        }
+        _ => None,
+    })
+    .await;
+    assert!(created.name.chars().count() <= 40, "{}", created.name);
+    assert!(
+        created.name.starts_with("Review #7 A title"),
+        "{}",
+        created.name
+    );
+    assert!(created.name.ends_with('…'), "{}", created.name);
+    assert_eq!(created.permission_mode, PermissionMode::Plan);
+    let again = core.open_code_review(7).await.unwrap();
+    assert_eq!(again.session, Some(created.id));
+    assert_eq!(fake.received("session/new").len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_conversation_the_agent_cant_resume_gets_a_fresh_session() {
+    let setup = RepoWithOrigin::new();
+    let head = push_pr(&setup, &[("a", "first\n")], "A");
+    let fake = FakeAgent::new(r#"{"turns":[],"failResume":true}"#);
+    let gh = review_gh(&pr_view(&head, true, "[]"), "");
+    let state = fake.state_path();
+    let core = core_with_gh_and_state(&fake, &gh, &state);
+    open(&core, &setup.repo()).await;
+    let review = core.open_code_review(7).await.unwrap();
+    let first = review.session.expect("the review session");
+    // (Never prompted, it has no conversation the Agent could load back.)
+    core.close_tab(first).await.unwrap();
+    assert!(core.recent_sessions(&review.worktree).is_empty());
+
+    let fresh = core.code_review_session(7).await.unwrap();
+    assert_eq!(fake.received("session/new").len(), 2, "a fresh one");
+    let in_it: Vec<_> = core
+        .sessions()
+        .into_iter()
+        .filter(|s| s.worktree == review.worktree)
+        .collect();
+    assert_eq!(in_it.len(), 1, "no dead Tab is left: {in_it:?}");
+    assert_eq!(in_it[0].id, fresh);
+    assert_eq!(in_it[0].state, editor_core::SessionState::Idle);
+    assert_eq!(in_it[0].name, "Review #7 Make it better");
+    assert!(core.recent_sessions(&review.worktree).is_empty());
+
+    // The fresh one is the review's from now on.
+    core.send_prompt(fresh, "Hello").await.unwrap();
+    answered(&core, fresh).await;
+    let fresh_acp = prompted_acp_id(&fake);
+    drop(core);
+    let core = core_with_gh_and_state(&fake, &gh, &state);
+    open(&core, &setup.repo()).await;
+    core.open_code_review(7).await.unwrap();
+    let back = core.code_review_session(7).await.unwrap();
+    core.send_prompt(back, "Still you?").await.unwrap();
+    eventually("the prompt", || fake.received("session/prompt").len() == 2).await;
+    assert_eq!(prompted_acp_id(&fake), fresh_acp);
 }

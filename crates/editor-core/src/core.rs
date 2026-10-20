@@ -215,6 +215,12 @@ fn name_from_title(title: &str) -> Option<String> {
     Some(format!("{}…", cut.trim_end()))
 }
 
+/// The review Agent session's Tab name: "Review #N" and the PR's title, cut as a title is.
+fn review_session_name(number: u64, title: &str) -> String {
+    let name = format!("Review #{number} {title}");
+    name_from_title(&name).unwrap_or(name)
+}
+
 /// A prompt error meaning the Agent no longer has the session (e.g. it was closed under it):
 /// nothing more will happen there, so it counts as Exited.
 fn session_gone(err: &AcpError) -> bool {
@@ -356,6 +362,12 @@ pub struct RecentSession {
     pub worktree: PathBuf,
 }
 
+/// What `take_conversation` found for a conversation: its Tab, or the session to reopen it as.
+enum Conversation {
+    Open(SessionId),
+    Closed(SavedSession),
+}
+
 /// A conversation the Agent has for a Worktree that isn't one of the editor's Tabs or Recent
 /// sessions (one started in a terminal, say), which `open_conversation` opens in a Tab.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -486,6 +498,8 @@ pub enum CoreError {
     ReadOnlyWorktree,
     #[error("an Agent session in a Review Worktree stays in Plan mode")]
     ModeLocked,
+    #[error("a Review Worktree has only its Code review's Agent session")]
+    ReviewWorktreeSession,
     #[error(transparent)]
     Acp(#[from] AcpError),
 }
@@ -748,6 +762,9 @@ struct Inner {
     /// One push, fetch or pull at a time: every Worktree shares the repo's remote refs, and two
     /// fetches would fight over them.
     remote_op: tokio::sync::Mutex<()>,
+    /// One review Agent session started or reopened at a time, so a Code review opening while its
+    /// setup finishes can't get two.
+    review_session_op: tokio::sync::Mutex<()>,
     /// Files open in Manual editors, and popped-out files held for their windows.
     documents: Mutex<DocumentTracker>,
     /// The installed fonts, once they've been looked for.
@@ -1026,6 +1043,7 @@ impl Core {
             last_focus_relist: Mutex::default(),
             merged: Mutex::default(),
             remote_op: tokio::sync::Mutex::new(()),
+            review_session_op: tokio::sync::Mutex::new(()),
             documents: Mutex::default(),
             fonts: tokio::sync::OnceCell::new(),
             terminals: Mutex::default(),
@@ -1300,25 +1318,30 @@ impl Core {
         };
         if review.is_some() {
             self.inner.persist();
+        } else {
             self.inner
-                .set_setup_status(&worktree, SetupStatus::Finished);
-            return;
+                .set_setup_status(&worktree, SetupStatus::StartingSession);
         }
-        self.inner
-            .set_setup_status(&worktree, SetupStatus::StartingSession);
         self.start_first_session(worktree).await;
     }
 
     /// Starts the Worktree's first session on a task of its own: stopping the setup mustn't drop a
     /// `session/new` half way (the Agent would start one nobody closes).
-    /// A Review Worktree's setup starts no session: its review session is the user's to start.
+    /// A Review Worktree's setup ends Finished, and then its review session starts (or its
+    /// conversation is reopened).
     async fn start_first_session(&self, worktree: PathBuf) {
-        if self.is_review_worktree(&worktree).is_some() {
+        let core = self.clone();
+        if let Some(number) = self.is_review_worktree(&worktree) {
             self.inner
                 .set_setup_status(&worktree, SetupStatus::Finished);
+            let started = tokio::spawn(async move { core.code_review_session(number).await }).await;
+            // (Opening the Code review again tries again: its setup is over.)
+            if let Ok(Err(err)) = started {
+                let message = format!("the review Agent session didn't start: {err}\n");
+                self.inner.setup_output(&worktree, message);
+            }
             return;
         }
-        let core = self.clone();
         let _ = tokio::spawn(async move { core.open_first_session(worktree).await }).await;
     }
 
@@ -2546,9 +2569,13 @@ impl Core {
     }
 
     /// Starts a new Agent session in one of the Workspace's Worktrees. A Worktree whose setup hasn't
-    /// finished gets its first session from the setup (or Start anyway), not from here.
+    /// finished gets its first session from the setup (or Start anyway), not from here. A Review
+    /// Worktree gets none: its Code review's session is the only one there.
     pub async fn new_session_in(&self, worktree: &Path) -> Result<SessionId, CoreError> {
         let wanted = worktrees::normalize(worktree.to_owned());
+        if self.is_review_worktree(&wanted).is_some() {
+            return Err(CoreError::ReviewWorktreeSession);
+        }
         let status = self
             .inner
             .state
@@ -2571,6 +2598,15 @@ impl Core {
     }
 
     async fn start_session_in(&self, worktree: &Path) -> Result<SessionId, CoreError> {
+        self.start_named_session_in(worktree, None).await
+    }
+
+    /// `start_session_in`, the Tab named `name` (else the next character name).
+    async fn start_named_session_in(
+        &self,
+        worktree: &Path,
+        name: Option<String>,
+    ) -> Result<SessionId, CoreError> {
         self.workspace()?;
         let wanted = worktrees::normalize(worktree.to_owned());
         let root = self
@@ -2615,7 +2651,7 @@ impl Core {
             } else {
                 let saved = SavedSession {
                     acp_id: acp_id.clone(),
-                    name: state.new_name(),
+                    name: name.unwrap_or_else(|| state.new_name()),
                     worktree: root,
                     permission_mode: mode,
                     files: vec![],
@@ -3319,7 +3355,8 @@ impl Core {
     /// Opens the Code review of PR `number`, which the user must be a reviewer of: its head is
     /// fetched (as `refs/pull/<N>/head`, so a fork's PR works too) and checked out detached in the
     /// PR's Review Worktree, made the first time (`review-pr-<N>`) and reused after. Its Worktree
-    /// setup runs until it has finished once; it starts no Agent session.
+    /// setup runs until it has finished once. Once it has (or if there's none), the review Agent
+    /// session is started or reopened (see `code_review_session`).
     pub async fn open_code_review(&self, number: u64) -> Result<CodeReview, CoreError> {
         let root = self.workspace()?.root;
         let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
@@ -3393,6 +3430,7 @@ impl Core {
                 number,
                 SavedCodeReview {
                     worktree: worktree.clone(),
+                    title: details.title.clone(),
                     pull_request_id: details.id.clone(),
                     base: details.base.clone(),
                     head: head.clone(),
@@ -3440,12 +3478,22 @@ impl Core {
             }),
             None => None,
         };
+        // (While the setup runs, its end starts the session; after a failure, Retry or Start
+        // anyway does.)
+        let setup = self.setup(&worktree);
+        let session = match setup.as_ref().map(|setup| &setup.status) {
+            None | Some(SetupStatus::Finished | SetupStatus::Done { .. }) => {
+                Some(self.code_review_session(number).await?)
+            }
+            Some(_) => None,
+        };
         Ok(CodeReview {
             since_last_review,
             pending,
             number,
             title: details.title,
-            setup: self.setup(&worktree),
+            session,
+            setup,
             worktree,
             head,
             base: details.base,
@@ -3800,27 +3848,28 @@ impl Core {
         Ok(review)
     }
 
-    /// PR `number`'s review Agent session, in its Review Worktree (Plan mode): its Tab if it has
-    /// one, else reopened from the Recent sessions, else a new one. One per PR, kept for a
-    /// re-requested review.
+    /// PR `number`'s review Agent session, in its Review Worktree (Plan mode), named "Review #N"
+    /// and the PR's title: its Tab if it has one, else its conversation reopened by its id (from
+    /// the Recent sessions, or after it has left them). Only if the Agent can't bring that back is
+    /// a new one started. One per PR, kept for a re-requested review.
     pub async fn code_review_session(&self, number: u64) -> Result<SessionId, CoreError> {
+        let _one_at_a_time = self.inner.review_session_op.lock().await;
         let saved = self.saved_review(number)?;
+        let name = review_session_name(number, &saved.title);
         if let Some(acp_id) = &saved.session {
-            let (open, closed) = {
-                let state = self.inner.state.lock().expect("state lock");
-                let open = state.by_acp_id.get(acp_id).copied();
-                let closed = state.recent.iter().any(|s| &s.acp_id == acp_id);
-                (open, closed)
-            };
-            if let Some(id) = open {
+            // (A conversation the Agent no longer has gets a new session instead.)
+            if let Ok(id) = self
+                .open_review_conversation(&saved.worktree, acp_id, &name)
+                .await
+            {
+                self.name_session(id, &name)?;
                 return Ok(id);
-            }
-            if closed {
-                return self.reopen_session(acp_id).await;
             }
         }
         // (Not held back by its Worktree setup, as `new_session_in` is: it only reads.)
-        let id = self.start_session_in(&saved.worktree).await?;
+        let id = self
+            .start_named_session_in(&saved.worktree, Some(name))
+            .await?;
         let acp_id = self.session(id)?.acp_id.clone();
         if let Some(saved) = self
             .inner
@@ -4697,7 +4746,17 @@ impl Core {
             }
         })?;
         let saved = session.saved();
-        let fresh = self.start_session_in(&saved.worktree).await?;
+        // A review session's fresh conversation is the Code review's from now on, as its only one.
+        let review = self.is_review_worktree(&saved.worktree);
+        let name = review.map(|_| saved.name.clone());
+        let fresh = self.start_named_session_in(&saved.worktree, name).await?;
+        if let Some(number) = review {
+            let acp_id = self.session(fresh)?.acp_id.clone();
+            let mut state = self.inner.state.lock().expect("state lock");
+            if let Some(review) = state.code_reviews.get_mut(&number) {
+                review.session = Some(acp_id);
+            }
+        }
         if saved.permission_mode != PermissionMode::AskForEdits {
             // The context is cleared either way; a mode that won't carry over isn't worth failing for.
             let _ = self.set_permission_mode(fresh, saved.permission_mode).await;
@@ -4805,18 +4864,60 @@ impl Core {
         acp_id: &str,
         title: Option<&str>,
     ) -> Result<SessionId, CoreError> {
+        match self.take_conversation(worktree, acp_id, title)? {
+            Conversation::Open(id) => Ok(id),
+            Conversation::Closed(saved) => self.reopen(saved).await,
+        }
+    }
+
+    /// A Code review's conversation back in its Tab, as `open_conversation`, named `name` and
+    /// in Plan mode. Unlike that, a conversation the Agent can't bring back is an error, and its
+    /// Tab is closed (not kept Suspended, nor put in the Recent sessions).
+    async fn open_review_conversation(
+        &self,
+        worktree: &Path,
+        acp_id: &str,
+        name: &str,
+    ) -> Result<SessionId, CoreError> {
+        match self.take_conversation(worktree, acp_id, Some(name))? {
+            Conversation::Open(id) => Ok(id),
+            Conversation::Closed(saved) => {
+                let saved = SavedSession {
+                    name: name.to_owned(),
+                    permission_mode: PermissionMode::Plan,
+                    ..saved
+                };
+                let (id, session, resumed) = self.reopen_claimed(saved).await;
+                if let Err(err) = resumed {
+                    let _ = self.stop_agent(&session).await;
+                    self.forget_session(&session);
+                    return Err(err);
+                }
+                Ok(id)
+            }
+        }
+    }
+
+    /// The Tab with conversation `acp_id`, or else the session to reopen it as: taken from the
+    /// Recent sessions, or (one that has left them, or was never there) named after `title`.
+    fn take_conversation(
+        &self,
+        worktree: &Path,
+        acp_id: &str,
+        title: Option<&str>,
+    ) -> Result<Conversation, CoreError> {
         let wanted = worktrees::normalize(worktree.to_owned());
-        let saved = {
-            let mut state = self.inner.state.lock().expect("state lock");
-            if let Some(&id) = state.by_acp_id.get(acp_id) {
-                return Ok(id);
-            }
-            if !state.worktrees.iter().any(|w| w.path == wanted) {
-                return Err(CoreError::UnknownWorktree(worktree.to_owned()));
-            }
-            if state.removing.contains(&wanted) {
-                return Err(CoreError::BeingRemoved);
-            }
+        let mut state = self.inner.state.lock().expect("state lock");
+        if let Some(&id) = state.by_acp_id.get(acp_id) {
+            return Ok(Conversation::Open(id));
+        }
+        if !state.worktrees.iter().any(|w| w.path == wanted) {
+            return Err(CoreError::UnknownWorktree(worktree.to_owned()));
+        }
+        if state.removing.contains(&wanted) {
+            return Err(CoreError::BeingRemoved);
+        }
+        Ok(Conversation::Closed(
             match state.recent.iter().position(|s| s.acp_id == acp_id) {
                 Some(at) => state.recent.remove(at),
                 None => SavedSession {
@@ -4831,14 +4932,44 @@ impl Core {
                     model: None,
                     last_active: None,
                 },
-            }
+            },
+        ))
+    }
+
+    /// Renames a Tab (saved with the Tabs; its Tab shows it from the next `sessions`).
+    fn name_session(&self, id: SessionId, name: &str) -> Result<(), CoreError> {
+        let session = self.session(id)?;
+        let renamed = {
+            let mut info = session.info.lock().expect("info lock");
+            let renamed = info.name != name;
+            info.name = name.to_owned();
+            renamed
         };
-        self.reopen(saved).await
+        if renamed {
+            self.inner.persist();
+        }
+        Ok(())
     }
 
     /// A closed session back in a Tab: registered already resuming (so nothing else can claim it
     /// first), then its conversation is loaded. If that fails it stays, Suspended, saying why.
     async fn reopen(&self, saved: SavedSession) -> Result<SessionId, CoreError> {
+        let (id, session, resumed) = self.reopen_claimed(saved).await;
+        if let Err(err) = resumed {
+            session.record(|t| {
+                t.push(TranscriptItem::Notice {
+                    text: format!("Couldn't reopen the conversation: {err}"),
+                })
+            });
+        }
+        Ok(id)
+    }
+
+    /// `reopen`'s Tab, and whether its conversation was loaded.
+    async fn reopen_claimed(
+        &self,
+        saved: SavedSession,
+    ) -> (SessionId, Arc<Session>, Result<(), CoreError>) {
         let worktree = saved.worktree.clone();
         let (info, session) = {
             let mut state = self.inner.state.lock().expect("state lock");
@@ -4856,14 +4987,8 @@ impl Core {
         self.inner.recent_changed(&worktree);
         self.inner.persist();
         self.inner.actors_may_change();
-        if let Err(err) = self.inner.resume_claimed(&session, None).await {
-            session.record(|t| {
-                t.push(TranscriptItem::Notice {
-                    text: format!("Couldn't reopen the conversation: {err}"),
-                })
-            });
-        }
-        Ok(id)
+        let resumed = self.inner.resume_claimed(&session, None).await;
+        (id, session, resumed)
     }
 
     /// Sends a prompt; returns once it's on its way. The reply streams to watchers. A Suspended

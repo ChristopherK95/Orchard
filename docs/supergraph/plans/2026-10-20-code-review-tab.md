@@ -15,7 +15,7 @@ Decisions settled with the user:
 - **Overlay:** `CodeReviewOverlay` stops being a modal. The ways in (Dashboard, PR overlay, sidebar badge) open or switch to the review Tab.
 
 ## Task 1: The review session never loses its conversation
-Status: pending
+Status: completed
 Risk: medium
 Dependencies: none
 Files:
