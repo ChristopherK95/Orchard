@@ -635,7 +635,9 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 
 /* Agent prose: full-width markdown, no bubble. */
 .msg.user.markdown { color: var(--user-bubble-fg); }
-.msg.user.markdown strong, .msg.user.markdown code, .msg.user.markdown a { color: inherit; }
+.msg.user.markdown strong, .msg.user.markdown :not(pre) > code, .msg.user.markdown a { color: inherit; }
+/* Inline code takes a tint of the bubble's own text colour, so it stays readable on any bubble colour. */
+.msg.user.markdown :not(pre) > code { background: color-mix(in srgb, var(--user-bubble-fg) 14%, transparent); font-weight: 600; }
 .markdown { font-size: 14px; line-height: 1.65; color: var(--fg-prose); overflow-wrap: break-word; }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
