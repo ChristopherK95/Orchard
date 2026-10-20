@@ -1,11 +1,12 @@
 // Code review (issue 44): going through a PR the user was asked to review, in its Review Worktree.
-// The PR's files with GitHub's Viewed ticks, each file's diff (all of it, or only what changed since
-// the user's last review), the PR's threads under their lines with Reply, and the Pending review's
-// comments, added by picking lines. Submit sends them in one go with Approve, Request changes or
-// Comment. New commits pushed meanwhile are offered with Refresh.
+// It is the review Agent session's Tab: the PR's files with GitHub's Viewed ticks, each file's diff
+// (all of it, or only what changed since the user's last review), the PR's threads under their lines
+// with Reply, and the Pending review's comments, added by picking lines, with Claude in a column on
+// the right. Submit sends them in one go with Approve, Request changes or Comment. New commits pushed
+// meanwhile are offered with Refresh.
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { batch, createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch, type JSX } from "solid-js";
-import { createStore, reconcile } from "solid-js/store";
+import { createStore, reconcile, unwrap } from "solid-js/store";
 import { ago } from "./Chat";
 import {
   core,
@@ -19,6 +20,7 @@ import {
   type PendingComment,
   type Question,
   type SessionId,
+  type SessionInfo,
   type SubmitError,
   type Verdict,
 } from "./core";
@@ -54,6 +56,42 @@ export interface ReviewDock {
   onCollapse: () => void;
 }
 
+/** What a Code review's Tab had when it was last shown, by PR: switching Tabs and back finds it
+ *  as it was (and doesn't fetch the PR again). */
+interface Kept {
+  review: CodeReview;
+  threads: CodeThread[];
+  since: boolean;
+  at: number;
+  sideBySide: boolean;
+  /** How far the diff was scrolled. */
+  scrollTop: number;
+  dockOpen: boolean;
+}
+const kept = new Map<number, Kept>();
+
+/** Opens PR `number`'s Code review (`core.openCodeReview`), keeping what it says for its Tab. */
+export async function openCodeReview(number: number): Promise<CodeReview> {
+  const r = await core.openCodeReview(number);
+  const before = kept.get(number);
+  kept.set(number, before ? { ...before, review: r } : { review: r, threads: [], since: !!r.sinceLastReview, at: 0, sideBySide: false, scrollTop: 0, dockOpen: dockPrefs().open });
+  return r;
+}
+
+/** Claude's column: its width and whether it's open, the same for every Code review. */
+const DOCK_KEY = "orchard.codeReview.dock";
+const DOCK_WIDTH = 520;
+const DOCK_MIN = 380;
+function dockPrefs(): { width: number; open: boolean } {
+  try {
+    const saved = JSON.parse(localStorage.getItem(DOCK_KEY) ?? "{}");
+    return { width: typeof saved.width === "number" ? saved.width : DOCK_WIDTH, open: saved.open !== false };
+  } catch {
+    return { width: DOCK_WIDTH, open: true };
+  }
+}
+const saveDockPrefs = (prefs: { width: number; open: boolean }) => localStorage.setItem(DOCK_KEY, JSON.stringify(prefs));
+
 /** What GitHub's (or the core's) refusal of a submit says, whatever form it came in. */
 function submitError(err: unknown): SubmitError {
   if (err && typeof err === "object" && "kind" in err && "message" in err) return err as SubmitError;
@@ -63,32 +101,33 @@ function submitError(err: unknown): SubmitError {
 const lines = (c: { side: DiffSide; startLine: number | null; line: number }) =>
   `${c.startLine !== null && c.startLine !== c.line ? `lines ${c.startLine}–${c.line}` : `line ${c.line}`}${c.side === "left" ? " (old)" : ""}`;
 
-export function CodeReviewOverlay(props: {
+export function CodeReviewView(props: {
   number: number;
+  /** The review Agent session, whose Tab this is; none until the Review Worktree's setup is over. */
+  session: SessionInfo | undefined;
+  /** Its Tab is the one shown: only then do J / K / V work. */
+  active: boolean;
   colourOf: (worktree: string) => string;
   /** The Review Worktree's setup as the core's events tell it (fresher than what opening said). */
   setupOf: (worktree: string) => SetupView | undefined;
   onOpenSettings: () => void;
-  /** Shows a session's Tab (closing the overlay): where the review session is read when Claude isn't docked. */
-  onShowSession: (id: SessionId) => void;
   /** "Remove Worktree" after Submit: the removal dialog for the Review Worktree. */
   onRemoveWorktree: (worktree: string) => void;
-  /** Claude docked on the right (ReviewChat), once the review has a session; without it "Claude
-   *  review" offers the session's Tab. */
-  dock?: (dock: ReviewDock) => JSX.Element;
-  /** A gutter marker was clicked: the question about those lines (the dock opens and scrolls to it either way). */
+  /** Claude's column (ReviewChat), once the review has its session. */
+  chat: (dock: ReviewDock) => JSX.Element;
+  /** A gutter marker was clicked: the question about those lines (the column opens and scrolls to it either way). */
   onQuestion?: (question: Question) => void;
-  onClose: () => void;
 }) {
+  const before = kept.get(props.number);
   const [review, setReview] = createSignal<CodeReview | null>(null);
   const [loadError, setLoadError] = createSignal("");
   /** Said under the header: a failure (V, a reply, Refresh), or what just happened. */
   const [notice, setNotice] = createSignal<{ text: string; error?: boolean; action?: { label: string; run: () => void } } | null>(null);
   const fail = (what: string) => (err: unknown) => setNotice({ text: `${what}: ${err}`, error: true });
   /** Only the changes since the user's last review (a re-requested review), or the PR's whole diff. */
-  const [since, setSince] = createSignal(false);
-  const [at, setAt] = createSignal(0);
-  const [sideBySide, setSideBySide] = createSignal(false);
+  const [since, setSince] = createSignal(before?.since ?? false);
+  const [at, setAt] = createSignal(before?.at ?? 0);
+  const [sideBySide, setSideBySide] = createSignal(before?.sideBySide ?? false);
   const [diffs, setDiffs] = createStore<Record<string, Loaded>>({});
   /** Viewed ticks changed here since the files were read, by path. */
   const [viewedNow, setViewedNow] = createStore<Record<string, boolean>>({});
@@ -114,14 +153,36 @@ export function CodeReviewOverlay(props: {
       setAt((i) => Math.min(i, Math.max(0, files().length - 1)));
     });
   onMount(async () => {
+    if (before) {
+      // (Pending comments and Viewed ticks as they were here: `kept` has them up to date.)
+      batch(() => {
+        setReview(before.review);
+        setPending(reconcile({ comments: before.review.pending.comments, questions: before.review.pending.questions }));
+        setThreads(before.threads);
+      });
+      if (!before.threads.length) loadThreads(before.review);
+      return;
+    }
     try {
-      const r = await core.openCodeReview(props.number);
+      const r = await openCodeReview(props.number);
       setSince(!!r.sinceLastReview);
       apply(r);
       loadThreads(r);
     } catch (err) {
       setLoadError(String(err));
     }
+  });
+  onCleanup(() => {
+    const r = review();
+    if (!r) return;
+    const ticked = (files: CodeReviewFile[]) => files.map((f) => ({ ...f, viewed: isViewed(f) }));
+    const saved: CodeReview = {
+      ...r,
+      files: ticked(r.files),
+      sinceLastReview: r.sinceLastReview && { ...r.sinceLastReview, files: ticked(r.sinceLastReview.files) },
+      pending: structuredClone(unwrap(pending)),
+    };
+    kept.set(props.number, { review: saved, threads: threads(), since: since(), at: at(), sideBySide: sideBySide(), scrollTop, dockOpen: dockOpen() });
   });
 
   // New commits pushed to the PR: asked every minute (quietly: offline is no news).
@@ -187,7 +248,35 @@ export function CodeReviewOverlay(props: {
     setAt(to);
   };
   let diffBox: HTMLDivElement | undefined;
-  createEffect(on(current, () => diffBox?.scrollTo({ top: 0 })));
+  /** The diff's scroller (DiffView's), and how far down it is. */
+  const scroller = () => diffBox?.querySelector<HTMLElement>(".diff-view") ?? undefined;
+  let scrollTop = before?.scrollTop ?? 0;
+  /** Where the diff goes back to once it has loaded again (the Tab shown again). */
+  let restoreTop = scrollTop;
+  createEffect(
+    on(
+      current,
+      () => {
+        restoreTop = 0;
+        scrollTop = 0;
+        scroller()?.scrollTo({ top: 0 });
+      },
+      { defer: true },
+    ),
+  );
+  createEffect(() => {
+    const file = current();
+    const loaded = file && diffOf(file);
+    if (!loaded || !("lines" in loaded) || !restoreTop) return;
+    const top = restoreTop;
+    restoreTop = 0;
+    requestAnimationFrame(() => scroller()?.scrollTo({ top }));
+  });
+  // (A scroll doesn't bubble: it's caught on its way down.)
+  const onDiffScroll = () => {
+    scrollTop = scroller()?.scrollTop ?? 0;
+    if (menuAt()) closeMenu();
+  };
 
   // Viewed ticks are GitHub's: set there, and put back here if that fails.
   const isViewed = (file: CodeReviewFile) => viewedNow[file.path] ?? file.viewed;
@@ -302,19 +391,21 @@ export function CodeReviewOverlay(props: {
     setReplyingTo(null);
   };
 
-  // Claude: the review session, docked when there's a dock.
-  const [session, setSession] = createSignal<SessionId | null>(null);
-  const [dockOpen, setDockOpen] = createSignal(false);
+  // Claude: the review session, in its column on the right.
+  const session = (): SessionId | null => props.session?.id ?? null;
+  const [dockOpen, setDockOpenNow] = createSignal(before?.dockOpen ?? dockPrefs().open);
+  const setDockOpen = (open: boolean) => {
+    setDockOpenNow(open);
+    saveDockPrefs({ ...dockPrefs(), open });
+  };
   const [asked, setAsked] = createSignal<Attachment[]>([]);
   const [shownQuestion, setShownQuestion] = createSignal<Question | null>(null, { equals: false });
   const [claudeBusy, setClaudeBusy] = createSignal(false);
   const claudeReview = async () => {
     setClaudeBusy(true);
     try {
-      const id = await core.claudeReview(props.number);
-      setSession(id);
-      if (props.dock) setDockOpen(true);
-      else setNotice({ text: "Claude is reviewing the PR in the review session.", action: { label: "Show it", run: () => props.onShowSession(id) } });
+      await core.claudeReview(props.number);
+      setDockOpen(true);
     } catch (err) {
       fail("Couldn't start Claude's review")(err);
     } finally {
@@ -333,9 +424,9 @@ export function CodeReviewOverlay(props: {
       await core.addReviewQuestion(props.number, question);
       setPending("questions", (all) => [...all, question]);
       setAsked((all) => [...all, attachment]);
-      setSession(await core.codeReviewSession(props.number));
-      if (props.dock) setDockOpen(true);
-      else setNotice({ text: `${attachment.name} is kept for your question to Claude.` });
+      // (Its session starts here if the setup is still running.)
+      if (session() === null) await core.codeReviewSession(props.number);
+      setDockOpen(true);
     } catch (err) {
       fail("Couldn't ask Claude")(err);
     }
@@ -343,9 +434,8 @@ export function CodeReviewOverlay(props: {
   /** A gutter marker: the dock opens on the message that asked it. */
   const showQuestion = async (q: Question) => {
     props.onQuestion?.(q);
-    if (!props.dock) return;
     try {
-      if (session() === null) setSession(await core.codeReviewSession(props.number));
+      if (session() === null) await core.codeReviewSession(props.number);
       setDockOpen(true);
       setShownQuestion(q);
     } catch (err) {
@@ -398,29 +488,48 @@ export function CodeReviewOverlay(props: {
   };
   const [showSetup, setShowSetup] = createSignal(false);
 
+  // Only while the file list or the diff has the focus (not Claude's composer, nor another Tab).
+  let reviewPane: HTMLDivElement | undefined;
   useReviewKeys({
     next: () => go(at() + 1),
     previous: () => go(at() - 1),
     toggleViewed: () => current() && toggleViewed(current()!),
-    close: (e) => {
-      // Esc in Claude's composer is the composer's (it stops a turn); the next one closes.
-      if (e.target instanceof HTMLElement && e.target.closest(".cr-dock textarea")) return e.target.blur();
-      if (submitOpen()) return !submitting() && setSubmitOpen(false);
-      if (menuAt()) return closeMenu();
-      if (drafting() || editing() !== null || replyingTo() !== null || moving()) {
-        batch(() => {
-          setDrafting(null);
-          setEditing(null);
-          setReplyingTo(null);
-          setMoving(null);
-          setSelection(null);
-        });
-        return;
-      }
-      props.onClose();
-    },
-    active: () => !submitOpen(),
+    active: () => props.active && !submitOpen(),
+    scope: () => reviewPane,
   });
+  // Shown, the review takes the keys (once it's there to take them).
+  createEffect(() => {
+    if (props.active && review() && !reviewPane?.contains(document.activeElement)) reviewPane?.focus({ preventScroll: true });
+  });
+
+  // Claude's column: dragged wider or narrower by its left edge (380 px to 60% of the view).
+  let root: HTMLDivElement | undefined;
+  const [dockWidth, setDockWidth] = createSignal(dockPrefs().width);
+  const [dragging, setDragging] = createSignal(false);
+  const [viewWidth, setViewWidth] = createSignal(window.innerWidth);
+  onMount(() => {
+    if (!root) return;
+    const watch = new ResizeObserver(() => root && setViewWidth(root.clientWidth));
+    watch.observe(root);
+    onCleanup(() => watch.disconnect());
+  });
+  const clampWidth = (width: number) => Math.round(Math.max(DOCK_MIN, Math.min(width, viewWidth() * 0.6)));
+  const resizeDock = (e: PointerEvent) => {
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
+    const start = e.clientX;
+    const startWidth = clampWidth(dockWidth());
+    setDragging(true);
+    const move = (m: PointerEvent) => setDockWidth(clampWidth(startWidth + start - m.clientX));
+    const up = () => {
+      setDragging(false);
+      saveDockPrefs({ ...dockPrefs(), width: dockWidth() });
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+  };
 
   const onBodyClick = (e: MouseEvent) => void handleTranscriptClick(e, openUrl, () => {}, () => {}, fail("Couldn't open the link"));
 
@@ -548,12 +657,12 @@ export function CodeReviewOverlay(props: {
   const colour = () => (review() ? props.colourOf(review()!.worktree) : "var(--fg-3)");
   const docked = () => {
     const id = session();
-    return props.dock && dockOpen() && id !== null && review() ? id : null;
+    return dockOpen() && id !== null && review() ? id : null;
   };
 
   return (
-    <div class="modal-backdrop review-backdrop" onClick={(e) => e.target === e.currentTarget && props.onClose()}>
-      <div class="modal review-overlay" classList={{ docked: docked() !== null }} role="dialog" aria-label="Code review" style={{ "--c": colour() }}>
+    <div class="code-review-view" ref={root} style={{ "--c": colour() }}>
+      <div class="cr-pane" ref={reviewPane} tabIndex={-1} aria-label="Code review">
         <div class="modal-head review-head">
           <GitPullRequest class="review-mark" />
           <b>
@@ -597,11 +706,6 @@ export function CodeReviewOverlay(props: {
             </Show>
             Claude review
           </button>
-          <Show when={props.dock && session() !== null && !dockOpen()}>
-            <button class="ghost icon" onClick={() => setDockOpen(true)} title="Show Claude (the review session)" aria-label="Show Claude">
-              <PanelRight />
-            </button>
-          </Show>
           <button class="primary" onClick={() => (setSubmitted(null), setSubmitOpen(true))} disabled={!review()} title="Approve, request changes or comment, with the pending comments">
             <Send />
             Submit review
@@ -609,9 +713,17 @@ export function CodeReviewOverlay(props: {
               <span class="badge">{pending.comments.length}</span>
             </Show>
           </button>
-          <button class="ghost icon" onClick={() => props.onClose()} aria-label="Close" title="Close (Esc)">
-            <X />
-          </button>
+          <Show when={session() !== null}>
+            <button
+              class="ghost icon"
+              classList={{ on: dockOpen() }}
+              onClick={() => setDockOpen(!dockOpen())}
+              title={dockOpen() ? "Hide Claude (the review session goes on)" : "Show Claude (the review session)"}
+              aria-label={dockOpen() ? "Hide Claude" : "Show Claude"}
+            >
+              <PanelRight />
+            </button>
+          </Show>
         </div>
         <Show when={settingUp()}>
           {(s) => (
@@ -658,7 +770,7 @@ export function CodeReviewOverlay(props: {
           <Match when={review()}>
             {(r) => (
               <>
-                <div class="review-body" classList={{ docked: docked() !== null }}>
+                <div class="review-body">
                   <ReviewFiles
                     files={files()}
                     current={at()}
@@ -708,7 +820,7 @@ export function CodeReviewOverlay(props: {
                                 <For each={outdatedThreads()}>{(t) => <Thread thread={t} />}</For>
                               </div>
                             </Show>
-                            <div class="review-diff" ref={diffBox} onScroll={() => menuAt() && closeMenu()} onClick={onBodyClick}>
+                            <div class="review-diff" ref={(el) => (diffBox = el, el.addEventListener("scroll", onDiffScroll, true))} onClick={onBodyClick}>
                               <Switch fallback={<p class="muted center review-loading"><Loader class="spin" /> Loading the diff…</p>}>
                                 <Match when={diffOf(file()) && "error" in diffOf(file()) && (diffOf(file()) as { error: string })}>
                                   {(d) => <div class="center muted editor-placeholder">{d().error}</div>}
@@ -735,33 +847,6 @@ export function CodeReviewOverlay(props: {
                       </Show>
                     </Show>
                   </section>
-                  <Show when={docked()}>
-                    {(id) => (
-                      <aside class="cr-dock">
-                        {props.dock!({
-                          number: props.number,
-                          worktree: r().worktree,
-                          session: id(),
-                          asked,
-                          takeAsked: () => {
-                            const all = asked();
-                            setAsked([]);
-                            return all;
-                          },
-                          questions: () => pending.questions,
-                          question: shownQuestion,
-                          draftComment: (q, body) => {
-                            const i = files().findIndex((f) => f.path === q.path);
-                            if (i >= 0) setAt(i);
-                            const sel = { side: q.side, startLine: q.startLine, line: q.line };
-                            setSelection(sel);
-                            setDrafting({ ...sel, body, fromQuestion: true });
-                          },
-                          onCollapse: () => setDockOpen(false),
-                        })}
-                      </aside>
-                    )}
-                  </Show>
                 </div>
                 <div class="modal-foot review-foot">
                   <span class="hint">
@@ -868,15 +953,15 @@ export function CodeReviewOverlay(props: {
                       </p>
                     </div>
                     <div class="modal-foot">
-                      <button class={done().removable ? "ghost" : "primary"} onClick={() => props.onClose()}>
+                      <button class={done().removable ? "ghost" : "primary"} onClick={() => setSubmitOpen(false)}>
                         Close
                       </button>
                       <Show when={done().removable}>
                         <button
                           class="primary"
                           onClick={() => {
+                            setSubmitOpen(false);
                             props.onRemoveWorktree(review()!.worktree);
-                            props.onClose();
                           }}
                         >
                           <Trash2 />
@@ -891,6 +976,49 @@ export function CodeReviewOverlay(props: {
           </div>
         </Show>
       </div>
+      <Show when={review() && session() !== null}>
+        <Show
+          when={docked()}
+          fallback={
+            <div class="cr-dock-strip">
+              <button class="ghost icon" onClick={() => setDockOpen(true)} title="Show Claude (the review session)" aria-label="Show Claude">
+                <Sparkles />
+              </button>
+            </div>
+          }
+        >
+          {(id) => (
+            <>
+              <div class="cr-dock-resize" classList={{ dragging: dragging() }} onPointerDown={resizeDock} title="Drag to resize">
+                <span class="grip" />
+              </div>
+              <aside class="cr-dock" style={{ width: `${clampWidth(dockWidth())}px` }}>
+                {props.chat({
+                  number: props.number,
+                  worktree: review()!.worktree,
+                  session: id(),
+                  asked,
+                  takeAsked: () => {
+                    const all = asked();
+                    setAsked([]);
+                    return all;
+                  },
+                  questions: () => pending.questions,
+                  question: shownQuestion,
+                  draftComment: (q, body) => {
+                    const i = files().findIndex((f) => f.path === q.path);
+                    if (i >= 0) setAt(i);
+                    const sel = { side: q.side, startLine: q.startLine, line: q.line };
+                    setSelection(sel);
+                    setDrafting({ ...sel, body, fromQuestion: true });
+                  },
+                  onCollapse: () => setDockOpen(false),
+                })}
+              </aside>
+            </>
+          )}
+        </Show>
+      </Show>
     </div>
   );
 }

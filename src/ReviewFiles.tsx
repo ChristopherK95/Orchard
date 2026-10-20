@@ -1,5 +1,5 @@
 // The file list of a Review (ticket 42) and of a Code review (issue 44): each changed file with its
-// Viewed tick, how many have been viewed, and a filter box. Also the J/K/V/Esc keys both share.
+// Viewed tick, how many have been viewed, and a filter box. Also the J/K/V(/Esc) keys both share.
 import { children, createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
 import type { BaseChange } from "./core";
 import { Check, Loader } from "./icons";
@@ -114,22 +114,25 @@ function Progress(props: { viewed: number; total: number }) {
   );
 }
 
-/** J / → next file, K / ← previous, V ticks Viewed, Esc `close` (always, typing or not). The other
- *  keys only while `active` and not typing in a field. Captured, so they come before the diff's own. */
+/** J / → next file, K / ← previous, V ticks Viewed, Esc `close` if given (always, typing or not).
+ *  The other keys only while `active`, not typing in a field, and (given a `scope`) while the focus
+ *  is inside it. Captured, so they come before the diff's own. */
 export function useReviewKeys(keys: {
   next: () => void;
   previous: () => void;
   toggleViewed: () => void;
-  close: (e: KeyboardEvent) => void;
+  close?: (e: KeyboardEvent) => void;
   active?: () => boolean;
+  scope?: () => HTMLElement | undefined;
 }) {
   const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Escape") {
+    if (e.key === "Escape" && keys.close) {
       e.preventDefault();
       keys.close(e);
       return;
     }
     if ((keys.active && !keys.active()) || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (keys.scope && !keys.scope()?.contains(document.activeElement)) return;
     const typing = e.target instanceof HTMLElement && e.target.closest("input, textarea, select");
     if (typing) return;
     if (e.key === "j" || e.key === "ArrowRight") (e.preventDefault(), keys.next());

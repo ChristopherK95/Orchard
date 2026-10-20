@@ -1,9 +1,9 @@
-// Claude docked in the Code review (issue 44): the review session's transcript and composer on the
-// overlay's right, in a view slot of its own. "Ask Claude"'s lines arrive in the composer as
+// Claude in the Code review (issue 44): the review session's transcript and composer in a column on
+// the Code review's right, in a view slot of its own. "Ask Claude"'s lines arrive in the composer as
 // attachments; an answer to one can become a draft comment on those lines.
 import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
 import { addAttachment, Composer } from "./Chat";
-import type { ReviewDock } from "./CodeReviewOverlay";
+import type { ReviewDock } from "./CodeReviewView";
 import type { PermissionRequest, Question, SessionId, SessionInfo, TranscriptItem } from "./core";
 import { Loader, MessageSquare, PanelRight, Sparkles, X } from "./icons";
 import { StateDot } from "./StateDot";

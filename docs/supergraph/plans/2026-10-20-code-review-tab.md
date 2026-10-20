@@ -83,7 +83,7 @@ Checkpoint:
 - Commit: `Code review: bindings know the review's session`
 
 ## Task 3: CodeReviewOverlay becomes CodeReviewView
-Status: pending
+Status: completed
 Risk: high
 Dependencies: Task 2
 Files:

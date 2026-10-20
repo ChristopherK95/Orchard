@@ -33,7 +33,7 @@ import { myPrs, PrBoard, watchMyPrs } from "./PrBoard";
 import { reviewRequests, statistics, watchAttention, watchCleanUp, watchReviewRequests, watchStatistics } from "./dashboardData";
 import { PrButton, PrOverlay } from "./PrOverlay";
 import { ReviewOverlay } from "./ReviewOverlay";
-import { CodeReviewOverlay } from "./CodeReviewOverlay";
+import { CodeReviewView } from "./CodeReviewView";
 import { ReviewChat } from "./ReviewChat";
 import type { OpenRequest } from "./ManualEditor";
 // CodeMirror loads with the first file opened, not at startup.
@@ -1460,21 +1460,20 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       </Show>
       <Show when={codeReviewOf()}>
         {(of) => (
-          <CodeReviewOverlay
+          <div class="modal-backdrop review-backdrop" onClick={(e) => e.target === e.currentTarget && setCodeReviewOf(null)}>
+          <div class="modal review-overlay docked">
+          <CodeReviewView
             number={of().number}
+            session={sessionsIn(worktrees().find((w) => w.review === of().number)?.path ?? "")[0]}
+            active={true}
             colourOf={worktreeColour}
             setupOf={(path) => setups[path]}
             onOpenSettings={() => {
               setCodeReviewOf(null);
               openSettingsPage("repo");
             }}
-            onShowSession={(id) => {
-              setCodeReviewOf(null);
-              toMainView();
-              void show(id);
-            }}
             onRemoveWorktree={(path) => setRemoving(rowWorktrees().find((w) => w.path === path) ?? null)}
-            dock={(dock) => (
+            chat={(dock) => (
               <ReviewChat
                 dock={dock}
                 session={sessions[dock.session]}
@@ -1490,8 +1489,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
                 }}
               />
             )}
-            onClose={() => setCodeReviewOf(null)}
           />
+          </div>
+          </div>
         )}
       </Show>
       <Show when={branchPopover()}>
