@@ -90,15 +90,15 @@ Going through everything a Worktree's pull request would bring, file by file (co
 _Avoid_: Code review (that's reviewing someone else's PR), diff view
 
 **Code review**:
-Going through a pull request the user is a reviewer on, file by file, in its Review Worktree: the PR's head against its merge base with the PR's base branch (or, on a re-requested review, only what changed since the user's last review), Viewed ticks shared with GitHub, the PR's threads under their lines (with Reply), comments on lines held in the Pending review, and a verdict (Approve, Request changes or Comment) submitted with them. New commits pushed meanwhile are offered with Refresh. One review Agent session per PR, docked beside it, can review the whole PR ("Claude review") or answer a question about selected lines ("Ask Claude"); nothing it writes is posted without the user.
+Going through a pull request the user is a reviewer on, file by file, in its Review Worktree: the PR's head against its merge base with the PR's base branch (or, on a re-requested review, only what changed since the user's last review), Viewed ticks shared with GitHub, the PR's threads under their lines (with Reply), comments on lines held in the Pending review, and a verdict (Approve, Request changes or Comment) submitted with them. New commits pushed meanwhile are offered with Refresh. It is the review Agent session's Tab (not an overlay), so the user can switch to their own work and back; that one session per PR, its chat in a column beside the diff, can review the whole PR ("Claude review") or answer a question about selected lines ("Ask Claude"); nothing it writes is posted without the user. Its conversation survives closing the Tab and restarts.
 _Avoid_: Review (that's the user's own Worktree before its PR is opened), PR review screen
 
 **Review Worktree**:
-The Worktree a Code review is read in: `review-pr-<N>`, detached at the PR's fetched head (so a fork's PR works too), never on a branch and never the user's own Worktree on the PR's branch. Read-only: its files open read-only in the Manual editor and its Agent sessions stay in Plan mode. It carries a "Review" badge, and the Worktrees overview counts it ready to remove once its review is submitted or the PR is merged or closed.
+The Worktree a Code review is read in: `review-pr-<N>`, detached at the PR's fetched head (so a fork's PR works too), never on a branch and never the user's own Worktree on the PR's branch. Read-only: its files open read-only in the Manual editor, and it holds only its Code review's Agent session, which stays in Plan mode. It carries a "Review" badge, and the Worktrees overview counts it ready to remove once its review is submitted or the PR is merged or closed.
 _Avoid_: Review checkout, PR worktree
 
 **Pending review**:
-The comments on lines of a Code review not sent yet, with the lines asked Claude about, kept by the editor (they survive closing the overlay and restarts) and sent in one go with the verdict. A failed submit keeps it as it was. A comment whose line went away with new commits stays on its file as outdated, to be moved or removed.
+The comments on lines of a Code review not sent yet, with the lines asked Claude about, kept by the editor (they survive closing the Code review's Tab and restarts) and sent in one go with the verdict. A failed submit keeps it as it was. A comment whose line went away with new commits stays on its file as outdated, to be moved or removed.
 _Avoid_: Draft review, GitHub's pending review (the editor keeps it, not GitHub)
 
 **Agent**:

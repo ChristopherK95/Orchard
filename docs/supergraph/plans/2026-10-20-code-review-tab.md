@@ -195,7 +195,7 @@ Checkpoint:
 - Commit: `Code review: new commits show on the review's Tab while you work elsewhere`
 
 ## Task 6: Glossary, issue 44 and final verification
-Status: pending
+Status: completed
 Risk: low
 Dependencies: Task 5
 Files:
