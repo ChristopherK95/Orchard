@@ -553,7 +553,7 @@ export function CodeReviewOverlay(props: {
 
   return (
     <div class="modal-backdrop review-backdrop" onClick={(e) => e.target === e.currentTarget && props.onClose()}>
-      <div class="modal review-overlay" role="dialog" aria-label="Code review" style={{ "--c": colour() }}>
+      <div class="modal review-overlay" classList={{ docked: docked() !== null }} role="dialog" aria-label="Code review" style={{ "--c": colour() }}>
         <div class="modal-head review-head">
           <GitPullRequest class="review-mark" />
           <b>

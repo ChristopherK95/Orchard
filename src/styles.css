@@ -818,7 +818,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-resize; }
 .composer-resize:hover .grip, .composer-resize.dragging .grip { opacity: 1; }
 .composer-bar { display: flex; align-items: center; gap: 6px; }
-.composer-bar .hint { font-size: 12px; color: var(--fg-3); }
+.composer-bar .hint { font-size: 12px; color: var(--fg-3); white-space: nowrap; }
 .composer-bar .send { min-height: 28px; padding: 0 10px; }
 .composer-bar .send.icon-only { width: 30px; padding: 0; }
 .composer-bar .attach { min-height: 28px; width: 28px; padding: 0; color: var(--fg-3); }
@@ -1617,7 +1617,9 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .cr-notice .grow { flex: 1; }
 .cr-notice .icon { min-height: 22px; width: 22px; }
 .cr-notice .lucide { flex: none; width: 13px; height: 13px; }
-.review-body.docked { grid-template-columns: minmax(200px, 260px) minmax(0, 1fr) minmax(320px, 420px); }
+/* Docked, Claude takes the whole window's width: its composer bar needs about 520 px. */
+.modal.review-overlay.docked { width: 100%; }
+.review-body.docked { grid-template-columns: minmax(180px, 240px) minmax(0, 1fr) minmax(520px, 38%); }
 .cr-dock { min-width: 0; min-height: 0; display: flex; flex-direction: column; margin-left: 8px; border-radius: var(--r-lg); background: var(--bg-1); overflow: hidden; }
 .cr-dock-head { flex: none; display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
 .cr-dock-head > .lucide { flex: none; width: 14px; height: 14px; color: var(--c, var(--fg-2)); }
