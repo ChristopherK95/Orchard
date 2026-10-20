@@ -738,6 +738,8 @@ export interface CodeReview {
   pending: PendingReview;
   /** The Review Worktree's setup, while it runs (or after it failed) in this run of the editor. */
   setup: SetupInfo | null;
+  /** The review Agent session, whose Tab the Code review is; null while the setup runs or after it failed. */
+  session: SessionId | null;
 }
 
 /** A file the PR changes. */

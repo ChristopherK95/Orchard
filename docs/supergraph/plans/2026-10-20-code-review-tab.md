@@ -56,7 +56,7 @@ Checkpoint:
 - Commit: `Code review: Claude's conversation in a review is never lost`
 
 ## Task 2: Bindings
-Status: pending
+Status: completed
 Risk: low
 Dependencies: Task 1
 Files:
