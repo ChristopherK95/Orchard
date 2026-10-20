@@ -81,6 +81,9 @@ pub struct RemovalCheck {
     pub discard_to_delete_branch: bool,
     /// Identifies exactly the work listed here; "Discard and remove" sends it back.
     pub fingerprint: String,
+    /// In a Review Worktree, its review Agent session (if among `sessions`): it goes with the
+    /// Review Worktree, so it doesn't hold removal back as another session would.
+    pub review_session: Option<SessionId>,
 }
 
 /// The facts a check is made from.
@@ -118,6 +121,7 @@ impl RemovalCheck {
             merged: facts.merged,
             merged_into: facts.merged_into,
             fingerprint: facts.fingerprint,
+            review_session: None,
         }
     }
 

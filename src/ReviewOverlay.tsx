@@ -10,16 +10,11 @@ import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMo
 import { createStore, reconcile } from "solid-js/store";
 import { core, type OpenPullRequest, type PushToPullRequestOutcome, type PullRequestProgress, type SessionId, type SessionInfo, type CommitChanges, type DiffLine, type PullRequestOutcome, type Review, type ReviewCommit, type ReviewFile } from "./core";
 import { DiffView } from "./DiffView";
+import { LETTER, ReviewFiles, useReviewKeys } from "./ReviewFiles";
 import { languageOfPath } from "./highlight";
 import { ArrowUp, Send, Check, ChevronLeft, ChevronRight, CircleCheck, Copy, ExternalLink, GitBranch, GitPullRequest, Loader, RefreshCw, TriangleAlert, X } from "./icons";
 
-const LETTER = { added: "A", modified: "M", deleted: "D", renamed: "R" } as const;
 const plural = (n: number, thing: string) => `${n} ${thing}${n === 1 ? "" : "s"}`;
-
-function splitPath(path: string) {
-  const slash = path.lastIndexOf("/");
-  return { name: path.slice(slash + 1), dir: slash < 0 ? "" : path.slice(0, slash + 1) };
-}
 
 /** A diff's identity: a file marked viewed stays so only while its diff is the same. */
 const signature = (lines: DiffLine[]) => {
@@ -359,24 +354,18 @@ export function ReviewOverlay(props: {
     }
   };
 
-  // Keys: j / → next file, k / ← previous, v viewed, Esc closes (or steps back from the PR form).
-  const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
+  // Esc closes (or steps back from the PR form).
+  useReviewKeys({
+    next,
+    previous: () => go(at() - 1),
+    toggleViewed: () => current() && !scope() && setViewed(current()!, !isViewed(current()!)),
+    close: () => {
       if (creating()) return;
       if (step() === "pr" || step() === "push") setStep("review");
       else props.onClose();
-      return;
-    }
-    if (step() !== "review" || e.ctrlKey || e.metaKey || e.altKey) return;
-    const typing = e.target instanceof HTMLElement && e.target.closest("input, textarea, select");
-    if (typing) return;
-    if (e.key === "j" || e.key === "ArrowRight") (e.preventDefault(), next());
-    else if (e.key === "k" || e.key === "ArrowLeft") (e.preventDefault(), go(at() - 1));
-    else if (e.key === "v" && current() && !scope()) (e.preventDefault(), setViewed(current()!, !isViewed(current()!)));
-  };
-  onMount(() => window.addEventListener("keydown", onKey, true));
-  onCleanup(() => window.removeEventListener("keydown", onKey, true));
+    },
+    active: () => step() === "review",
+  });
 
   /** Sends a failure to one of the Worktree's sessions (or a new one) to fix. */
   const sendBlock = () => (
@@ -457,58 +446,44 @@ export function ReviewOverlay(props: {
           </Match>
           <Match when={step() === "review"}>
             <div class="review-body">
-              <nav class="review-files">
-                <Show
-                  when={scope()}
-                  fallback={
-                    <div class="review-progress">
-                      <span>
-                        {viewedCount()} / {allFiles().length} viewed
-                      </span>
-                      <span class="review-bar">
-                        <span style={{ width: `${allFiles().length ? (100 * viewedCount()) / allFiles().length : 0}%` }} />
-                      </span>
-                    </div>
-                  }
-                >
-                  {(c) => (
-                    <div class="review-scope">
-                      <span class="grow">
-                        <span class="mono muted">{c().shortId}</span> {c().subject}
-                        <Show when={c().merge}>
-                          <span class="pill" title="Only how its conflicts were resolved, against git's own merge with the conflict markers left in">
-                            conflict resolutions
-                          </span>
-                        </Show>
-                      </span>
-                      <button class="link" onClick={() => pickCommit(null)} title="Show every file the PR changes again">
-                        All changes
-                      </button>
-                    </div>
-                  )}
-                </Show>
-                <Show when={scopedError()}>
-                  <p class="error small">{scopedError()}</p>
-                </Show>
-                <Show when={!scope() || scopedChanges()} fallback={<Show when={!scopedError()}><p class="muted small center"><Loader class="spin" /></p></Show>}>
-                <For each={files()} fallback={<p class="muted small center">{scope()?.merge ? "Merged without conflicts: nothing was resolved by hand." : scope() ? "This commit changed no files." : `No changes against ${review()!.base}.`}</p>}>
-                  {(file, i) => (
-                    <button class="review-file" classList={{ on: i() === at(), viewed: !scope() && isViewed(file) }} onClick={() => go(i())} title={file.renamedFrom ? `${file.renamedFrom} → ${file.path}` : file.path}>
-                      <span class={`change change-${file.change}`}>{LETTER[file.change]}</span>
-                      <span class="review-file-name">
-                        {splitPath(file.path).name}
-                        <span class="dir">{splitPath(file.path).dir}</span>
-                      </span>
-                      <Show when={file.uncommitted}>
-                        <span class="uncommitted-dot" title="Has changes that aren't committed yet: Create PR commits them" />
+              <ReviewFiles
+                files={files()}
+                current={at()}
+                isViewed={isViewed}
+                onSelect={go}
+                onToggleViewed={(file) => setViewed(file, false)}
+                progress={{ viewed: viewedCount(), total: allFiles().length }}
+                hideViewed={!!scope()}
+                loading={!!scope() && !scopedChanges() && !scopedError()}
+                empty={scopedError() ? "" : scope()?.merge ? "Merged without conflicts: nothing was resolved by hand." : scope() ? "This commit changed no files." : `No changes against ${review()!.base}.`}
+                extra={(file) => (
+                  <Show when={file.uncommitted}>
+                    <span class="uncommitted-dot" title="Has changes that aren't committed yet: Create PR commits them" />
+                  </Show>
+                )}
+                head={
+                  scope() && (
+                    <>
+                      <div class="review-scope">
+                        <span class="grow">
+                          <span class="mono muted">{scope()!.shortId}</span> {scope()!.subject}
+                          <Show when={scope()!.merge}>
+                            <span class="pill" title="Only how its conflicts were resolved, against git's own merge with the conflict markers left in">
+                              conflict resolutions
+                            </span>
+                          </Show>
+                        </span>
+                        <button class="link" onClick={() => pickCommit(null)} title="Show every file the PR changes again">
+                          All changes
+                        </button>
+                      </div>
+                      <Show when={scopedError()}>
+                        <p class="error small">{scopedError()}</p>
                       </Show>
-                      <Show when={!scope() && isViewed(file)}>
-                        <Check class="viewed-check" />
-                      </Show>
-                    </button>
-                  )}
-                </For>
-                </Show>
+                    </>
+                  )
+                }
+              >
                 <Show when={review()!.commits.length > 0}>
                   <div class="review-commits">
                     <div class="git-section">
@@ -535,7 +510,7 @@ export function ReviewOverlay(props: {
                     </Show>
                   </div>
                 </Show>
-              </nav>
+              </ReviewFiles>
               <section class="review-main">
                 <Show
                   when={current()}

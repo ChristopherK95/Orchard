@@ -5,6 +5,7 @@ mod acp;
 mod app_state;
 mod attachments;
 mod auto_suspend;
+mod code_review;
 mod core;
 mod create_worktree;
 mod dashboard;
@@ -34,6 +35,10 @@ mod worktrees;
 pub use crate::acp::{AcpError, AdapterCommand, PROTOCOL_VERSION};
 pub use crate::attachments::Attachment;
 pub use crate::auto_suspend::{AutoSuspendReason, Clock, MemoryProbe, MemorySample};
+pub use crate::code_review::{
+    CodeReview, CodeReviewFile, NewReviewComment, PendingComment, PendingReview, Question,
+    SinceLastReview, Verdict,
+};
 pub use crate::core::{
     AutoSuspension, Core, CoreConfig, CoreError, CoreEvent, OtherConversation, QueuedPrompt,
     RecentSession, RecentWorkspace, SessionUsage, SlashCommand, TranscriptStream, WorkspaceInfo,
@@ -49,13 +54,13 @@ pub use crate::git_status::{
     BaseChange, BaseChanges, ChangeKind, CommitOutcome, CommitRequest, GitFile, GitOperation,
     GitStatus, LastCommit, PullOutcome, PushOutcome,
 };
-pub use crate::merged::{MergeState, WorktreeMerge};
+pub use crate::merged::{MergeState, ReviewRow, WorktreeMerge};
 pub use crate::node::NodeInstall;
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};
 pub use crate::process::host_env;
 pub use crate::pull_request::{
-    ActionsJob, Check, CheckOutcome, CodeThread, CommitChanges, MyPullRequest, OpenPullRequest,
-    PullRequestComment, PullRequestCommit, PullRequestDetails, PullRequestLabel,
+    ActionsJob, Check, CheckOutcome, CodeThread, CommitChanges, DiffSide, MyPullRequest,
+    OpenPullRequest, PullRequestComment, PullRequestCommit, PullRequestDetails, PullRequestLabel,
     PullRequestOutcome, PullRequestProgress, PullRequestRequest, PullRequestStage,
     PullRequestState, PushToPullRequestOutcome, Review, ReviewCommit, ReviewFile, Reviewer,
     ReviewerState, SubmittedReview, Team,

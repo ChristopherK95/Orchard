@@ -12,10 +12,13 @@ use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::acp::{AcpError, AdapterCommand, Connection, Incoming, Responder, PROTOCOL_VERSION};
-use crate::app_state::{self, AppState, SavedSession, WorkspaceState};
+use crate::app_state::{self, AppState, SavedCodeReview, SavedSession, WorkspaceState};
 use crate::attachments::{self, Attachment};
 use crate::auto_suspend::{
     self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, SystemClock, SystemProbe,
+};
+use crate::code_review::{
+    self, CodeReview, NewReviewComment, PendingComment, Question, SinceLastReview, Verdict,
 };
 use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 use crate::dashboard::{self, ReviewRequest, WorktreeAttention};
@@ -31,13 +34,13 @@ use crate::git_status::{
     BaseChange, BaseChanges, ChangeKind, CommitOutcome, CommitRequest, GitStatus, PullOutcome,
     PushOutcome,
 };
-use crate::merged::{self, MergeState, WorktreeMerge};
+use crate::merged::{self, MergeState, ReviewRow, WorktreeMerge};
 use crate::names;
 use crate::permissions;
 use crate::pull_request::{
-    CommitChanges, MyPullRequest, OpenPullRequest, PullRequestDetails, PullRequestOutcome,
-    PullRequestProgress, PullRequestRequest, PushToPullRequestOutcome, Review, ReviewCommit,
-    ReviewFile,
+    CommitChanges, DiffSide, MyPullRequest, OpenPullRequest, PullRequestComment,
+    PullRequestDetails, PullRequestOutcome, PullRequestProgress, PullRequestRequest,
+    PushToPullRequestOutcome, Review, ReviewCommit, ReviewFile,
 };
 use crate::remove_worktree::{self, RemovalCheck, RemoveWorktree, RemovedWorktree};
 use crate::session::{
@@ -212,6 +215,12 @@ fn name_from_title(title: &str) -> Option<String> {
     Some(format!("{}…", cut.trim_end()))
 }
 
+/// The review Agent session's Tab name: "Review #N" and the PR's title, cut as a title is.
+fn review_session_name(number: u64, title: &str) -> String {
+    let name = format!("Review #{number} {title}");
+    name_from_title(&name).unwrap_or(name)
+}
+
 /// A prompt error meaning the Agent no longer has the session (e.g. it was closed under it):
 /// nothing more will happen there, so it counts as Exited.
 fn session_gone(err: &AcpError) -> bool {
@@ -353,6 +362,12 @@ pub struct RecentSession {
     pub worktree: PathBuf,
 }
 
+/// What `take_conversation` found for a conversation: its Tab, or the session to reopen it as.
+enum Conversation {
+    Open(SessionId),
+    Closed(SavedSession),
+}
+
 /// A conversation the Agent has for a Worktree that isn't one of the editor's Tabs or Recent
 /// sessions (one started in a terminal, say), which `open_conversation` opens in a Tab.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -463,6 +478,28 @@ pub enum CoreError {
     Terminal(String),
     #[error("statistics cover 7, 30 or 90 days, not {0}")]
     UnknownPeriod(u32),
+    #[error("there's no PR #{0} in this repository")]
+    UnknownPullRequest(u64),
+    #[error("you aren't a reviewer of this PR, so it can't have a Code review here")]
+    NotAReviewer,
+    #[error("PR #{0} has no Code review open")]
+    NoCodeReview(u64),
+    #[error("those lines aren't in the PR's diff, so GitHub can't take a comment on them")]
+    NotInDiff,
+    #[error("that comment isn't in the Pending review")]
+    UnknownReviewComment,
+    #[error("{count} comment(s) are outdated: move or remove them, then submit")]
+    OutdatedComments { count: usize },
+    #[error("say something in the summary, or comment on a line, to submit this")]
+    EmptyReview,
+    #[error("GitHub didn't take the review: {message}")]
+    SubmitFailed { message: String, paths: Vec<String> },
+    #[error("this is a Review Worktree: its files are the PR's and can't be changed")]
+    ReadOnlyWorktree,
+    #[error("an Agent session in a Review Worktree stays in Plan mode")]
+    ModeLocked,
+    #[error("a Review Worktree has only its Code review's Agent session")]
+    ReviewWorktreeSession,
     #[error(transparent)]
     Acp(#[from] AcpError),
 }
@@ -642,6 +679,11 @@ pub enum CoreEvent {
         worktree: PathBuf,
         text: String,
     },
+    /// PR `number`'s Pending review changed (a comment added, edited or removed, a question asked,
+    /// or the review submitted).
+    PendingReviewChanged {
+        number: u64,
+    },
 }
 
 /// Batches of transcript changes for one session, flushed about once per frame.
@@ -720,6 +762,9 @@ struct Inner {
     /// One push, fetch or pull at a time: every Worktree shares the repo's remote refs, and two
     /// fetches would fight over them.
     remote_op: tokio::sync::Mutex<()>,
+    /// One review Agent session started or reopened at a time, so a Code review opening while its
+    /// setup finishes can't get two.
+    review_session_op: tokio::sync::Mutex<()>,
     /// Files open in Manual editors, and popped-out files held for their windows.
     documents: Mutex<DocumentTracker>,
     /// The installed fonts, once they've been looked for.
@@ -759,6 +804,8 @@ struct State {
     sessions: HashMap<SessionId, Arc<Session>>,
     by_acp_id: HashMap<String, SessionId>,
     next_session: u64,
+    /// The Code reviews with a Review Worktree, by PR number.
+    code_reviews: BTreeMap<u64, SavedCodeReview>,
 }
 
 impl State {
@@ -766,6 +813,21 @@ impl State {
     fn new_name(&mut self) -> String {
         self.last_name += 1;
         names::character_name(self.last_name)
+    }
+
+    /// The PR whose Code review `worktree` is the Review Worktree of.
+    fn review_of(&self, worktree: &Path) -> Option<u64> {
+        self.code_reviews
+            .iter()
+            .find(|(_, review)| review.worktree == worktree)
+            .map(|(number, _)| *number)
+    }
+
+    /// Marks the Review Worktrees in `listed` with their PR.
+    fn mark_reviews(&self, listed: &mut [WorktreeInfo]) {
+        for worktree in listed {
+            worktree.review = self.review_of(&worktree.path);
+        }
     }
 
     /// Keeps `new_name` clear of a remembered name.
@@ -981,6 +1043,7 @@ impl Core {
             last_focus_relist: Mutex::default(),
             merged: Mutex::default(),
             remote_op: tokio::sync::Mutex::new(()),
+            review_session_op: tokio::sync::Mutex::new(()),
             documents: Mutex::default(),
             fonts: tokio::sync::OnceCell::new(),
             terminals: Mutex::default(),
@@ -1245,15 +1308,40 @@ impl Core {
                 return;
             }
         }
-        self.inner
-            .set_setup_status(&worktree, SetupStatus::StartingSession);
+        let review = {
+            let mut state = self.inner.state.lock().expect("state lock");
+            let number = state.review_of(&worktree);
+            if let Some(saved) = number.and_then(|n| state.code_reviews.get_mut(&n)) {
+                saved.setup_done = true;
+            }
+            number
+        };
+        if review.is_some() {
+            self.inner.persist();
+        } else {
+            self.inner
+                .set_setup_status(&worktree, SetupStatus::StartingSession);
+        }
         self.start_first_session(worktree).await;
     }
 
     /// Starts the Worktree's first session on a task of its own: stopping the setup mustn't drop a
     /// `session/new` half way (the Agent would start one nobody closes).
+    /// A Review Worktree's setup ends Finished, and then its review session starts (or its
+    /// conversation is reopened).
     async fn start_first_session(&self, worktree: PathBuf) {
         let core = self.clone();
+        if let Some(number) = self.is_review_worktree(&worktree) {
+            self.inner
+                .set_setup_status(&worktree, SetupStatus::Finished);
+            let started = tokio::spawn(async move { core.code_review_session(number).await }).await;
+            // (Opening the Code review again tries again: its setup is over.)
+            if let Ok(Err(err)) = started {
+                let message = format!("the review Agent session didn't start: {err}\n");
+                self.inner.setup_output(&worktree, message);
+            }
+            return;
+        }
         let _ = tokio::spawn(async move { core.open_first_session(worktree).await }).await;
     }
 
@@ -2024,6 +2112,9 @@ impl Core {
                 state.recent.retain(|s| s.worktree != info.path);
             }
         }
+        if removed.is_ok() {
+            self.forget_code_review(&root, &info.path).await;
+        }
         self.inner.refresh_worktrees().await;
         if removed.is_ok() {
             self.inner.recent_changed(&info.path);
@@ -2164,6 +2255,23 @@ impl Core {
             .map(|s| s.info.lock().expect("info lock").id)
             .collect();
         check.sessions.sort();
+        let review = {
+            let state = self.inner.state.lock().expect("state lock");
+            state.review_of(&info.path).map(|number| {
+                let session = state.code_reviews[&number]
+                    .session
+                    .as_ref()
+                    .and_then(|acp_id| state.by_acp_id.get(acp_id).copied());
+                (number, session)
+            })
+        };
+        if let Some((_, session)) = review {
+            // Its commits are the PR's, on GitHub: removing it loses none of them.
+            check.unpushed.clear();
+            check.unpushed_count = 0;
+            check.discard_to_remove = check.changed_count > 0;
+            check.review_session = session.filter(|s| check.sessions.contains(s));
+        }
         Ok(check)
     }
 
@@ -2216,8 +2324,21 @@ impl Core {
                 merge: None,
                 error: None,
                 changed: info.changed,
+                review: None,
             };
-            if !info.is_main {
+            if let Some(number) = info.review {
+                let submitted = self
+                    .inner
+                    .state
+                    .lock()
+                    .expect("state lock")
+                    .code_reviews
+                    .get(&number)
+                    .is_some_and(|saved| saved.submitted);
+                let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+                let done = submitted || code_review::pull_request_over(&gh, &root, number).await;
+                row.review = Some(ReviewRow { number, done });
+            } else if !info.is_main {
                 // (By commit id, resolved in the main checkout: see `resolved_base`.)
                 let base_id = match base_ids.get(&base) {
                     Some(id) => id.clone(),
@@ -2448,9 +2569,13 @@ impl Core {
     }
 
     /// Starts a new Agent session in one of the Workspace's Worktrees. A Worktree whose setup hasn't
-    /// finished gets its first session from the setup (or Start anyway), not from here.
+    /// finished gets its first session from the setup (or Start anyway), not from here. A Review
+    /// Worktree gets none: its Code review's session is the only one there.
     pub async fn new_session_in(&self, worktree: &Path) -> Result<SessionId, CoreError> {
         let wanted = worktrees::normalize(worktree.to_owned());
+        if self.is_review_worktree(&wanted).is_some() {
+            return Err(CoreError::ReviewWorktreeSession);
+        }
         let status = self
             .inner
             .state
@@ -2466,11 +2591,22 @@ impl Core {
             Some(SetupStatus::Failed { .. } | SetupStatus::SessionFailed { .. }) => {
                 Err(CoreError::SetupFailed)
             }
-            Some(SetupStatus::Done { .. }) | None => self.start_session_in(worktree).await,
+            Some(SetupStatus::Done { .. } | SetupStatus::Finished) | None => {
+                self.start_session_in(worktree).await
+            }
         }
     }
 
     async fn start_session_in(&self, worktree: &Path) -> Result<SessionId, CoreError> {
+        self.start_named_session_in(worktree, None).await
+    }
+
+    /// `start_session_in`, the Tab named `name` (else the next character name).
+    async fn start_named_session_in(
+        &self,
+        worktree: &Path,
+        name: Option<String>,
+    ) -> Result<SessionId, CoreError> {
         self.workspace()?;
         let wanted = worktrees::normalize(worktree.to_owned());
         let root = self
@@ -2495,10 +2631,15 @@ impl Core {
             .request("session/new", json!({ "cwd": root, "mcpServers": [] }))
             .await?;
         let acp_id = created["sessionId"].as_str().unwrap_or_default().to_owned();
-        // Every Tab starts in Ask for edits, whatever the Agent's own settings default to.
+        // Every Tab starts in Ask for edits, whatever the Agent's own settings default to; one in a
+        // Review Worktree in Plan mode, where it stays (nothing there may be edited).
+        let mode = match self.is_review_worktree(&root) {
+            Some(_) => PermissionMode::Plan,
+            None => PermissionMode::AskForEdits,
+        };
         let current_mode = created["modes"]["currentModeId"].as_str();
-        if current_mode.is_some_and(|mode| mode != PermissionMode::AskForEdits.acp_id()) {
-            apply_mode(&connection, &acp_id, PermissionMode::AskForEdits).await?;
+        if current_mode.is_some_and(|current| current != mode.acp_id()) {
+            apply_mode(&connection, &acp_id, mode).await?;
         }
 
         // Registered under the same lock `remove_worktree` marks the Worktree under, so a session
@@ -2510,9 +2651,9 @@ impl Core {
             } else {
                 let saved = SavedSession {
                     acp_id: acp_id.clone(),
-                    name: state.new_name(),
+                    name: name.unwrap_or_else(|| state.new_name()),
                     worktree: root,
-                    permission_mode: PermissionMode::AskForEdits,
+                    permission_mode: mode,
                     files: vec![],
                     started: false,
                     model: model_of(&created["configOptions"]),
@@ -2652,10 +2793,26 @@ impl Core {
     /// Opens a file for the Manual editor: one of the Workspace's Worktrees', or the settings file.
     pub async fn read_file(&self, path: &Path) -> Result<OpenedFile, CoreError> {
         let path = self.editable(path)?;
-        tokio::task::spawn_blocking(move || documents::read(&path))
+        let read_only = self.in_review_worktree(&path);
+        let opened = tokio::task::spawn_blocking(move || documents::read(&path))
             .await
             .map_err(|e| CoreError::File(e.to_string()))?
-            .map_err(CoreError::File)
+            .map_err(CoreError::File)?;
+        Ok(match read_only {
+            true => opened.read_only(),
+            false => opened,
+        })
+    }
+
+    /// Whether `path` (canonical) is in a Review Worktree, whose files are the PR's.
+    fn in_review_worktree(&self, path: &Path) -> bool {
+        self.inner
+            .state
+            .lock()
+            .expect("state lock")
+            .code_reviews
+            .values()
+            .any(|review| path.starts_with(&review.worktree))
     }
 
     /// Saves a Manual editor's text (`\n` line endings, written as `line_ending`) if `over`
@@ -2670,6 +2827,9 @@ impl Core {
         window: &str,
     ) -> Result<String, CoreError> {
         let path = self.editable(path)?;
+        if self.in_review_worktree(&path) {
+            return Err(CoreError::ReadOnlyWorktree);
+        }
         let is_settings = self
             .inner
             .config
@@ -3192,6 +3352,653 @@ impl Core {
             .map_err(CoreError::Git)
     }
 
+    /// Opens the Code review of PR `number`, which the user must be a reviewer of: its head is
+    /// fetched (as `refs/pull/<N>/head`, so a fork's PR works too) and checked out detached in the
+    /// PR's Review Worktree, made the first time (`review-pr-<N>`) and reused after. Its Worktree
+    /// setup runs until it has finished once. Once it has (or if there's none), the review Agent
+    /// session is started or reopened (see `code_review_session`).
+    pub async fn open_code_review(&self, number: u64) -> Result<CodeReview, CoreError> {
+        let root = self.workspace()?.root;
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let details = crate::pull_request::details_for(&gh, &root, &number.to_string())
+            .await
+            .map_err(CoreError::Git)?
+            .ok_or(CoreError::UnknownPullRequest(number))?;
+        if !details.viewer_is_reviewer {
+            return Err(CoreError::NotAReviewer);
+        }
+        let review_ref = code_review::review_ref(number);
+        let saved = self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .code_reviews
+            .get(&number)
+            .cloned()
+            .filter(|saved| saved.worktree.is_dir());
+        let (worktree, head, setup_done) = match saved {
+            // (Its head moves on only with Refresh, so the diff stays the Worktree's.)
+            Some(saved) => {
+                let head = match git::resolve_commit(&root, &review_ref).await {
+                    Some(head) => head,
+                    None => {
+                        let head = self.fetch_review_head(&root, number).await?;
+                        git::reset_hard(&saved.worktree, &head)
+                            .await
+                            .map_err(CoreError::Git)?;
+                        head
+                    }
+                };
+                (saved.worktree, head, saved.setup_done)
+            }
+            None => {
+                let head = self.fetch_review_head(&root, number).await?;
+                let spec = NewWorktree::Detached {
+                    name: code_review::folder_name(number),
+                    commit: head.clone(),
+                };
+                let (path, _) = create_worktree::create(&root, &spec).await?;
+                (worktrees::normalize(path), head, false)
+            }
+        };
+        // (The base branch as it is now: its merge base with the head is where the diff starts.)
+        let _ = git::fetch_origin(&root).await;
+        let base = format!("origin/{}", details.base);
+        let merge_base = match git::merge_base_of(&root, &head, &base).await {
+            Ok(merge_base) => merge_base,
+            Err(err) if details.base_oid.is_empty() => return Err(CoreError::Git(err)),
+            Err(_) => git::merge_base_of(&root, &head, &details.base_oid)
+                .await
+                .map_err(CoreError::Git)?,
+        };
+        let last_review = match &details.viewer_last_review_oid {
+            Some(commit) => self.reachable_last_review(&root, number, commit).await,
+            None => None,
+        };
+        let (setup_done, pending) = {
+            let mut state = self.inner.state.lock().expect("state lock");
+            // (A setup finishing meanwhile has said so here; the Pending review stays.)
+            let kept = state
+                .code_reviews
+                .remove(&number)
+                .filter(|saved| saved.worktree == worktree);
+            let kept = kept.unwrap_or_default();
+            let done = setup_done || kept.setup_done;
+            let pending = kept.pending.clone();
+            state.code_reviews.insert(
+                number,
+                SavedCodeReview {
+                    worktree: worktree.clone(),
+                    title: details.title.clone(),
+                    pull_request_id: details.id.clone(),
+                    base: details.base.clone(),
+                    head: head.clone(),
+                    merge_base: merge_base.clone(),
+                    last_review: last_review.clone(),
+                    setup_done: done,
+                    ..kept
+                },
+            );
+            (done, pending)
+        };
+        self.inner.persist();
+        self.inner.refresh_worktrees().await;
+        let running = self.setup(&worktree).is_some_and(|setup| {
+            matches!(
+                setup.status,
+                SetupStatus::Running { .. } | SetupStatus::StartingSession | SetupStatus::Finished
+            )
+        });
+        if !setup_done && !running {
+            self.start_setup(&root, &worktree).await;
+        }
+        let viewed = code_review::viewed_files(&gh, &root, &details.id)
+            .await
+            .map_err(CoreError::Git)?;
+        let ticked = |mut files: Vec<code_review::CodeReviewFile>| {
+            for file in &mut files {
+                file.viewed = viewed.contains(&file.path);
+            }
+            files
+        };
+        let files = ticked(
+            code_review::files(&root, &merge_base, &head)
+                .await
+                .map_err(CoreError::Git)?,
+        );
+        let since_last_review = match last_review {
+            Some(commit) => Some(SinceLastReview {
+                files: ticked(
+                    code_review::files(&root, &commit, &head)
+                        .await
+                        .map_err(CoreError::Git)?,
+                ),
+                commit,
+            }),
+            None => None,
+        };
+        // (While the setup runs, its end starts the session; after a failure, Retry or Start
+        // anyway does.)
+        let setup = self.setup(&worktree);
+        let session = match setup.as_ref().map(|setup| &setup.status) {
+            None | Some(SetupStatus::Finished | SetupStatus::Done { .. }) => {
+                Some(self.code_review_session(number).await?)
+            }
+            Some(_) => None,
+        };
+        Ok(CodeReview {
+            since_last_review,
+            pending,
+            number,
+            title: details.title,
+            session,
+            setup,
+            worktree,
+            head,
+            base: details.base,
+            merge_base,
+            files,
+        })
+    }
+
+    /// Adds a comment on a line or range of the PR's diff to its Pending review (refused if the diff
+    /// doesn't show those lines).
+    pub async fn add_review_comment(
+        &self,
+        number: u64,
+        comment: NewReviewComment,
+    ) -> Result<PendingComment, CoreError> {
+        let diff = self.code_review_diff(number, &comment.path, false).await?;
+        let line_text = code_review::anchor(&diff, comment.side, comment.start_line, comment.line)
+            .ok_or(CoreError::NotInDiff)?;
+        self.change_pending(number, |saved| {
+            // (A review saved before the counter was kept has its ids past the highest.)
+            let highest = saved.pending.comments.iter().map(|c| c.id).max();
+            let id = saved.next_comment_id.max(highest.map_or(1, |h| h + 1));
+            saved.next_comment_id = id + 1;
+            let added = PendingComment {
+                id,
+                path: comment.path,
+                side: comment.side,
+                start_line: comment.start_line,
+                line: comment.line,
+                body: comment.body,
+                line_text,
+                outdated: false,
+                from_question: comment.from_question,
+            };
+            saved.pending.comments.push(added.clone());
+            Ok(added)
+        })
+    }
+
+    /// Changes the text of a comment in the Pending review.
+    pub async fn edit_review_comment(
+        &self,
+        number: u64,
+        id: u64,
+        body: &str,
+    ) -> Result<(), CoreError> {
+        self.change_pending(number, |saved| {
+            let pending = &mut saved.pending;
+            let comment = pending
+                .comments
+                .iter_mut()
+                .find(|c| c.id == id)
+                .ok_or(CoreError::UnknownReviewComment)?;
+            comment.body = body.to_owned();
+            Ok(())
+        })
+    }
+
+    /// Takes a comment out of the Pending review.
+    pub async fn remove_review_comment(&self, number: u64, id: u64) -> Result<(), CoreError> {
+        self.change_pending(number, |saved| {
+            let pending = &mut saved.pending;
+            let before = pending.comments.len();
+            pending.comments.retain(|c| c.id != id);
+            match pending.comments.len() == before {
+                true => Err(CoreError::UnknownReviewComment),
+                false => Ok(()),
+            }
+        })
+    }
+
+    /// Keeps the lines an "Ask Claude" was about, for their gutter marker.
+    pub async fn add_review_question(
+        &self,
+        number: u64,
+        question: Question,
+    ) -> Result<(), CoreError> {
+        self.change_pending(number, |saved| {
+            let pending = &mut saved.pending;
+            pending.questions.push(question);
+            Ok(())
+        })
+    }
+
+    /// Submits the Pending review of PR `number` with `verdict` and `summary`, all its comments in
+    /// one `gh api` call, on the head the Review Worktree is at. Refused while a comment is
+    /// outdated, and (as GitHub does) for a comment or change request saying nothing. A failure
+    /// leaves the Pending review as it was and names the files GitHub's error names.
+    pub async fn submit_review(
+        &self,
+        number: u64,
+        verdict: Verdict,
+        summary: &str,
+    ) -> Result<(), CoreError> {
+        let root = self.workspace()?.root;
+        let saved = self.saved_review(number)?;
+        let comments = &saved.pending.comments;
+        let outdated = comments.iter().filter(|c| c.outdated).count();
+        if outdated > 0 {
+            return Err(CoreError::OutdatedComments { count: outdated });
+        }
+        if verdict != Verdict::Approve && summary.trim().is_empty() && comments.is_empty() {
+            return Err(CoreError::EmptyReview);
+        }
+        let body = code_review::submission(&saved.head, verdict, summary, comments);
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let reviews = format!("repos/{{owner}}/{{repo}}/pulls/{number}/reviews");
+        let args = ["api", "-X", "POST", &reviews, "--input", "-"];
+        if let Err((printed, failure)) =
+            crate::pull_request::gh_text_with_input(&gh, &root, &args, &body.to_string()).await
+        {
+            let paths: Vec<&str> = comments.iter().map(|c| c.path.as_str()).collect();
+            let (message, paths) = code_review::submit_failure(&printed, &failure, &paths);
+            return Err(CoreError::SubmitFailed { message, paths });
+        }
+        if let Some(saved) = self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .code_reviews
+            .get_mut(&number)
+        {
+            saved.submitted = true;
+        }
+        // (Only the comments sent go: one added meanwhile stays pending.)
+        let sent: Vec<u64> = comments.iter().map(|c| c.id).collect();
+        self.change_pending(number, |saved| {
+            let pending = &mut saved.pending;
+            pending.comments.retain(|c| !sent.contains(&c.id));
+            pending.questions.clear();
+            Ok(())
+        })
+    }
+
+    /// Ticks (or unticks) a file of PR `number` Viewed, on GitHub, where the tick is kept.
+    pub async fn set_review_file_viewed(
+        &self,
+        number: u64,
+        path: &str,
+        viewed: bool,
+    ) -> Result<(), CoreError> {
+        let root = self.workspace()?.root;
+        let pull_request_id = self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .code_reviews
+            .get(&number)
+            .map(|saved| saved.pull_request_id.clone())
+            .ok_or(CoreError::NoCodeReview(number))?;
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        code_review::set_viewed(&gh, &root, &pull_request_id, path, viewed)
+            .await
+            .map_err(CoreError::Git)
+    }
+
+    /// Replies to the thread on PR `number`'s code that starts with comment `comment_id`, at once
+    /// (GitHub's review submission can't carry replies), returning the reply as GitHub made it.
+    pub async fn reply_to_thread(
+        &self,
+        number: u64,
+        comment_id: u64,
+        body: &str,
+    ) -> Result<PullRequestComment, CoreError> {
+        let root = self.workspace()?.root;
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let replies =
+            format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments/{comment_id}/replies");
+        let body = format!("body={body}");
+        let args = ["api", "-X", "POST", &replies, "-f", &body];
+        let printed = crate::pull_request::gh_text(&gh, &root, &args)
+            .await
+            .map_err(CoreError::Git)?;
+        code_review::posted_reply(&printed).map_err(CoreError::Git)
+    }
+
+    /// Changes PR `number`'s Pending review with `change`; if it succeeds, saves it and says so.
+    fn change_pending<T>(
+        &self,
+        number: u64,
+        change: impl FnOnce(&mut SavedCodeReview) -> Result<T, CoreError>,
+    ) -> Result<T, CoreError> {
+        let changed = {
+            let mut state = self.inner.state.lock().expect("state lock");
+            let saved = state
+                .code_reviews
+                .get_mut(&number)
+                .ok_or(CoreError::NoCodeReview(number))?;
+            change(saved)?
+        };
+        self.inner.persist();
+        let _ = self
+            .inner
+            .events
+            .send(CoreEvent::PendingReviewChanged { number });
+        Ok(changed)
+    }
+
+    /// The commit of the user's last review, fetched if it isn't here (a force-push since may have
+    /// left it on no branch); None if it can't be had.
+    async fn reachable_last_review(
+        &self,
+        root: &Path,
+        number: u64,
+        commit: &str,
+    ) -> Option<String> {
+        if let Some(commit) = git::resolve_commit(root, commit).await {
+            return Some(commit);
+        }
+        let _one_at_a_time = self.inner.remote_op.lock().await;
+        git::fetch_ref(root, commit, &code_review::last_review_ref(number))
+            .await
+            .ok()
+    }
+
+    /// One file's change in the Code review of PR `number`: from the merge base (or, with
+    /// `since_last_review`, from the commit of the user's last review) to the fetched head; never
+    /// the Review Worktree's files. Empty if the file didn't change in that range.
+    pub async fn code_review_diff(
+        &self,
+        number: u64,
+        path: &str,
+        since_last_review: bool,
+    ) -> Result<Vec<crate::session::DiffLine>, CoreError> {
+        let root = self.workspace()?.root;
+        let saved = self.saved_review(number)?;
+        let from = match (since_last_review, saved.last_review) {
+            (true, Some(commit)) => commit,
+            _ => saved.merge_base,
+        };
+        let changes = git::changes_between(&root, &from, &saved.head)
+            .await
+            .map_err(CoreError::Git)?;
+        let Some((_, _, renamed_from)) = changes.into_iter().find(|(_, p, _)| p == path) else {
+            return Ok(vec![]);
+        };
+        // Git's own diff, not one of ours: GitHub takes comments only on the lines its hunks show.
+        let mut paths = vec![path];
+        paths.extend(renamed_from.as_deref());
+        let out = git::diff_between(&root, &from, &saved.head, &paths)
+            .await
+            .map_err(CoreError::Git)?;
+        let lines = crate::diff::parse_git_diff(&out, MAX_VIEW_DIFF_LINES);
+        if lines.is_empty() && out.contains("Binary files") {
+            return Err(CoreError::File(format!(
+                "{path} isn't text, so there's no diff to show"
+            )));
+        }
+        Ok(lines)
+    }
+
+    /// How many commits were pushed to PR `number` since its Review Worktree's head (one
+    /// `ls-remote`, and a fetch of the new head if there is one); 0 if none were. After a
+    /// force-push, the new head's commits since it split from the base branch.
+    pub async fn code_review_new_commits(&self, number: u64) -> Result<u32, CoreError> {
+        let root = self.workspace()?.root;
+        let saved = self.saved_review(number)?;
+        let pull_head = code_review::pull_head_ref(number);
+        let latest = {
+            let _one_at_a_time = self.inner.remote_op.lock().await;
+            git::ls_remote_ref(&root, &pull_head)
+                .await
+                .map_err(CoreError::Git)?
+        };
+        let Some(latest) = latest.filter(|latest| *latest != saved.head) else {
+            return Ok(0);
+        };
+        if git::resolve_commit(&root, &latest).await.is_none() {
+            let _one_at_a_time = self.inner.remote_op.lock().await;
+            git::fetch_objects(&root, &pull_head)
+                .await
+                .map_err(CoreError::Git)?;
+        }
+        if git::is_merged(&root, &saved.head, &latest).await {
+            return Ok(git::count_not_in(&root, &saved.head, &latest).await);
+        }
+        let base = format!("origin/{}", saved.base);
+        let split = git::merge_base_of(&root, &latest, &base)
+            .await
+            .unwrap_or(saved.merge_base);
+        // (A head that moved is something to refresh to, even one that only lost commits.)
+        Ok(git::count_not_in(&root, &split, &latest).await.max(1))
+    }
+
+    /// Moves PR `number`'s Review Worktree to the PR's head as it is now. Each pending comment
+    /// stays on its line, found again by its text near where it was, or is marked outdated; the
+    /// files that changed since are unticked Viewed (on GitHub, where the ticks are kept).
+    pub async fn refresh_code_review(&self, number: u64) -> Result<CodeReview, CoreError> {
+        let root = self.workspace()?.root;
+        let old = self.saved_review(number)?;
+        let head = self.fetch_review_head(&root, number).await?;
+        git::reset_hard(&old.worktree, &head)
+            .await
+            .map_err(CoreError::Git)?;
+        // (Opening again saves the new head and works out its merge base, files and ticks.)
+        let mut review = self.open_code_review(number).await?;
+
+        let mut places = vec![];
+        for comment in &review.pending.comments {
+            let diff = self.code_review_diff(number, &comment.path, false).await?;
+            places.push((comment.id, code_review::moved(comment, &diff)));
+        }
+        review.pending = self.change_pending(number, |saved| {
+            for comment in &mut saved.pending.comments {
+                // (One added meanwhile is on the new head already.)
+                let Some((_, place)) = places.iter().find(|(id, _)| *id == comment.id) else {
+                    continue;
+                };
+                match place {
+                    Some((start_line, line)) => {
+                        (comment.start_line, comment.line) = (*start_line, *line);
+                        comment.outdated = false;
+                    }
+                    None => comment.outdated = true,
+                }
+            }
+            Ok(saved.pending.clone())
+        })?;
+
+        let changed: HashSet<String> = git::changes_between(&root, &old.head, &head)
+            .await
+            .map_err(CoreError::Git)?
+            .into_iter()
+            .flat_map(|(_, path, renamed_from)| std::iter::once(path).chain(renamed_from))
+            .collect();
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let mut unticked = HashSet::new();
+        for file in review
+            .files
+            .iter()
+            .filter(|f| f.viewed && changed.contains(&f.path))
+        {
+            // (If GitHub won't, the tick stays as GitHub has it.)
+            if code_review::set_viewed(&gh, &root, &old.pull_request_id, &file.path, false)
+                .await
+                .is_ok()
+            {
+                unticked.insert(file.path.clone());
+            }
+        }
+        let since_files = review
+            .since_last_review
+            .iter_mut()
+            .flat_map(|s| &mut s.files);
+        for file in review.files.iter_mut().chain(since_files) {
+            if unticked.contains(&file.path) {
+                file.viewed = false;
+            }
+        }
+        Ok(review)
+    }
+
+    /// PR `number`'s review Agent session, in its Review Worktree (Plan mode), named "Review #N"
+    /// and the PR's title: its Tab if it has one, else its conversation reopened by its id (from
+    /// the Recent sessions, or after it has left them). Only if the Agent can't bring that back is
+    /// a new one started. One per PR, kept for a re-requested review.
+    pub async fn code_review_session(&self, number: u64) -> Result<SessionId, CoreError> {
+        let _one_at_a_time = self.inner.review_session_op.lock().await;
+        let saved = self.saved_review(number)?;
+        let name = review_session_name(number, &saved.title);
+        if let Some(acp_id) = &saved.session {
+            // (A conversation the Agent no longer has gets a new session instead.)
+            if let Ok(id) = self
+                .open_review_conversation(&saved.worktree, acp_id, &name)
+                .await
+            {
+                self.name_session(id, &name)?;
+                return Ok(id);
+            }
+        }
+        // (Not held back by its Worktree setup, as `new_session_in` is: it only reads.)
+        let id = self
+            .start_named_session_in(&saved.worktree, Some(name))
+            .await?;
+        let acp_id = self.session(id)?.acp_id.clone();
+        if let Some(saved) = self
+            .inner
+            .state
+            .lock()
+            .expect("state lock")
+            .code_reviews
+            .get_mut(&number)
+        {
+            saved.session = Some(acp_id);
+        }
+        self.inner.persist();
+        Ok(id)
+    }
+
+    /// "Claude review": asks the review Agent session to review the whole PR (it reads the diff
+    /// itself), returning the session.
+    pub async fn claude_review(&self, number: u64) -> Result<SessionId, CoreError> {
+        let root = self.workspace()?.root;
+        let saved = self.saved_review(number)?;
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let details = crate::pull_request::details_for(&gh, &root, &number.to_string())
+            .await
+            .map_err(CoreError::Git)?
+            .ok_or(CoreError::UnknownPullRequest(number))?;
+        let files = code_review::files(&root, &saved.merge_base, &saved.head)
+            .await
+            .map_err(CoreError::Git)?;
+        let prompt = code_review::review_prompt(&details, &saved.merge_base, &saved.head, &files);
+        let id = self.code_review_session(number).await?;
+        self.send_prompt(id, &prompt).await?;
+        Ok(id)
+    }
+
+    /// What "Ask Claude" attaches for lines `start_line` to `line` on `side` of a file of PR
+    /// `number`: them and a few around them, from the head (new side) or the merge base (old).
+    pub async fn ask_attachment(
+        &self,
+        number: u64,
+        path: &str,
+        side: DiffSide,
+        start_line: Option<u32>,
+        line: u32,
+    ) -> Result<Attachment, CoreError> {
+        let root = self.workspace()?.root;
+        let saved = self.saved_review(number)?;
+        let (rev, file, at) = match side {
+            DiffSide::Right => (
+                &saved.head,
+                path.to_owned(),
+                Some(saved.worktree.join(path)),
+            ),
+            DiffSide::Left => {
+                // (A renamed file's old lines are under its old path.)
+                let changes = git::changes_between(&root, &saved.merge_base, &saved.head)
+                    .await
+                    .map_err(CoreError::Git)?;
+                let old = changes
+                    .into_iter()
+                    .find(|(_, p, _)| p == path)
+                    .and_then(|(_, _, from)| from)
+                    .unwrap_or_else(|| path.to_owned());
+                (&saved.merge_base, old, None)
+            }
+        };
+        let text = git::file_at(&root, rev, &file)
+            .await
+            .and_then(documents::decode_text)
+            .ok_or_else(|| CoreError::File(format!("{path} has no text on that side")))?;
+        Ok(code_review::ask_attachment(
+            path, side, start_line, line, &text, at,
+        ))
+    }
+
+    /// A Review Worktree was removed: its Code review (Pending review and all) is forgotten, and
+    /// the refs that kept its commits go.
+    async fn forget_code_review(&self, root: &Path, worktree: &Path) {
+        let number = {
+            let mut state = self.inner.state.lock().expect("state lock");
+            let number = state.review_of(worktree);
+            if let Some(number) = number {
+                state.code_reviews.remove(&number);
+            }
+            number
+        };
+        if let Some(number) = number {
+            for name in [
+                code_review::review_ref(number),
+                code_review::last_review_ref(number),
+            ] {
+                let _ = git::delete_ref(root, &name).await;
+            }
+        }
+    }
+
+    /// PR `number`'s saved Code review.
+    fn saved_review(&self, number: u64) -> Result<SavedCodeReview, CoreError> {
+        self.inner
+            .state
+            .lock()
+            .expect("state lock")
+            .code_reviews
+            .get(&number)
+            .cloned()
+            .ok_or(CoreError::NoCodeReview(number))
+    }
+
+    /// Fetches PR `number`'s head into its review ref, returning the commit.
+    async fn fetch_review_head(&self, root: &Path, number: u64) -> Result<String, CoreError> {
+        let _one_at_a_time = self.inner.remote_op.lock().await;
+        git::fetch_ref(
+            root,
+            &code_review::pull_head_ref(number),
+            &code_review::review_ref(number),
+        )
+        .await
+        .map_err(CoreError::Git)
+    }
+
+    /// The PR number whose Review Worktree `worktree` is, if it's one.
+    pub fn is_review_worktree(&self, worktree: &Path) -> Option<u64> {
+        let worktree = worktrees::normalize(worktree.to_owned());
+        self.inner
+            .state
+            .lock()
+            .expect("state lock")
+            .review_of(&worktree)
+    }
+
     /// Re-runs GitHub Actions jobs in the Worktree's repo: `job` (its id as its link has it, and its
     /// name) alone, or else every failed job of workflow run `run` (asked of the GitHub CLI).
     pub async fn rerun_checks(
@@ -3639,6 +4446,9 @@ impl Core {
     /// or deleted if it's new. The drawer asks first.
     pub async fn discard(&self, worktree: &Path, path: &str) -> Result<(), CoreError> {
         let worktree = self.known_worktree(worktree)?;
+        if self.is_review_worktree(&worktree).is_some() {
+            return Err(CoreError::ReadOnlyWorktree);
+        }
         let done = git::discard(&worktree, path).await.map_err(CoreError::Git);
         self.inner.status_due(worktree);
         done
@@ -3936,7 +4746,17 @@ impl Core {
             }
         })?;
         let saved = session.saved();
-        let fresh = self.start_session_in(&saved.worktree).await?;
+        // A review session's fresh conversation is the Code review's from now on, as its only one.
+        let review = self.is_review_worktree(&saved.worktree);
+        let name = review.map(|_| saved.name.clone());
+        let fresh = self.start_named_session_in(&saved.worktree, name).await?;
+        if let Some(number) = review {
+            let acp_id = self.session(fresh)?.acp_id.clone();
+            let mut state = self.inner.state.lock().expect("state lock");
+            if let Some(review) = state.code_reviews.get_mut(&number) {
+                review.session = Some(acp_id);
+            }
+        }
         if saved.permission_mode != PermissionMode::AskForEdits {
             // The context is cleared either way; a mode that won't carry over isn't worth failing for.
             let _ = self.set_permission_mode(fresh, saved.permission_mode).await;
@@ -4044,18 +4864,60 @@ impl Core {
         acp_id: &str,
         title: Option<&str>,
     ) -> Result<SessionId, CoreError> {
+        match self.take_conversation(worktree, acp_id, title)? {
+            Conversation::Open(id) => Ok(id),
+            Conversation::Closed(saved) => self.reopen(saved).await,
+        }
+    }
+
+    /// A Code review's conversation back in its Tab, as `open_conversation`, named `name` and
+    /// in Plan mode. Unlike that, a conversation the Agent can't bring back is an error, and its
+    /// Tab is closed (not kept Suspended, nor put in the Recent sessions).
+    async fn open_review_conversation(
+        &self,
+        worktree: &Path,
+        acp_id: &str,
+        name: &str,
+    ) -> Result<SessionId, CoreError> {
+        match self.take_conversation(worktree, acp_id, Some(name))? {
+            Conversation::Open(id) => Ok(id),
+            Conversation::Closed(saved) => {
+                let saved = SavedSession {
+                    name: name.to_owned(),
+                    permission_mode: PermissionMode::Plan,
+                    ..saved
+                };
+                let (id, session, resumed) = self.reopen_claimed(saved).await;
+                if let Err(err) = resumed {
+                    let _ = self.stop_agent(&session).await;
+                    self.forget_session(&session);
+                    return Err(err);
+                }
+                Ok(id)
+            }
+        }
+    }
+
+    /// The Tab with conversation `acp_id`, or else the session to reopen it as: taken from the
+    /// Recent sessions, or (one that has left them, or was never there) named after `title`.
+    fn take_conversation(
+        &self,
+        worktree: &Path,
+        acp_id: &str,
+        title: Option<&str>,
+    ) -> Result<Conversation, CoreError> {
         let wanted = worktrees::normalize(worktree.to_owned());
-        let saved = {
-            let mut state = self.inner.state.lock().expect("state lock");
-            if let Some(&id) = state.by_acp_id.get(acp_id) {
-                return Ok(id);
-            }
-            if !state.worktrees.iter().any(|w| w.path == wanted) {
-                return Err(CoreError::UnknownWorktree(worktree.to_owned()));
-            }
-            if state.removing.contains(&wanted) {
-                return Err(CoreError::BeingRemoved);
-            }
+        let mut state = self.inner.state.lock().expect("state lock");
+        if let Some(&id) = state.by_acp_id.get(acp_id) {
+            return Ok(Conversation::Open(id));
+        }
+        if !state.worktrees.iter().any(|w| w.path == wanted) {
+            return Err(CoreError::UnknownWorktree(worktree.to_owned()));
+        }
+        if state.removing.contains(&wanted) {
+            return Err(CoreError::BeingRemoved);
+        }
+        Ok(Conversation::Closed(
             match state.recent.iter().position(|s| s.acp_id == acp_id) {
                 Some(at) => state.recent.remove(at),
                 None => SavedSession {
@@ -4070,14 +4932,44 @@ impl Core {
                     model: None,
                     last_active: None,
                 },
-            }
+            },
+        ))
+    }
+
+    /// Renames a Tab (saved with the Tabs; its Tab shows it from the next `sessions`).
+    fn name_session(&self, id: SessionId, name: &str) -> Result<(), CoreError> {
+        let session = self.session(id)?;
+        let renamed = {
+            let mut info = session.info.lock().expect("info lock");
+            let renamed = info.name != name;
+            info.name = name.to_owned();
+            renamed
         };
-        self.reopen(saved).await
+        if renamed {
+            self.inner.persist();
+        }
+        Ok(())
     }
 
     /// A closed session back in a Tab: registered already resuming (so nothing else can claim it
     /// first), then its conversation is loaded. If that fails it stays, Suspended, saying why.
     async fn reopen(&self, saved: SavedSession) -> Result<SessionId, CoreError> {
+        let (id, session, resumed) = self.reopen_claimed(saved).await;
+        if let Err(err) = resumed {
+            session.record(|t| {
+                t.push(TranscriptItem::Notice {
+                    text: format!("Couldn't reopen the conversation: {err}"),
+                })
+            });
+        }
+        Ok(id)
+    }
+
+    /// `reopen`'s Tab, and whether its conversation was loaded.
+    async fn reopen_claimed(
+        &self,
+        saved: SavedSession,
+    ) -> (SessionId, Arc<Session>, Result<(), CoreError>) {
         let worktree = saved.worktree.clone();
         let (info, session) = {
             let mut state = self.inner.state.lock().expect("state lock");
@@ -4095,14 +4987,8 @@ impl Core {
         self.inner.recent_changed(&worktree);
         self.inner.persist();
         self.inner.actors_may_change();
-        if let Err(err) = self.inner.resume_claimed(&session, None).await {
-            session.record(|t| {
-                t.push(TranscriptItem::Notice {
-                    text: format!("Couldn't reopen the conversation: {err}"),
-                })
-            });
-        }
-        Ok(id)
+        let resumed = self.inner.resume_claimed(&session, None).await;
+        (id, session, resumed)
     }
 
     /// Sends a prompt; returns once it's on its way. The reply streams to watchers. A Suspended
@@ -4433,6 +5319,9 @@ impl Core {
         mode: PermissionMode,
     ) -> Result<(), CoreError> {
         let session = self.session(id)?;
+        if mode != PermissionMode::Plan && session.info.lock().expect("info lock").mode_locked {
+            return Err(CoreError::ModeLocked);
+        }
         let stopped = session.update(|control| {
             let stopped = control.in_transition() || control.suspended || control.exited;
             if stopped {
@@ -5070,16 +5959,21 @@ impl Inner {
         state.next_session += 1;
         let id = SessionId(state.next_session);
         let stopped = connection.is_none();
+        let mode_locked = state.review_of(&saved.worktree).is_some();
         let info = SessionInfo {
             id,
             name: saved.name,
-            worktree: saved.worktree,
+            mode_locked,
             state: if stopped {
                 SessionState::Suspended
             } else {
                 SessionState::Idle
             },
-            permission_mode: saved.permission_mode,
+            permission_mode: match mode_locked {
+                true => PermissionMode::Plan,
+                false => saved.permission_mode,
+            },
+            worktree: saved.worktree,
             unread: 0,
             model: saved.model,
             last_active: saved.last_active,
@@ -5196,6 +6090,7 @@ impl Inner {
                 opened: state.opened,
                 // (Opening a Workspace lists it again.)
                 hidden: false,
+                code_reviews: state.code_reviews.clone(),
             };
             (workspace.root.clone(), saved)
         };
@@ -5253,6 +6148,14 @@ impl Inner {
             for s in saved.tabs.iter().chain(&saved.recent) {
                 state.note_name(&s.name);
             }
+            // (Before the Tabs: a session in a Review Worktree is locked in Plan mode.)
+            state.code_reviews = saved
+                .code_reviews
+                .into_iter()
+                .filter(|(_, review)| {
+                    listing_failed || state.worktrees.iter().any(|w| w.path == review.worktree)
+                })
+                .collect();
             for tab in saved.tabs {
                 if live(&state, &tab) && !state.by_acp_id.contains_key(&tab.acp_id) {
                     created.push(self.register_session(&mut state, tab, None));
@@ -5284,6 +6187,9 @@ impl Inner {
                     listing_failed || state.worktrees.iter().any(|w| &w.path == worktree)
                 })
                 .collect();
+            let mut listed = std::mem::take(&mut state.worktrees);
+            state.mark_reviews(&mut listed);
+            state.worktrees = listed;
         }
         for (info, session) in created {
             session.log_opened();
@@ -5702,7 +6608,7 @@ impl Inner {
         let Some(root) = root_now() else {
             return;
         };
-        let listed = match only {
+        let mut listed = match only {
             Some(worktree) => {
                 let previous = self.state.lock().expect("state lock").worktrees.clone();
                 worktrees::list_refreshing(&root, &previous, worktree).await
@@ -5713,6 +6619,7 @@ impl Inner {
         if state.workspace.as_ref().map(|w| &w.root) != Some(&root) {
             return;
         }
+        state.mark_reviews(&mut listed);
         if state.worktrees != listed {
             let paths =
                 |list: &[WorktreeInfo]| list.iter().map(|w| w.path.clone()).collect::<Vec<_>>();
@@ -5897,8 +6804,13 @@ impl Inner {
                             .as_str()
                             .and_then(PermissionMode::from_acp_id)
                         {
-                            session.set_mode(mode);
-                            self.persist();
+                            let locked = session.info.lock().expect("info lock").mode_locked;
+                            if locked && mode != PermissionMode::Plan {
+                                session.back_to_plan();
+                            } else {
+                                session.set_mode(mode);
+                                self.persist();
+                            }
                         }
                     }
                     _ => {}
@@ -6089,6 +7001,24 @@ impl Session {
             model,
         });
         true
+    }
+
+    /// The Agent left Plan mode in a Review Worktree: it's put back, and the Tab told it's Plan
+    /// (the mode it never stopped showing).
+    fn back_to_plan(&self) {
+        if let Some(connection) = self.connection() {
+            let acp_id = self.acp_id.clone();
+            // (Not awaited here: the Agent's messages are read on this task, its answer too.)
+            tokio::spawn(async move {
+                let _ = apply_mode(&connection, &acp_id, PermissionMode::Plan).await;
+            });
+        }
+        let mut info = self.info.lock().expect("info lock");
+        info.permission_mode = PermissionMode::Plan;
+        let _ = self.events.send(CoreEvent::PermissionModeChanged {
+            session_id: info.id,
+            mode: PermissionMode::Plan,
+        });
     }
 
     fn set_mode(&self, mode: PermissionMode) {

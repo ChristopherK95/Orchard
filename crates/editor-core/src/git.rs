@@ -236,6 +236,81 @@ pub(crate) async fn worktree_add_new_branch(
     worktree_add(repo, &["--no-track", "-b", name], path, &[start]).await
 }
 
+/// Adds a Worktree at `path` with HEAD detached at `commit` (a Review Worktree: never a branch).
+pub(crate) async fn worktree_add_detached(
+    repo: &Path,
+    path: &Path,
+    commit: &str,
+) -> Result<(), String> {
+    worktree_add(repo, &["--detach"], path, &[commit]).await
+}
+
+/// Fetches `remote_ref` from `origin` into `local_ref` (forced: a PR's head may be force-pushed),
+/// returning the commit it's at. Kept under its own ref so it outlives `git gc`.
+pub(crate) async fn fetch_ref(
+    repo: &Path,
+    remote_ref: &str,
+    local_ref: &str,
+) -> Result<String, String> {
+    let refspec = format!("+{remote_ref}:{local_ref}");
+    run_remote(repo, &["fetch", "--quiet", "origin", &refspec], None).await?;
+    resolve_commit(repo, local_ref)
+        .await
+        .ok_or_else(|| format!("{local_ref} wasn't fetched"))
+}
+
+/// Fetches `remote_ref` from `origin` without keeping it under a ref: its commits are then here to
+/// look at (until a later `git gc`).
+pub(crate) async fn fetch_objects(repo: &Path, remote_ref: &str) -> Result<(), String> {
+    run_remote(
+        repo,
+        &[
+            "fetch",
+            "--quiet",
+            "--no-write-fetch-head",
+            "origin",
+            remote_ref,
+        ],
+        None,
+    )
+    .await
+    .map(drop)
+}
+
+/// The commit `remote_ref` is at on `origin`, or `None` if origin hasn't got it.
+pub(crate) async fn ls_remote_ref(repo: &Path, remote_ref: &str) -> Result<Option<String>, String> {
+    let out = run_remote(repo, &["ls-remote", "origin", remote_ref], None).await?;
+    Ok(out
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .find(|(_, name)| *name == remote_ref)
+        .map(|(id, _)| id.to_owned()))
+}
+
+/// Deletes the ref `name` (a full one, `refs/…`) if it's there.
+pub(crate) async fn delete_ref(repo: &Path, name: &str) -> Result<(), String> {
+    if resolve_commit(repo, name).await.is_none() {
+        return Ok(());
+    }
+    run(repo, &["update-ref", "-d", name]).await.map(drop)
+}
+
+/// Moves the Worktree's HEAD, index and files to `commit`, throwing away anything else there.
+pub(crate) async fn reset_hard(worktree: &Path, commit: &str) -> Result<(), String> {
+    run(worktree, &["reset", "--hard", "--quiet", commit])
+        .await
+        .map(drop)
+}
+
+/// The merge-base of `a` and `b` (any two revisions, unlike `merge_base`, which takes HEAD).
+pub(crate) async fn merge_base_of(repo: &Path, a: &str, b: &str) -> Result<String, String> {
+    match run(repo, &["merge-base", a, b]).await {
+        Ok(split) => Ok(split.trim().to_owned()),
+        Err(err) if !err.is_empty() => Err(err),
+        Err(_) => Err(format!("`{a}` and `{b}` have no commit in common.")),
+    }
+}
+
 /// Adds a Worktree at `path` on the existing local branch `name`.
 pub(crate) async fn worktree_add_existing(
     repo: &Path,
@@ -1360,6 +1435,86 @@ pub(crate) async fn changes_to_disk(
     Ok(changes)
 }
 
+/// What changed from commit `from` to commit `to` (neither the index nor the files on disk), as
+/// `changes_since` gives it.
+pub(crate) async fn changes_between(
+    repo: &Path,
+    from: &str,
+    to: &str,
+) -> Result<Vec<(char, String, Option<String>)>, String> {
+    name_status(repo, &[from, to]).await
+}
+
+/// `git diff` of `paths` from commit `from` to commit `to`, with git's three lines of context and
+/// renames found (give a rename's old path too), as GitHub shows a PR's diff.
+pub(crate) async fn diff_between(
+    repo: &Path,
+    from: &str,
+    to: &str,
+    paths: &[&str],
+) -> Result<String, String> {
+    let mut args = vec![
+        "diff",
+        "-U3",
+        // (Git's defaults, whatever the user's config says: GitHub's diff is made with them.)
+        "--diff-algorithm=default",
+        "--indent-heuristic",
+        "--no-color",
+        "--no-ext-diff",
+        "--find-renames",
+        from,
+        to,
+        "--",
+    ];
+    args.extend(paths);
+    run(repo, &args).await
+}
+
+/// Lines added and deleted per file from `from` to `to` (renames found, under their new path; a
+/// binary file counts none).
+pub(crate) async fn numstat(
+    repo: &Path,
+    from: &str,
+    to: &str,
+) -> Result<std::collections::HashMap<String, (u32, u32)>, String> {
+    let out = run(
+        repo,
+        &[
+            "diff",
+            "--numstat",
+            "-z",
+            "--find-renames",
+            "--no-ext-diff",
+            from,
+            to,
+        ],
+    )
+    .await?;
+    let mut counts = std::collections::HashMap::new();
+    let mut entries = out.split('\0');
+    while let Some(entry) = entries.next() {
+        let mut fields = entry.splitn(3, '\t');
+        let (Some(added), Some(deleted), Some(path)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        // A rename leaves the path empty: its original and new paths follow as entries.
+        let path = match path {
+            "" => {
+                entries.next();
+                entries.next().unwrap_or_default()
+            }
+            path => path,
+        };
+        counts.insert(
+            path.to_owned(),
+            (added.parse().unwrap_or(0), deleted.parse().unwrap_or(0)),
+        );
+    }
+    Ok(counts)
+}
+
 /// `git diff --name-status` between `revs` (one: to the files on disk), renames found.
 async fn name_status(
     worktree: &Path,
@@ -1474,4 +1629,104 @@ pub(crate) async fn file_at(worktree: &Path, rev: &str, path: &str) -> Option<Ve
         .await
         .ok()?;
     out.status.success().then_some(out.stdout)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sh_git(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("run git");
+        assert!(out.status.success(), "git {args:?} failed: {out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
+    /// Commits a new file `name` in `dir` and pushes it to origin's `refs/pull/7/head`.
+    fn push_pr_commit(dir: &Path, name: &str) -> String {
+        std::fs::write(dir.join(name), name).unwrap();
+        sh_git(dir, &["add", name]);
+        sh_git(dir, &["commit", "--quiet", "-m", name]);
+        sh_git(
+            dir,
+            &[
+                "push",
+                "--quiet",
+                "--force",
+                "origin",
+                "HEAD:refs/pull/7/head",
+            ],
+        );
+        sh_git(dir, &["rev-parse", "HEAD"])
+    }
+
+    #[tokio::test]
+    async fn a_pr_head_is_fetched_checked_out_detached_and_reset() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = tmp.path().join("origin.git");
+        let origin_str = origin.to_str().unwrap();
+        sh_git(
+            tmp.path(),
+            &["init", "--quiet", "--bare", "-b", "main", origin_str],
+        );
+        sh_git(tmp.path(), &["clone", "--quiet", origin_str, "seed"]);
+        let seed = tmp.path().join("seed");
+        sh_git(&seed, &["checkout", "--quiet", "-b", "main"]);
+        sh_git(&seed, &["commit", "--quiet", "--allow-empty", "-m", "init"]);
+        sh_git(&seed, &["push", "--quiet", "origin", "main"]);
+        let fork_point = sh_git(&seed, &["rev-parse", "HEAD"]);
+        sh_git(tmp.path(), &["clone", "--quiet", origin_str, "repo"]);
+        let repo = tmp.path().join("repo");
+
+        sh_git(&seed, &["checkout", "--quiet", "-b", "pr"]);
+        let first = push_pr_commit(&seed, "a");
+        sh_git(&seed, &["checkout", "--quiet", "main"]);
+        sh_git(
+            &seed,
+            &["commit", "--quiet", "--allow-empty", "-m", "later on main"],
+        );
+        sh_git(&seed, &["push", "--quiet", "origin", "main"]);
+
+        assert_eq!(
+            ls_remote_ref(&repo, "refs/pull/7/head").await.unwrap(),
+            Some(first.clone())
+        );
+        assert_eq!(
+            ls_remote_ref(&repo, "refs/pull/8/head").await.unwrap(),
+            None
+        );
+        let fetched = fetch_ref(&repo, "refs/pull/7/head", "refs/orchard/review/7")
+            .await
+            .unwrap();
+        assert_eq!(fetched, first);
+
+        let worktree = tmp.path().join("review-pr-7");
+        worktree_add_detached(&repo, &worktree, &fetched)
+            .await
+            .unwrap();
+        assert_eq!(sh_git(&worktree, &["rev-parse", "HEAD"]), first);
+        assert_eq!(current_branch(&worktree).await, None, "HEAD is detached");
+
+        fetch_origin(&repo).await.unwrap();
+        assert_eq!(
+            merge_base_of(&repo, "refs/orchard/review/7", "origin/main")
+                .await
+                .unwrap(),
+            fork_point
+        );
+
+        sh_git(&seed, &["checkout", "--quiet", "pr"]);
+        let second = push_pr_commit(&seed, "b");
+        let fetched = fetch_ref(&repo, "refs/pull/7/head", "refs/orchard/review/7")
+            .await
+            .unwrap();
+        assert_eq!(fetched, second);
+        reset_hard(&worktree, &fetched).await.unwrap();
+        assert_eq!(sh_git(&worktree, &["rev-parse", "HEAD"]), second);
+        assert!(worktree.join("b").exists());
+    }
 }

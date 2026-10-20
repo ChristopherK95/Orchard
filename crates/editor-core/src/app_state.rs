@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::code_review::PendingReview;
 use crate::session::PermissionMode;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +49,49 @@ pub(crate) struct WorkspaceState {
     /// Removed from the Recent Workspaces (opening it again lists it again); its Tabs are kept.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) hidden: bool,
+    /// The Code reviews with a Review Worktree, by PR number.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) code_reviews: BTreeMap<u64, SavedCodeReview>,
+}
+
+/// A Code review as it's remembered: its Review Worktree and how far it has got.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SavedCodeReview {
+    pub(crate) worktree: PathBuf,
+    /// The PR's title as last opened, which names the review Agent session.
+    #[serde(default)]
+    pub(crate) title: String,
+    /// The PR's GraphQL node id, which its Viewed ticks are set with.
+    #[serde(default)]
+    pub(crate) pull_request_id: String,
+    /// The branch the PR goes into.
+    #[serde(default)]
+    pub(crate) base: String,
+    /// The PR head the Review Worktree is at.
+    pub(crate) head: String,
+    /// Where the head split from the PR's base branch, which its diff runs from.
+    #[serde(default)]
+    pub(crate) merge_base: String,
+    /// The commit the user's last review (before this one) was on, for "since last review".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) last_review: Option<String>,
+    /// Its Worktree setup has finished, so it isn't run again.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) setup_done: bool,
+    /// The review was submitted (so the Review Worktree can go).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) submitted: bool,
+    /// The comments not submitted yet.
+    #[serde(default, skip_serializing_if = "PendingReview::is_empty")]
+    pub(crate) pending: PendingReview,
+    /// The review Agent session's ACP id: one per PR, continued when it's re-requested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) session: Option<String>,
+    /// The id the next pending comment gets: ids aren't used twice, so one removed can't be
+    /// mistaken for a later one.
+    #[serde(default)]
+    pub(crate) next_comment_id: u64,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -203,6 +247,24 @@ mod tests {
             statistics_days: Some(7),
             opened: Some(1_700_000_000_000),
             hidden: true,
+            code_reviews: [(
+                7,
+                SavedCodeReview {
+                    worktree: PathBuf::from("C:/repo.worktrees/review-pr-7"),
+                    title: "Make it better".into(),
+                    pull_request_id: "PR_kw7".into(),
+                    head: "abc".into(),
+                    merge_base: "def".into(),
+                    last_review: Some("123".into()),
+                    setup_done: true,
+                    submitted: true,
+                    pending: PendingReview::default(),
+                    next_comment_id: 3,
+                    session: Some("acp-1".into()),
+                    base: "main".into(),
+                },
+            )]
+            .into(),
         };
         let other = WorkspaceState {
             tabs: vec![saved("d", "C:/other")],

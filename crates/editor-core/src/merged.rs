@@ -55,6 +55,18 @@ pub struct WorktreeMerge {
     pub error: Option<String>,
     /// Uncommitted changes, which removing the Worktree would lose whatever `merge` says.
     pub changed: u32,
+    /// A Review Worktree's Code review (its `merge` isn't looked at: its commits are the PR's).
+    pub review: Option<ReviewRow>,
+}
+
+/// The Code review a Review Worktree is for, as the Worktrees overview shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewRow {
+    /// The PR's number.
+    pub number: u64,
+    /// The review was submitted, or the PR merged or closed: the Review Worktree can go.
+    pub done: bool,
 }
 
 /// How many other remote branches are looked at when the branch isn't merged into its Base.

@@ -25,6 +25,8 @@ pub struct WorktreeInfo {
     pub behind: Option<u32>,
     /// Changed, staged, unmerged and untracked paths.
     pub changed: u32,
+    /// The PR number of a Review Worktree (set by the core, which keeps the Code reviews).
+    pub review: Option<u64>,
 }
 
 /// How many Worktrees' `git status` run at once when all are listed: each scans its whole folder,
@@ -58,6 +60,7 @@ pub(crate) async fn list(root: &Path) -> Vec<WorktreeInfo> {
             ahead: status.ahead,
             behind: status.behind,
             changed: status.changed,
+            review: None,
         })
         .collect()
 }
@@ -88,6 +91,7 @@ pub(crate) async fn list_refreshing(
             ahead,
             behind,
             changed,
+            review: None,
         });
     }
     worktrees

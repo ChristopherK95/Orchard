@@ -6,6 +6,7 @@ import { Avatar } from "./Avatar";
 import { ago } from "./Chat";
 import type { MyPullRequest, SessionId, SessionInfo, WorktreeInfo } from "./core";
 import { myPrs } from "./PrBoard";
+import { newCommits } from "./reviewWatch";
 import { shellsIn } from "./shells";
 import {
   ArrowDownUp,
@@ -23,6 +24,7 @@ import {
   LayoutGrid,
   ListTree,
   Loader,
+  MessageSquareCode,
   Plus,
   RefreshCw,
   Search,
@@ -43,7 +45,7 @@ export type WorktreeTab = WorktreeInfo & { removed?: boolean };
 
 /** A Worktree that disappeared (e.g. removed in a terminal) while sessions still run in it. */
 export const removedWorktree = (path: string): WorktreeTab => ({
-  path, branch: null, head: "", isMain: false, ahead: null, behind: null, changed: 0, removed: true,
+  path, branch: null, head: "", isMain: false, ahead: null, behind: null, changed: 0, review: null, removed: true,
 });
 
 /** A stable colour per Worktree path. */
@@ -86,6 +88,41 @@ function ShellBadge(props: { path: string }) {
   );
 }
 
+/** A dot on a Review badge (and the review's Tab) while new commits wait for a Refresh. */
+function NewCommitsDot(props: { number: number }) {
+  const count = () => newCommits.of(props.number);
+  return (
+    <Show when={count() > 0}>
+      <span class="new-commits-dot" title={`${count()} new commit${count() === 1 ? "" : "s"} pushed to the PR since: Refresh in its Code review`} />
+    </Show>
+  );
+}
+
+/** A Review Worktree's badge, with its PR's number. With `onOpen` it's a button opening its Code review. */
+export function ReviewBadge(props: { number: number; onOpen?: (number: number) => void }) {
+  const title = () => `A Review Worktree: the head of PR #${props.number}, read-only${props.onOpen ? ". Open its Code review" : ""}`;
+  return (
+    <Show
+      when={props.onOpen}
+      fallback={
+        <span class="review-badge" title={title()}>
+          <MessageSquareCode />
+          Review #{props.number}
+          <NewCommitsDot number={props.number} />
+        </span>
+      }
+    >
+      {(open) => (
+        <button class="review-badge" onClick={() => open()(props.number)} title={title()}>
+          <MessageSquareCode />
+          Review #{props.number}
+          <NewCommitsDot number={props.number} />
+        </button>
+      )}
+    </Show>
+  );
+}
+
 export interface SidebarProps {
   workspaceName: string;
   workspaceRoot: string;
@@ -118,6 +155,8 @@ export interface SidebarProps {
   onSettings: () => void;
   onOpenMyPr: (pr: MyPullRequest) => void;
   onPrBoard: () => void;
+  /** A Review Worktree's badge: its Code review, of PR `number`. */
+  onCodeReview: (number: number) => void;
 }
 
 /** Which Worktrees were folded open (true) or shut by hand, by Workspace root: kept across restarts. */
@@ -150,12 +189,18 @@ export function Sidebar(props: SidebarProps) {
   const isOpen = (path: string) =>
     foldsIn(props.workspaceRoot)[path] ?? (path === props.active || props.sessionsIn(path).some((s) => s.state === "needsYou"));
   const fold = (path: string, open: boolean) => setFold(props.workspaceRoot, path, open);
-  /** A click on a header's shell badge shows the terminal; anywhere else folds it open or shut
-   *  (only a session card switches to a session). */
-  const choose = (e: MouseEvent, path: string) =>
-    (e.target as Element).closest(".shell-badge") ? props.onShowTerminal(path) : fold(path, !isOpen(path));
+  /** A click on a header's shell badge shows the terminal, on a Review Worktree's badge its Code
+   *  review; anywhere else folds it open or shut (only a session card switches to a session). */
+  const choose = (e: MouseEvent, w: WorktreeTab) => {
+    const on = e.target as Element;
+    if (on.closest(".shell-badge")) props.onShowTerminal(w.path);
+    else if (on.closest(".review-badge") && w.review !== null) props.onCodeReview(w.review);
+    else fold(w.path, !isOpen(w.path));
+  };
   const title = (w: WorktreeTab) =>
-    w.removed ? `${w.path}: no longer a Worktree; its sessions still run` : dimmed(w) ? `${worktreeLabel(w)}: give it a column` : w.path;
+    w.removed
+      ? `${w.path}: no longer a Worktree; its sessions still run`
+      : `${dimmed(w) ? `${worktreeLabel(w)}: give it a column` : w.path}${w.review !== null ? `\nThe Review Worktree of PR #${w.review}` : ""}`;
   return (
     <Show
       when={!props.collapsed}
@@ -232,7 +277,7 @@ export function Sidebar(props: SidebarProps) {
                       class="wt-head-main"
                       title={w.removed ? title(w) : `${w.path}\n${open() ? "Fold" : "Unfold"}`}
                       aria-expanded={open()}
-                      onClick={(e) => choose(e, w.path)}
+                      onClick={(e) => choose(e, w)}
                     >
                       <span class="fold">
                         <ChevronRight />
@@ -244,6 +289,7 @@ export function Sidebar(props: SidebarProps) {
                           <span class="wt-count"> ({sessions().length})</span>
                         </Show>
                       </span>
+                      <Show when={w.review}>{(n) => <ReviewBadge number={n()} />}</Show>
                       <ShellBadge path={w.path} />
                       <Show when={!open()} fallback={props.settingUp(w.path) && <Loader class="spin setting-up" aria-label="Setting up" />}>
                         {worktreeSignal(sessions(), props.settingUp(w.path))}
@@ -256,7 +302,8 @@ export function Sidebar(props: SidebarProps) {
                             <Columns2 />
                           </button>
                         </Show>
-                        <Show when={!props.pinned}>
+                        {/* (A Review Worktree has only its Code review's session: nothing else to open there.) */}
+                        <Show when={!props.pinned && w.review === null}>
                           <button
                             class="ghost icon recent-menu"
                             onClick={(e) => props.onRecent(w.path, e.currentTarget.getBoundingClientRect())}
@@ -266,7 +313,7 @@ export function Sidebar(props: SidebarProps) {
                             <History />
                           </button>
                         </Show>
-                        <Show when={!props.settingUp(w.path)}>
+                        <Show when={!props.settingUp(w.path) && w.review === null}>
                           <button class="ghost icon" onClick={() => props.onNewSession(w.path)} title="New Agent session in this Worktree" aria-label="New session">
                             <Plus />
                           </button>
@@ -353,15 +400,29 @@ function SessionCards(props: SidebarProps & { worktree: WorktreeTab; sessions: S
       <For
         each={props.sessions}
         fallback={
-          <Show when={!props.worktree.removed && !props.settingUp(props.worktree.path)}>
-            <button class="session-empty" onClick={() => props.onNewSession(props.worktree.path)} title="New Agent session in this Worktree">
-              <Plus />
-              New session
-            </button>
+          <Show
+            when={props.worktree.review === null}
+            fallback={
+              <Show when={props.worktree.review}>
+                {(n) => (
+                  <button class="session-empty" onClick={() => props.onCodeReview(n())} title="Open its Code review (its review session starts once the setup is over)">
+                    <MessageSquareCode />
+                    Code review
+                  </button>
+                )}
+              </Show>
+            }
+          >
+            <Show when={!props.worktree.removed && !props.settingUp(props.worktree.path)}>
+              <button class="session-empty" onClick={() => props.onNewSession(props.worktree.path)} title="New Agent session in this Worktree">
+                <Plus />
+                New session
+              </button>
+            </Show>
           </Show>
         }
       >
-        {(s) => <SessionCard session={s} colour={worktreeColour(props.worktree.path)} on={s.id === props.activeSession} onShow={props.onShowSession} onClose={props.onCloseSession} />}
+        {(s) => <SessionCard session={s} colour={worktreeColour(props.worktree.path)} review={props.worktree.review} on={s.id === props.activeSession} onShow={props.onShowSession} onClose={props.onCloseSession} />}
       </For>
     </div>
   );
@@ -369,7 +430,7 @@ function SessionCards(props: SidebarProps & { worktree: WorktreeTab; sessions: S
 
 /** One session: its face and name, then where it stands, how long since it did anything, the
  *  model, how full its context is and what it has cost. */
-function SessionCard(props: { session: SessionInfo; colour: string; on: boolean; onShow: (id: SessionId) => void; onClose: (id: SessionId) => void }) {
+function SessionCard(props: { session: SessionInfo; colour: string; review?: number | null; on: boolean; onShow: (id: SessionId) => void; onClose: (id: SessionId) => void }) {
   const s = () => props.session;
   const { context, cost, active, model, title } = useSessionFacts(s);
   return (
@@ -384,6 +445,14 @@ function SessionCard(props: { session: SessionInfo; colour: string; on: boolean;
         <span class="session-card-body">
           <span class="session-card-line">
             <span class="name">{s().name}</span>
+            <Show when={props.review}>
+              {(n) => (
+                <span class="review-badge" title={`The Code review of PR #${n()}: its Tab`}>
+                  <MessageSquareCode />
+                  <NewCommitsDot number={n()} />
+                </span>
+              )}
+            </Show>
             <Show when={s().unread > 0 && !props.on}>
               <span class="count-badge">{s().unread} new</span>
             </Show>

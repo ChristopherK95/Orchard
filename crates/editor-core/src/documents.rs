@@ -143,6 +143,16 @@ pub(crate) fn read(path: &Path) -> Result<OpenedFile, String> {
     })
 }
 
+impl OpenedFile {
+    /// The file, opened so that it can't be edited (one of a Review Worktree's, say).
+    pub(crate) fn read_only(mut self) -> Self {
+        if let FileContent::Text { read_only, .. } = &mut self.content {
+            *read_only = true;
+        }
+        self
+    }
+}
+
 /// Why a save didn't happen.
 pub(crate) enum SaveError {
     /// The file on disk isn't the version the editor read (an Agent changed it, say).

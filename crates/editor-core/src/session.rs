@@ -65,6 +65,8 @@ pub struct SessionInfo {
     pub worktree: PathBuf,
     pub state: SessionState,
     pub permission_mode: PermissionMode,
+    /// Its mode can't be changed: it's in a Review Worktree, so it stays in Plan mode.
+    pub mode_locked: bool,
     /// New transcript items (Agent messages, cards, notices) since the Tab was last shown.
     pub unread: usize,
     /// The model the Agent runs it on, as the Agent names it ("Opus 4.8"); None until it's said.

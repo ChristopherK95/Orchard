@@ -9,7 +9,8 @@ import { createEffect, createSignal, For, lazy, Match, onCleanup, Show, Switch }
 import { Avatar } from "./Avatar";
 import { Banner, Composer, FindOtherConversations, RecentList } from "./Chat";
 import type { OtherConversation, PermissionRequest, RecentSession, SessionId, SessionInfo } from "./core";
-import { ChevronDown, CirclePause, CirclePlay, Ellipsis, GitBranch, Pin, Plus, Sparkles, SquareTerminal, Trash2, X } from "./icons";
+import { setupOver } from "./core";
+import { ChevronDown, CirclePause, CirclePlay, Ellipsis, GitBranch, MessageSquareCode, Pin, Plus, Sparkles, SquareTerminal, Trash2, X } from "./icons";
 import { PrButton } from "./PrOverlay";
 import { useSessionFacts } from "./sessionFacts";
 import { Setup, type SetupView } from "./Setup";
@@ -17,7 +18,7 @@ import { shellRunning } from "./shells";
 import { StateBadge } from "./StateDot";
 import { createTabView, type TabView } from "./TabView";
 import { Transcript } from "./Transcript";
-import { worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
+import { ReviewBadge, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 
 // (xterm.js loads with the first Terminal tab shown.)
 const TerminalPanel = lazy(() => import("./TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
@@ -59,6 +60,8 @@ export interface ColumnsProps {
   onSwitchBranch: (worktree: string, anchor: Element) => void;
   /** The PR of the Worktree's branch, in the PR overlay. */
   onOpenPr: (worktree: string) => void;
+  /** A Review Worktree's badge: its Code review, of PR `number`. */
+  onCodeReview: (number: number) => void;
   onOpenSettings: () => void;
   onOpenSnippet: (code: string, label: string) => void;
   /** "Open in editor" on a permission card: the column takes focus too. */
@@ -190,7 +193,7 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
   const [composerHeight, setComposerHeight] = createSignal(0);
   const setup = () => {
     const s = props.setupOf(path);
-    return s && s.status.kind !== "done" ? s : undefined;
+    return s && !setupOver(s.status) ? s : undefined;
   };
   /** A session tab: shows it (in place of the terminal, if that's up). */
   const showSession = (id: SessionId) => {
@@ -257,15 +260,18 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
         <Show when={!terminal() && session()} keyed>
           {(s) => <SessionFacts session={s} />}
         </Show>
-        <button
-          class="ghost icon"
-          onClick={() => props.onNewSession(path)}
-          title="New Agent session in this Worktree"
-          aria-label="New Agent session"
-          disabled={props.worktree.removed || !!setup()}
-        >
-          <Plus />
-        </button>
+        {/* (A Review Worktree has only its Code review's session.) */}
+        <Show when={props.worktree.review === null}>
+          <button
+            class="ghost icon"
+            onClick={() => props.onNewSession(path)}
+            title="New Agent session in this Worktree"
+            aria-label="New Agent session"
+            disabled={props.worktree.removed || !!setup()}
+          >
+            <Plus />
+          </button>
+        </Show>
       </nav>
       <Show when={sessions().length > 1 && !terminal()}>
         <Banner tone="warn">{sessions().length} Agent sessions share this Worktree, so they can edit the same files.</Banner>
@@ -291,22 +297,38 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
               <Show
                 when={setup()}
                 fallback={
-                  <div class="center empty-worktree">
-                    <GitBranch />
-                    <p>No Agent sessions in this Worktree yet.</p>
-                    <Show when={!props.worktree.removed}>
-                      <button class="primary" onClick={() => props.onNewSession(path)}>
-                        <Sparkles />
-                        New Agent session here
-                      </button>
-                    </Show>
-                    <Show when={props.recentIn(path).length}>
-                      <RecentList sessions={props.recentIn(path)} onReopen={props.onReopen} />
-                    </Show>
-                    <Show when={!props.worktree.removed}>
-                      <FindOtherConversations worktree={path} onOpen={props.onOpenOther} />
-                    </Show>
-                  </div>
+                  <Show
+                    when={props.worktree.review}
+                    fallback={
+                      <div class="center empty-worktree">
+                        <GitBranch />
+                        <p>No Agent sessions in this Worktree yet.</p>
+                        <Show when={!props.worktree.removed}>
+                          <button class="primary" onClick={() => props.onNewSession(path)}>
+                            <Sparkles />
+                            New Agent session here
+                          </button>
+                        </Show>
+                        <Show when={props.recentIn(path).length}>
+                          <RecentList sessions={props.recentIn(path)} onReopen={props.onReopen} />
+                        </Show>
+                        <Show when={!props.worktree.removed}>
+                          <FindOtherConversations worktree={path} onOpen={props.onOpenOther} />
+                        </Show>
+                      </div>
+                    }
+                  >
+                    {(n) => (
+                      <div class="center empty-worktree">
+                        <MessageSquareCode />
+                        <p>Its review session starts with the Code review.</p>
+                        <button class="primary" onClick={() => props.onCodeReview(n())}>
+                          <MessageSquareCode />
+                          Open Code review
+                        </button>
+                      </div>
+                    )}
+                  </Show>
                 }
               >
                 {(s) => <Setup worktree={path} setup={s()} onError={props.onError} onOpenSettings={props.onOpenSettings} />}
@@ -357,19 +379,31 @@ function ColumnHeader(props: ColumnsProps & { worktree: WorktreeTab; isFocused: 
   return (
     <div class="column-head">
       <span class="swatch" />
-      <Show
-        when={!props.worktree.removed}
+      <Switch
         fallback={
+          <button class="branch opens-branches" onClick={(e) => props.onSwitchBranch(path, e.currentTarget)} title={`${path}: switch branch`}>
+            {worktreeLabel(props.worktree)}
+            <ChevronDown class="chev" />
+          </button>
+        }
+      >
+        <Match when={props.worktree.removed}>
           <span class="branch" title={path}>
             {path.split(/[\\/]/).pop()}
           </span>
-        }
-      >
-        <button class="branch opens-branches" onClick={(e) => props.onSwitchBranch(path, e.currentTarget)} title={`${path}: switch branch`}>
-          {worktreeLabel(props.worktree)}
-          <ChevronDown class="chev" />
-        </button>
-      </Show>
+        </Match>
+        {/* (A Review Worktree stays on its PR's head: no branch to switch.) */}
+        <Match when={props.worktree.review}>
+          {(n) => (
+            <>
+              <span class="branch" title={path}>
+                {worktreeLabel(props.worktree)}
+              </span>
+              <ReviewBadge number={n()} onOpen={props.onCodeReview} />
+            </>
+          )}
+        </Match>
+      </Switch>
       <Show when={props.worktree.removed}>
         <span class="gone">folder removed</span>
       </Show>
@@ -382,6 +416,14 @@ function ColumnHeader(props: ColumnsProps & { worktree: WorktreeTab; isFocused: 
         <span class="changed">{props.worktree.changed} changed</span>
       </Show>
       <span class="grow" />
+      <Show when={props.worktree.review}>
+        {(n) => (
+          <button class="ghost small" onClick={() => props.onCodeReview(n())} title="The Code review, in the Tabs view">
+            <MessageSquareCode />
+            Open Code review
+          </button>
+        )}
+      </Show>
       <Show when={!props.worktree.removed}>
         <PrButton worktree={path} class="ghost" onOpen={() => props.onOpenPr(path)} />
       </Show>

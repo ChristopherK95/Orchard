@@ -172,6 +172,8 @@ export function PrOverlay(props: {
   colour: string;
   /** "Open in editor" on a code block. */
   onOpenSnippet: (code: string, label: string) => void;
+  /** "Code review": the PR's Code review, in place of this overlay (offered when the user is asked to review it). */
+  onCodeReview?: (number: number) => void;
   onClose: () => void;
 }) {
   const [pr, setPr] = createSignal<PullRequestDetails | null | undefined>(undefined);
@@ -258,6 +260,19 @@ export function PrOverlay(props: {
             {(p) => (
               <>
                 <StateChip pr={p()} />
+                <Show when={props.onCodeReview && p().viewerIsReviewer && p().state === "open"}>
+                  <button
+                    class="primary"
+                    onClick={() => {
+                      props.onClose();
+                      props.onCodeReview!(p().number);
+                    }}
+                    title="Go through its files, comment on their lines and submit your review, in a Review Worktree"
+                  >
+                    <MessageSquareCode />
+                    Code review
+                  </button>
+                </Show>
                 <button class="outline" onClick={() => open(p().url)} title={`${p().url}: open it in the browser`}>
                   <ExternalLink />
                   GitHub
