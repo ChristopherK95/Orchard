@@ -633,6 +633,12 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .msg.notice { display: flex; align-items: center; gap: 12px; color: var(--fg-3); font-size: 12px; white-space: pre-wrap; text-align: center; }
 .msg.notice::before, .msg.notice::after { content: ""; flex: 1; min-width: 24px; height: 1px; background: var(--line); }
 
+/* "Copy as markdown" under an agent message: quiet until the row is hovered or focused. */
+.msg-copy { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 6px; margin-top: 2px; font-size: 11.5px; color: var(--fg-3); background: none; border: 0; border-radius: 4px; cursor: pointer; opacity: 0; }
+.msg-copy .lucide { width: 12px; height: 12px; }
+.row:hover .msg-copy, .msg-copy:focus-visible { opacity: 1; }
+.msg-copy:hover { color: var(--fg-2); background: var(--bg-1); }
+
 /* Agent prose: full-width markdown, no bubble. */
 .msg.user.markdown { color: var(--user-bubble-fg); }
 .msg.user.markdown strong, .msg.user.markdown :not(pre) > code, .msg.user.markdown a { color: inherit; }
