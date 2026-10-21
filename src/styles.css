@@ -1279,6 +1279,8 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 
 /* Columns view (ticket 28): a panel per pinned Worktree, at least 640 px wide; more than fit
    scroll sideways, a step lighter than the gaps between them (and cards a step lighter again). */
+.columns-area { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.columns-bar { flex: none; display: flex; justify-content: flex-end; padding: 6px 8px 0; }
 .columns { flex: 1; min-width: 0; min-height: 0; display: flex; padding: 8px; overflow-x: auto; overflow-y: hidden; }
 /* (Each column's flex-grow is its share of the row, from 0 px: widths go by the shares.) */
 .column { flex: 1 1 0; min-width: 640px; min-height: 0; display: flex; flex-direction: column; background: var(--bg-2); border: 1px solid var(--bg-2); border-radius: 10px; overflow: hidden; --card: #18181b; --card-focus: #1e1e22; }

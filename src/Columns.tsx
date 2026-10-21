@@ -5,12 +5,12 @@
 // clicking into another focuses that column. Each column's tab list ends with Terminal: its
 // Worktree's shell, in place of the transcript. Dragging the gap between two columns moves width
 // from one to the other (ticket 36).
-import { createEffect, createSignal, For, lazy, Match, onCleanup, Show, Switch } from "solid-js";
+import { createEffect, createSignal, For, lazy, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { Avatar } from "./Avatar";
 import { Banner, Composer, FindOtherConversations, RecentList } from "./Chat";
 import type { OtherConversation, PermissionRequest, RecentSession, SessionId, SessionInfo } from "./core";
 import { setupOver } from "./core";
-import { ChevronDown, CirclePause, CirclePlay, Ellipsis, GitBranch, MessageSquareCode, Pin, Plus, Sparkles, SquareTerminal, Trash2, X } from "./icons";
+import { Check, ChevronDown, CirclePause, Columns2, CirclePlay, Ellipsis, GitBranch, MessageSquareCode, Pin, Plus, Sparkles, SquareTerminal, Trash2, X } from "./icons";
 import { PrButton } from "./PrOverlay";
 import { useSessionFacts } from "./sessionFacts";
 import { Setup, type SetupView } from "./Setup";
@@ -33,8 +33,12 @@ const EVEN = 1000;
 export interface ColumnsProps {
   /** The pinned Worktrees, in sidebar order. */
   worktrees: WorktreeTab[];
+  /** Every Worktree that can have a column, in sidebar order (the column picker's list). */
+  available: WorktreeTab[];
   /** The Worktrees without a column (offered when none has one). */
   unpinned: WorktreeTab[];
+  /** The column picker's confirmation: exactly these Worktrees have a column now. */
+  onSetColumns: (paths: string[]) => void;
   onPin: (path: string) => void;
   onUnpin: (path: string) => void;
   /** The focused column's Worktree. */
@@ -77,6 +81,88 @@ export interface ColumnsProps {
 }
 
 export function Columns(props: ColumnsProps) {
+  const [picking, setPicking] = createSignal(false);
+  return (
+    <div class="columns-area">
+      <div class="columns-bar">
+        <button class="ghost small" onClick={() => setPicking(true)} title="Choose which Worktrees have a column">
+          <Columns2 />
+          Manage columns
+        </button>
+      </div>
+      <ColumnRow {...props} />
+      <Show when={picking()}>
+        <ColumnPicker
+          available={props.available}
+          pinned={props.worktrees.map((w) => w.path)}
+          onConfirm={(paths) => {
+            setPicking(false);
+            props.onSetColumns(paths);
+          }}
+          onClose={() => setPicking(false)}
+        />
+      </Show>
+    </div>
+  );
+}
+
+/** The modal behind "Manage columns": a checkbox per Worktree, applied together on confirm. */
+function ColumnPicker(props: { available: WorktreeTab[]; pinned: string[]; onConfirm: (paths: string[]) => void; onClose: () => void }) {
+  const [chosen, setChosen] = createSignal(new Set(props.pinned));
+  const toggle = (path: string) =>
+    setChosen((now) => {
+      const next = new Set(now);
+      if (!next.delete(path)) next.add(path);
+      return next;
+    });
+  const confirm = () =>
+    props.onConfirm(
+      props.available
+        .filter((w) => chosen().has(w.path))
+        .map((w) => w.path),
+    );
+  const onKey = (e: KeyboardEvent) => e.key === "Escape" && props.onClose();
+  let dialog!: HTMLDivElement;
+  onMount(() => dialog.focus());
+  window.addEventListener("keydown", onKey);
+  onCleanup(() => window.removeEventListener("keydown", onKey));
+  return (
+    <div class="modal-backdrop" onClick={(e) => e.target === e.currentTarget && props.onClose()}>
+      <div class="modal" role="dialog" aria-label="Manage columns" tabIndex={-1} ref={dialog}>
+        <div class="modal-head">
+          <b>Manage columns</b>
+          <button class="ghost icon" onClick={() => props.onClose()} aria-label="Close" title="Close (Esc)">
+            <X />
+          </button>
+        </div>
+        <div class="modal-body">
+          <p class="hint">Tick the Worktrees to show as columns. Closing a column leaves its sessions running.</p>
+          <For each={props.available}>
+            {(w) => (
+              <label class="check-row" style={{ "--c": worktreeColour(w.path) }}>
+                <input type="checkbox" checked={chosen().has(w.path)} onChange={() => toggle(w.path)} disabled={w.removed && !chosen().has(w.path)} />
+                <GitBranch class="wt-glyph" />
+                <span class="mono grow">{worktreeLabel(w)}</span>
+                <Show when={w.removed}>
+                  <span class="gone">folder removed</span>
+                </Show>
+              </label>
+            )}
+          </For>
+        </div>
+        <div class="modal-foot">
+          <button onClick={() => props.onClose()}>Cancel</button>
+          <button class="primary" onClick={confirm}>
+            <Check />
+            Show {chosen().size} {chosen().size === 1 ? "column" : "columns"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ColumnRow(props: ColumnsProps) {
   // Columns are keyed by path: each `worktreesChanged` (an Agent editing a file changes its count)
   // brings new Worktree objects, and keying on those rebuilt every column and its transcript.
   const byPath = (path: string) => props.worktrees.find((w) => w.path === path);
