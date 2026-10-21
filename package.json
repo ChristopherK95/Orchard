@@ -9,7 +9,8 @@
     "build:web": "vite build",
     "typecheck": "tsc --noEmit",
     "bench:memory": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bench-memory.ps1",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "release": "node scripts/release.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.84.0",
