@@ -276,6 +276,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     if (path === activeWorktree() && next) setActiveWorktree(next.path);
     void setPinned(path, false);
   };
+  /** Gives exactly these Worktrees a column (the column picker's confirmation). */
+  const setColumns = async (paths: string[]) => {
+    const wanted = new Set(paths);
+    for (const path of pinned()) if (!wanted.has(path)) await setPinned(path, false);
+    for (const path of paths) if (!pinned().includes(path)) await setPinned(path, true);
+    if (!wanted.has(activeWorktree()) && paths[0]) setActiveWorktree(paths[0]);
+  };
   /** The sidebar folded to its icon rail, per view (the Columns view starts folded, for room). */
   const [railIn, setRailIn] = createStore({ tabs: false, columns: true });
   const collapsed = () => railIn[mainView()];
@@ -1552,7 +1559,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       <Show when={mainView() === "columns"}>
         <Columns
           worktrees={pinnedRow()}
+          available={rowWorktrees()}
           unpinned={rowWorktrees().filter((w) => !w.removed && !pinned().includes(w.path))}
+          onSetColumns={(paths) => void setColumns(paths)}
           onPin={(path) => void pin(path)}
           onUnpin={unpin}
           focused={activeWorktree()}
