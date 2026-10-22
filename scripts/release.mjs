@@ -1,10 +1,12 @@
-// Pushes a new release: bumps the version on a `release-X.Y.Z` branch, merges its PR, tags the
-// merge commit `vX.Y.Z` (which starts the Installers workflow), waits for the installers and
-// publishes the draft release with the merged PRs' titles as its notes.
+// Pushes a new release: bumps the version on a `release-X.Y.Z` branch off origin/main, merges its
+// PR, tags the merge commit `vX.Y.Z` (which starts the Installers workflow), waits for the
+// installers and publishes the draft release with the merged PRs' titles as its notes. Run as the
+// "Release" Action or by hand, in any Worktree with no uncommitted changes; a run that stopped
+// after pushing the release branch picks it up where it left off.
 //
 //   pnpm release [patch|minor|major|X.Y.Z]    (default: patch)
 //
-// Needs a clean `main`, and `gh` logged in with push and merge rights.
+// Needs `gh` logged in with push and merge rights.
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -29,19 +31,16 @@ const newer = (a, b) => {
   return false;
 };
 
-// Preflight.
+// Preflight. The release is cut from origin/main, so this Worktree can be on any branch.
 if (out("git", "status", "--porcelain")) fail("the working tree isn't clean");
-if (out("git", "branch", "--show-current") !== "main") fail("not on main");
-step("git", "pull", "--ff-only", "origin", "main");
 step("git", "fetch", "--tags", "origin");
 
-const cargoToml = join(root, "Cargo.toml");
 const workspaceVersion = /(\[workspace\.package\][^[]*?\nversion = ")([^"]+)(")/;
-const current = readFileSync(cargoToml, "utf8").match(workspaceVersion)?.[2];
+const current = out("git", "show", "origin/main:Cargo.toml").match(workspaceVersion)?.[2];
 if (!current) fail("no [workspace.package] version in Cargo.toml");
 const latestTag = out("git", "tag", "--list", "v*", "--sort=-v:refname").split("\n")[0];
 if (latestTag !== `v${current}`) fail(`Cargo.toml says ${current} but the newest tag is ${latestTag}`);
-if (!out("git", "log", "--oneline", `${latestTag}..HEAD`)) fail(`nothing on main since ${latestTag}`);
+if (!out("git", "log", "--oneline", `${latestTag}..origin/main`)) fail(`nothing on main since ${latestTag}`);
 
 const bump = process.argv[2] ?? "patch";
 let next;
@@ -57,39 +56,59 @@ const tag = `v${next}`;
 if (out("git", "ls-remote", "--tags", "origin", tag)) fail(`${tag} already exists on origin`);
 console.log(`\nReleasing ${current} → ${next}\n`);
 
-// Bump.
+const startedOn = out("git", "rev-parse", "--abbrev-ref", "HEAD");
+const startedAt = out("git", "rev-parse", "HEAD");
 const branch = `release-${next}`;
-step("git", "checkout", "-b", branch);
-const replace = (file, pattern) => {
-  const path = join(root, file);
-  const text = readFileSync(path, "utf8");
-  const bumped = text.replace(pattern, `$1${next}$3`);
-  if (bumped === text) fail(`couldn't find the version in ${file}`);
-  writeFileSync(path, bumped);
-};
-replace("Cargo.toml", workspaceVersion);
-replace("package.json", /^(  "version": ")([^"]+)(")/m);
-replace("src-tauri/tauri.conf.json", /^(  "version": ")([^"]+)(")/m);
-// Refreshes only the workspace members' entries in Cargo.lock.
-step("cargo", "update", "--workspace");
-const changed = out("git", "diff", "--name-only").split("\n").sort().join(" ");
-const expected = "Cargo.lock Cargo.toml package.json src-tauri/tauri.conf.json";
-if (changed !== expected) fail(`expected only ${expected} to change, got ${changed}`);
+const pushed = out("git", "ls-remote", "--heads", "origin", branch);
+
+if (pushed) {
+  console.log(`Continuing the pushed ${branch}`);
+  step("git", "switch", "-C", branch, `origin/${branch}`);
+} else {
+  // Bump.
+  step("git", "switch", "-C", branch, "origin/main");
+  const replace = (file, pattern) => {
+    const path = join(root, file);
+    const text = readFileSync(path, "utf8");
+    const bumped = text.replace(pattern, `$1${next}$3`);
+    if (bumped === text) fail(`couldn't find the version in ${file}`);
+    writeFileSync(path, bumped);
+  };
+  replace("Cargo.toml", workspaceVersion);
+  replace("package.json", /^(  "version": ")([^"]+)(")/m);
+  replace("src-tauri/tauri.conf.json", /^(  "version": ")([^"]+)(")/m);
+  // Refreshes only the workspace members' entries in Cargo.lock.
+  step("cargo", "update", "--workspace");
+  const changed = out("git", "diff", "--name-only").split("\n").sort().join(" ");
+  const expected = "Cargo.lock Cargo.toml package.json src-tauri/tauri.conf.json";
+  if (changed !== expected) fail(`expected only ${expected} to change, got ${changed}`);
+}
 
 step("cargo", "test", "-p", "editor-core");
 step("pnpm", "typecheck");
 
-// Release PR.
-step("git", "commit", "-am", `Version ${next}`);
-step("git", "push", "-u", "origin", branch);
-step("gh", "pr", "create", "--base", "main", "--title", `Version ${next}`, "--body", `Bumps the version to ${next}.`);
-step("gh", "pr", "merge", branch, "--merge", "--delete-branch");
+// Release PR. `gh pr merge --delete-branch` would switch this Worktree to main, which another
+// Worktree may have checked out, so the branch is deleted after tagging instead.
+if (!pushed) {
+  step("git", "commit", "-am", `Version ${next}`);
+  step("git", "push", "-u", "origin", branch);
+}
+const prState = out("gh", "pr", "list", "--head", branch, "--state", "all", "--json", "state", "--jq", ".[0].state");
+if (!prState) {
+  step("gh", "pr", "create", "--base", "main", "--head", branch, "--title", `Version ${next}`, "--body", `Bumps the version to ${next}.`);
+}
+if (prState !== "MERGED") step("gh", "pr", "merge", branch, "--merge");
+const mergeCommit = out("gh", "pr", "view", branch, "--json", "mergeCommit", "--jq", ".mergeCommit.oid");
+if (!mergeCommit) fail(`the PR for ${branch} isn't merged`);
 
 // Tag the merge commit; pushing the tag starts the Installers workflow.
-step("git", "checkout", "main");
-step("git", "pull", "--ff-only", "origin", "main");
-step("git", "tag", tag);
+step("git", "fetch", "origin");
+step("git", "tag", tag, mergeCommit);
 step("git", "push", "origin", tag);
+
+run("git", startedOn === "HEAD" ? ["switch", "--detach", startedAt] : ["switch", startedOn], { stdio: "inherit" });
+step("git", "branch", "-D", branch);
+step("git", "push", "origin", "--delete", branch);
 
 // Wait for the installers. The run takes a few seconds to show up after the push.
 let runId = "";
