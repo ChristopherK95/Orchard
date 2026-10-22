@@ -10,6 +10,7 @@ use std::time::Duration;
 use notify::{RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 
+use crate::session::PermissionMode;
 use crate::worktrees;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -113,6 +114,8 @@ pub struct AgentSettings {
     /// The `node` executable the Agents (and setup, git hooks, the Terminal panel) run on, put
     /// first on their `PATH`; none: the one on the login shell's `PATH` (`node.rs`).
     pub node: Option<String>,
+    /// The permission mode a new Tab starts in (Review Worktrees always use Plan).
+    pub default_mode: PermissionMode,
 }
 
 impl Default for AgentSettings {
@@ -122,6 +125,7 @@ impl Default for AgentSettings {
             idle_suspend: false,
             idle_suspend_minutes: 30,
             node: None,
+            default_mode: PermissionMode::AskForEdits,
         }
     }
 }
@@ -238,6 +242,9 @@ pub enum SettingChange {
     Node {
         path: Option<String>,
     },
+    DefaultMode {
+        mode: PermissionMode,
+    },
     Setup {
         commands: Vec<String>,
     },
@@ -319,6 +326,11 @@ impl SettingChange {
                 Some(value(*minutes as i64)),
             ),
             Self::Node { path } => (app("agents"), "node", text(path)),
+            Self::DefaultMode { mode } => (
+                app("agents"),
+                "default_mode",
+                Some(value(mode.setting_name())),
+            ),
             Self::Setup { commands } => (repo(), "setup", Some(list(commands))),
             Self::SetupWindows { commands } => {
                 (repo(), "setup_windows", commands.as_deref().map(list))
@@ -577,6 +589,8 @@ memory_limit_mb = 4096
 # Suspend sessions Idle longer than idle_suspend_minutes (off by default).
 idle_suspend = false
 idle_suspend_minutes = 30
+# The permission mode a new Tab starts in: askForEdits, acceptEdits, plan or auto.
+default_mode = \"askForEdits\"
 ";
 
 /// Adds a section for the repo keyed `key` to the file (creating it if need be). Appends text, so the

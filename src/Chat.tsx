@@ -199,6 +199,16 @@ function ModeIcon(props: { mode: PermissionMode }) {
   );
 }
 
+// The mode new Tabs start in, kept current from the settings so every Composer can compare to it.
+const [defaultMode, setDefaultMode] = createSignal<PermissionMode>("askForEdits");
+let defaultModeWatched = false;
+function watchDefaultMode() {
+  if (defaultModeWatched) return;
+  defaultModeWatched = true;
+  void core.settings().then((loaded) => setDefaultMode(loaded.settings.agents.defaultMode), () => {});
+  void core.onEvent((event) => event.kind === "settingsChanged" && setDefaultMode(event.settings.settings.agents.defaultMode));
+}
+
 /** The permission modes as a row of icon tabs, the current one lit. `locked`: a review session's,
  *  which stays in Plan mode (its Review Worktree is read-only). */
 function ModeTabs(props: { mode: PermissionMode; locked?: boolean; onPick: (mode: PermissionMode) => void }) {
@@ -501,6 +511,17 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
     }),
   );
 
+  watchDefaultMode();
+
+  const makeDefault = async () => {
+    setError("");
+    try {
+      await core.changeSetting({ kind: "defaultMode", mode: props.session.permissionMode });
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
   const setMode = async (mode: PermissionMode) => {
     setError("");
     try {
@@ -752,6 +773,11 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
               <Paperclip />
             </button>
             <ModeTabs mode={props.session.permissionMode} locked={props.session.modeLocked} onPick={(mode) => void setMode(mode)} />
+            <Show when={!props.session.modeLocked && props.session.permissionMode !== defaultMode()}>
+              <button class="ghost make-default" onClick={() => void makeDefault()} title={`New Tabs will start in ${MODE_LABEL[props.session.permissionMode]} mode`}>
+                Make default
+              </button>
+            </Show>
             <Show when={props.session.modeLocked}>
               <span class="hint">Read-only review</span>
             </Show>

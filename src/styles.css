@@ -829,6 +829,7 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .composer-bar .hint { font-size: 12px; color: var(--fg-3); white-space: nowrap; }
 .composer-bar .send { min-height: 28px; padding: 0 10px; }
 .composer-bar .send.icon-only { width: 30px; padding: 0; }
+.composer-bar .make-default { min-height: 28px; padding: 0 8px; font-size: 12px; color: var(--fg-3); white-space: nowrap; }
 .composer-bar .attach { min-height: 28px; width: 28px; padding: 0; color: var(--fg-3); }
 .composer-bar .stop { min-height: 28px; gap: 6px; padding: 0 10px; background: var(--bg-4); }
 .composer-bar .stop .lucide { width: 12px; height: 12px; color: var(--fg-2); }
