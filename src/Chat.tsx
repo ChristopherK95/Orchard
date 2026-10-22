@@ -39,6 +39,7 @@ import {
   Zap,
 } from "./icons";
 import { worktreeColour } from "./Worktrees";
+import { HistoryCursor, rememberPrompt } from "./promptHistory";
 
 export { STATE_LABEL } from "./stateLabels";
 
@@ -549,6 +550,25 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
     }
   };
 
+  const history = new HistoryCursor();
+  /** Up / Down recall earlier prompts of this Worktree; false when the key should act normally. */
+  const recall = (e: KeyboardEvent) => {
+    if (e.shiftKey || e.ctrlKey || e.altKey || e.metaKey || input.selectionStart !== input.selectionEnd) return false;
+    const browsing = history.browsing(text());
+    const next =
+      e.key === "ArrowUp" && (browsing || !text() || input.selectionStart === 0)
+        ? history.older(props.session.worktree, text())
+        : e.key === "ArrowDown" && browsing
+          ? history.newer(props.session.worktree)
+          : null;
+    if (next === null) return false;
+    e.preventDefault();
+    setText(next);
+    input.setSelectionRange(next.length, next.length);
+    trackCaret();
+    return true;
+  };
+
   const ready = () => !!text().trim() || attachments().length > 0;
   const send = async () => {
     const prompt = text().trim();
@@ -565,6 +585,8 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
       }
       if (working()) await core.queuePrompt(props.session.id, prompt, files);
       else await core.sendPrompt(props.session.id, prompt, files);
+      rememberPrompt(props.session.worktree, prompt);
+      history.reset();
       setText("");
       setAttachments([]);
       input.focus();
@@ -722,6 +744,7 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
               value={text()}
               onInput={(e) => {
                 setText(e.currentTarget.value);
+                if (!history.browsing(e.currentTarget.value)) history.reset();
                 trackCaret();
               }}
               onKeyUp={trackCaret}
@@ -731,6 +754,7 @@ export function Composer(props: { session: SessionInfo; onHeight?: (px: number) 
               onKeyDown={(e) => {
                 if (slash.key(e, (command) => complete(command.name))) return;
                 if (mentions.key(e, completeMention)) return;
+                if ((e.key === "ArrowUp" || e.key === "ArrowDown") && recall(e)) return;
                 const shortcut = e.ctrlKey && !e.shiftKey && !e.altKey && { i: "italic", e: "code" }[e.key.toLowerCase()];
                 if (shortcut) {
                   e.preventDefault();
