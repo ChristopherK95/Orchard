@@ -144,6 +144,8 @@ pub struct RepoSettings {
     pub windows_shell: WindowsShell,
     /// Actions: named commands the user runs on demand, each in a shell of its own.
     pub actions: Vec<Action>,
+    /// Added to every push the editor makes (`--no-verify`, say), one argument each.
+    pub push_args: Vec<String>,
 }
 
 /// A named set of commands run on demand in a Worktree (a dev server, say), each command typed
@@ -245,6 +247,10 @@ pub enum SettingChange {
     DefaultMode {
         mode: PermissionMode,
     },
+    /// The whole list (an empty one removes the key).
+    PushArgs {
+        args: Vec<String>,
+    },
     Setup {
         commands: Vec<String>,
     },
@@ -273,6 +279,7 @@ impl SettingChange {
                 | Self::SetupLinux { .. }
                 | Self::WindowsShell { .. }
                 | Self::Actions { .. }
+                | Self::PushArgs { .. }
         )
     }
 
@@ -331,6 +338,14 @@ impl SettingChange {
                 "default_mode",
                 Some(value(mode.setting_name())),
             ),
+            Self::PushArgs { args } => {
+                let args: Vec<String> = args
+                    .iter()
+                    .map(|a| a.trim().to_owned())
+                    .filter(|a| !a.is_empty())
+                    .collect();
+                (repo(), "push_args", (!args.is_empty()).then(|| list(&args)))
+            }
             Self::Setup { commands } => (repo(), "setup", Some(list(commands))),
             Self::SetupWindows { commands } => {
                 (repo(), "setup_windows", commands.as_deref().map(list))
@@ -620,7 +635,8 @@ pub(crate) fn add_repo_section(path: &Path, key: &str, name: &str) -> std::io::R
          setup = []\n\
          # setup_windows = []         # replaces `setup` on Windows\n\
          # setup_linux = []           # replaces `setup` on Linux\n\
-         # windows_shell = \"git-bash\" # instead of PowerShell\n"
+         # windows_shell = \"git-bash\" # instead of PowerShell\n\
+         # push_args = [\"--no-verify\"] # added to every push (this one skips the pre-push hook)\n"
     );
     std::fs::write(path, format!("{existing}{separator}{section}"))
 }
@@ -781,6 +797,30 @@ mod tests {
         };
         assert!(defaults.dashboard.open_on_start);
         assert!(FILE_HEADER.contains("[dashboard]\n"), "{FILE_HEADER}");
+    }
+
+    #[test]
+    fn push_args_are_set_per_repo_and_an_empty_list_removes_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let key = "https://github.com/me/app";
+        add_repo_section(&path, key, "app").unwrap();
+        let Read::Parsed(settings) = read(&path) else {
+            panic!("the added section doesn't parse")
+        };
+        assert!(settings.repos[key].push_args.is_empty());
+
+        let args = vec![" --no-verify ".into(), "".into()];
+        change(&path, Some(key), &SettingChange::PushArgs { args }).unwrap();
+        let Read::Parsed(settings) = read(&path) else {
+            panic!()
+        };
+        assert_eq!(settings.repos[key].push_args, ["--no-verify"]);
+
+        let args = vec![];
+        change(&path, Some(key), &SettingChange::PushArgs { args }).unwrap();
+        let now = std::fs::read_to_string(&path).unwrap();
+        assert!(!now.contains("\npush_args"), "{now}");
     }
 
     #[test]

@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use editor_core::{Core, CoreConfig, NewWorktree, PullOutcome, PushOutcome, SessionState};
+use editor_core::{
+    Core, CoreConfig, NewWorktree, PullOutcome, PushOutcome, SessionState, SettingChange,
+};
 use serde_json::json;
 use support::*;
 
@@ -207,6 +209,35 @@ async fn a_push_the_remote_turns_down_says_so() {
     commit(&root, "mine");
 
     assert_eq!(core.push(&root).await.unwrap(), PushOutcome::Rejected);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn push_args_from_the_settings_go_on_every_push() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let core = core_with_settings(&fake, "");
+    let root = open(&core, &setup.repo()).await;
+    commit(&root, "mine");
+    let hook = root.join(".git/hooks/pre-push");
+    std::fs::write(&hook, "#!/bin/sh\necho 'lint failed'\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let err = core.push(&root).await.unwrap_err().to_string();
+    assert!(err.contains("lint failed"), "{err}");
+
+    core.change_setting(SettingChange::PushArgs {
+        args: vec!["--no-verify".into()],
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        core.push(&root).await.unwrap(),
+        PushOutcome::Pushed { .. }
+    ));
+    assert_eq!(origin_main(&setup), rev_parse(&root, "HEAD"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -4263,7 +4263,7 @@ impl Core {
             "Pushing {branch} to {}",
             git::push_remote(worktree, branch).await
         ));
-        let pushed = git::push(worktree, Some(&output)).await;
+        let pushed = git::push(worktree, &self.push_args().await, Some(&output)).await;
         self.inner.git_changed(worktree.to_owned());
         Ok((committed, pushed.map_err(CoreError::Git)?))
     }
@@ -4350,9 +4350,19 @@ impl Core {
     pub async fn push(&self, worktree: &Path) -> Result<PushOutcome, CoreError> {
         let worktree = self.known_worktree(worktree)?;
         let _one_at_a_time = self.inner.remote_op.lock().await;
-        let pushed = git::push(&worktree, None).await.map_err(CoreError::Git);
+        let pushed = git::push(&worktree, &self.push_args().await, None)
+            .await
+            .map_err(CoreError::Git);
         self.inner.git_changed(worktree);
         pushed
+    }
+
+    /// What the open repo's settings add to every push.
+    async fn push_args(&self) -> Vec<String> {
+        self.repo_settings()
+            .await
+            .map(|repo| repo.push_args)
+            .unwrap_or_default()
     }
 
     /// Fetches, then fast-forwards the branch to its upstream if it can. Never merges or rebases:

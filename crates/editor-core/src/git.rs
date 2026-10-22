@@ -1312,9 +1312,10 @@ pub(crate) async fn push_remote(worktree: &Path, branch: &str) -> String {
 /// Always by name: a branch tracking another (an Agent's branch made from `origin/main`) never
 /// pushes onto that one, whatever `push.default` says. A push the remote turns down because it has
 /// commits this branch hasn't is `Rejected`, not an error. With a `sink`, git's progress and its
-/// hooks' output go there as they come.
+/// hooks' output go there as they come. `extra` (the `push_args` setting) goes before the remote.
 pub(crate) async fn push(
     worktree: &Path,
+    extra: &[String],
     sink: Option<crate::process::Sink<'_>>,
 ) -> Result<crate::git_status::PushOutcome, String> {
     use crate::git_status::PushOutcome;
@@ -1327,13 +1328,10 @@ pub(crate) async fn push(
         Some(_) => "--progress",
         None => "--quiet",
     };
-    match run_remote(
-        worktree,
-        &["push", progress, "--set-upstream", &remote, &target],
-        sink,
-    )
-    .await
-    {
+    let mut args = vec!["push", progress, "--set-upstream"];
+    args.extend(extra.iter().map(String::as_str));
+    args.extend([remote.as_str(), &target]);
+    match run_remote(worktree, &args, sink).await {
         Ok(_) => Ok(PushOutcome::Pushed {
             to: format!("{remote}/{branch}"),
         }),

@@ -251,6 +251,9 @@ export function SettingsPage(props: {
                       >
                         <ActionList actions={r().actions} onCommit={(actions) => void change({ kind: "actions", actions })} />
                       </Row>
+                      <Row label="Push arguments" hint="Added to every push in this repository, from the Review overlay and the Git drawer. Separated by spaces, e.g. --no-verify to skip the pre-push hook.">
+                        <ArgsField value={r().pushArgs} placeholder="e.g. --no-verify" onCommit={(args) => void change({ kind: "pushArgs", args })} />
+                      </Row>
                       <Row label="Windows shell" hint="What setup and the Terminal panel run on Windows (Linux: bash for setup, your $SHELL for the terminal).">
                         <div class="segmented">
                           <button classList={{ on: r().windowsShell === "powershell" }} onClick={() => void change({ kind: "windowsShell", shell: "powershell" })}>
@@ -409,6 +412,23 @@ function NumberField(props: { value: number; unit: string; min?: number; max?: n
       />
       <span class="muted small">{props.unit}</span>
     </span>
+  );
+}
+
+/** Command-line arguments as one line, split on spaces; applied when it loses focus or on Enter. */
+function ArgsField(props: { value: string[]; placeholder?: string; onCommit: (args: string[]) => void }) {
+  return (
+    <input
+      class="mono"
+      value={props.value.join(" ")}
+      placeholder={props.placeholder}
+      spellcheck={false}
+      onChange={(e) => {
+        const args = e.currentTarget.value.split(/\s+/).filter(Boolean);
+        if (args.join(" ") !== props.value.join(" ")) props.onCommit(args);
+      }}
+      onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+    />
   );
 }
 

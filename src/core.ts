@@ -339,6 +339,8 @@ export interface RepoSettings {
   windowsShell: WindowsShell;
   /** Named commands run on demand, each command in a shell of its own. */
   actions: Action[];
+  /** Added to every push (`--no-verify`, say), one argument each. */
+  pushArgs: string[];
 }
 
 /** An Action: its commands each run in a new shell of the Worktree's Terminal panel. */
@@ -362,6 +364,7 @@ export type SettingChange =
   | { kind: "idleSuspendMinutes"; minutes: number }
   | { kind: "node"; path: string | null }
   | { kind: "defaultMode"; mode: PermissionMode }
+  | { kind: "pushArgs"; args: string[] }
   | { kind: "setup"; commands: string[] }
   | { kind: "setupWindows"; commands: string[] | null }
   | { kind: "setupLinux"; commands: string[] | null }
