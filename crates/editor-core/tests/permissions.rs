@@ -358,3 +358,25 @@ async fn changing_the_permission_mode_is_applied_to_the_session() {
         PermissionMode::Plan
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_session_starts_in_the_default_mode_the_user_made() {
+    let repo = git_repo();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let core = core_with_settings(&fake, "");
+    core.open_workspace(repo.path()).await.unwrap();
+
+    core.change_setting(editor_core::SettingChange::DefaultMode {
+        mode: PermissionMode::Plan,
+    })
+    .await
+    .unwrap();
+    let session = core.new_session().await.unwrap();
+
+    assert_eq!(
+        core.session_info(session).unwrap().permission_mode,
+        PermissionMode::Plan
+    );
+    let text = std::fs::read_to_string(fake.settings_path()).unwrap();
+    assert!(text.contains("default_mode = \"plan\""), "{text}");
+}

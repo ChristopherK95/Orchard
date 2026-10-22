@@ -2631,11 +2631,12 @@ impl Core {
             .request("session/new", json!({ "cwd": root, "mcpServers": [] }))
             .await?;
         let acp_id = created["sessionId"].as_str().unwrap_or_default().to_owned();
-        // Every Tab starts in Ask for edits, whatever the Agent's own settings default to; one in a
-        // Review Worktree in Plan mode, where it stays (nothing there may be edited).
+        // Every Tab starts in the default mode from the settings (Ask for edits unless changed),
+        // whatever the Agent's own settings default to; one in a Review Worktree in Plan mode,
+        // where it stays (nothing there may be edited).
         let mode = match self.is_review_worktree(&root) {
             Some(_) => PermissionMode::Plan,
-            None => PermissionMode::AskForEdits,
+            None => self.settings().settings.agents.default_mode,
         };
         let current_mode = created["modes"]["currentModeId"].as_str();
         if current_mode.is_some_and(|current| current != mode.acp_id()) {
