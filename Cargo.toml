@@ -4,7 +4,7 @@ members = ["crates/editor-core", "src-tauri"]
 
 [workspace.package]
 edition = "2021"
-version = "0.2.17"
+version = "0.2.18"
 publish = false
 
 [workspace.dependencies]
