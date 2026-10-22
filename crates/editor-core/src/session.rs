@@ -50,6 +50,16 @@ impl PermissionMode {
         }
     }
 
+    /// The name it has in the settings file and over IPC.
+    pub(crate) fn setting_name(self) -> &'static str {
+        match self {
+            Self::AskForEdits => "askForEdits",
+            Self::AcceptEdits => "acceptEdits",
+            Self::Plan => "plan",
+            Self::Auto => "auto",
+        }
+    }
+
     pub(crate) fn from_acp_id(id: &str) -> Option<Self> {
         [Self::AskForEdits, Self::AcceptEdits, Self::Plan, Self::Auto]
             .into_iter()

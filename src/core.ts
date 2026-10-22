@@ -322,6 +322,8 @@ export interface Settings {
     idleSuspendMinutes: number;
     /** The `node` executable the Agents run on; null: the one on the login shell's PATH. */
     node: string | null;
+    /** The permission mode a new Tab starts in. */
+    defaultMode: PermissionMode;
   };
 }
 
@@ -359,6 +361,7 @@ export type SettingChange =
   | { kind: "idleSuspend"; on: boolean }
   | { kind: "idleSuspendMinutes"; minutes: number }
   | { kind: "node"; path: string | null }
+  | { kind: "defaultMode"; mode: PermissionMode }
   | { kind: "setup"; commands: string[] }
   | { kind: "setupWindows"; commands: string[] | null }
   | { kind: "setupLinux"; commands: string[] | null }

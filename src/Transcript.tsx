@@ -8,7 +8,7 @@ import { createEffect, createMemo, createSignal, For, type JSX, on, Show } from 
 import { Dynamic } from "solid-js/web";
 import { answerInDraft } from "./Chat";
 import type { PermissionRequest, SessionId, TranscriptItem } from "./core";
-import { BookOpen, Brain, Check, ChevronRight, Globe, Loader, MoveRight, Paperclip, Pencil, Play, TextSearch, Trash2, Wrench } from "./icons";
+import { BookOpen, Brain, Check, ChevronRight, Copy, Globe, Loader, MoveRight, Paperclip, Pencil, Play, TextSearch, Trash2, Wrench } from "./icons";
 import { handleTranscriptClick, renderMarkdown, renderUserMarkdown } from "./markdown";
 import { PermissionCard } from "./PermissionCard";
 
@@ -204,6 +204,28 @@ export function Transcript(props: {
 
 const always = () => true;
 
+/** Copies an agent message's source markdown (not the rendered HTML) to the clipboard. */
+function CopyMarkdown(props: { text: string }): JSX.Element {
+  const [copied, setCopied] = createSignal(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(props.text);
+    } catch {
+      return;
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  };
+  return (
+    <button class="msg-copy" title="Copy as markdown" aria-label="Copy as markdown" onClick={copy}>
+      <Show when={copied()} fallback={<Copy />}>
+        <Check />
+      </Show>
+      {copied() ? "Copied" : "Copy as markdown"}
+    </button>
+  );
+}
+
 function renderItem(
   sessionId: SessionId,
   item: TranscriptItem | undefined,
@@ -217,6 +239,7 @@ function renderItem(
       return (
         <>
           <div class="msg agent markdown" innerHTML={renderMarkdown(item.text)} />
+          <CopyMarkdown text={item.text} />
           {underAgent?.(item.text)}
         </>
       );

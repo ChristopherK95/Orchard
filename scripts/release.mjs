@@ -1,109 +1,149 @@
-// Cuts a release: bumps the version in Cargo.toml, Cargo.lock, package.json and
-// src-tauri/tauri.conf.json on a `release-<version>` branch off origin/main, runs the core tests
-// and the typecheck, opens and merges the "Version <version>" PR, then tags the merge commit
-// `v<version>`, which starts the Installers workflow (a draft GitHub release). Run as the
-// "Release" Action, or by hand; the Worktree it runs in must have no uncommitted changes.
+// Pushes a new release: bumps the version on a `release-X.Y.Z` branch off origin/main, merges its
+// PR, tags the merge commit `vX.Y.Z` (which starts the Installers workflow), waits for the
+// installers and publishes the draft release with the merged PRs' titles as its notes. Run as the
+// "Release" Action or by hand, in any Worktree with no uncommitted changes; a run that stopped
+// after pushing the release branch picks it up where it left off.
 //
-//   node scripts/release.mjs [patch|minor|major|<x.y.z>]   (default: patch)
+//   pnpm release [patch|minor|major|X.Y.Z]    (default: patch)
+//
+// Needs `gh` logged in with push and merge rights.
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const root = join(import.meta.dirname, "..");
 
-// pnpm is a .cmd on Windows, which only runs through a shell; git, gh and cargo don't need one,
-// and going without keeps arguments such as the commit message unquoted.
-const run = (command, args, { capture = false, shell = false } = {}) =>
-  execFileSync(command, args, {
-    cwd: root,
-    encoding: "utf8",
-    stdio: capture ? ["ignore", "pipe", "inherit"] : "inherit",
-    shell: shell && process.platform === "win32",
-  })?.trim();
-const git = (...args) => run("git", args, { capture: true });
-const step = (text) => console.log(`\n▸ ${text}`);
-const fail = (text) => {
-  console.error(`\n✗ ${text}`);
+// pnpm is a .cmd shim on Windows, which only runs through a shell.
+const run = (cmd, args, opts = {}) =>
+  execFileSync(cmd, args, { cwd: root, encoding: "utf8", shell: cmd === "pnpm", ...opts });
+const out = (cmd, ...args) => run(cmd, args).trim();
+const step = (cmd, ...args) => run(cmd, args, { stdio: "inherit" });
+const fail = (message) => {
+  console.error(`release: ${message}`);
   process.exit(1);
 };
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-if (git("status", "--porcelain")) fail("This Worktree has uncommitted changes; commit or stash them first.");
+const parse = (v) => v.split(".").map(Number);
+const newer = (a, b) => {
+  const [x, y] = [parse(a), parse(b)];
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
+  return false;
+};
 
-step("Fetching origin");
-run("git", ["fetch", "--tags", "origin"]);
+// Preflight. The release is cut from origin/main, so this Worktree can be on any branch.
+if (out("git", "status", "--porcelain")) fail("the working tree isn't clean");
+step("git", "fetch", "--tags", "origin");
 
-const current = JSON.parse(git("show", "origin/main:package.json")).version;
+const workspaceVersion = /(\[workspace\.package\][^[]*?\nversion = ")([^"]+)(")/;
+const current = out("git", "show", "origin/main:Cargo.toml").match(workspaceVersion)?.[2];
+if (!current) fail("no [workspace.package] version in Cargo.toml");
+const latestTag = out("git", "tag", "--list", "v*", "--sort=-v:refname").split("\n")[0];
+if (latestTag !== `v${current}`) fail(`Cargo.toml says ${current} but the newest tag is ${latestTag}`);
+if (!out("git", "log", "--oneline", `${latestTag}..origin/main`)) fail(`nothing on main since ${latestTag}`);
+
 const bump = process.argv[2] ?? "patch";
-const next = nextVersion(current, bump);
-const branch = `release-${next}`;
-const tag = `v${next}`;
-if (git("tag", "--list", tag)) fail(`${tag} already exists.`);
-console.log(`${current} → ${next}`);
-
-const startedOn = git("rev-parse", "--abbrev-ref", "HEAD");
-const startedAt = git("rev-parse", "HEAD");
-const remoteBranch = git("ls-remote", "--heads", "origin", branch);
-
-// A release branch already pushed (a run that stopped after pushing) is picked up where it left off.
-if (remoteBranch) {
-  step(`Continuing the pushed ${branch}`);
-  run("git", ["switch", "-C", branch, `origin/${branch}`]);
+let next;
+if (/^\d+\.\d+\.\d+$/.test(bump)) {
+  if (!newer(bump, current)) fail(`${bump} isn't newer than ${current}`);
+  next = bump;
 } else {
-  step(`Bumping the version on ${branch}`);
-  run("git", ["switch", "-C", branch, "origin/main"]);
-  setVersion("Cargo.toml", /(\[workspace\.package\][^[]*?\nversion = ")[^"]+(")/);
-  setVersion("package.json", /^(  "version": ")[^"]+(")/m);
-  setVersion("src-tauri/tauri.conf.json", /^(  "version": ")[^"]+(")/m);
-  run("cargo", ["update", "--workspace", "--quiet"]);
+  const part = ["major", "minor", "patch"].indexOf(bump);
+  if (part < 0) fail(`expected patch, minor, major or X.Y.Z, got "${bump}"`);
+  next = parse(current).map((n, i) => (i < part ? n : i === part ? n + 1 : 0)).join(".");
+}
+const tag = `v${next}`;
+if (out("git", "ls-remote", "--tags", "origin", tag)) fail(`${tag} already exists on origin`);
+console.log(`\nReleasing ${current} → ${next}\n`);
+
+const startedOn = out("git", "rev-parse", "--abbrev-ref", "HEAD");
+const startedAt = out("git", "rev-parse", "HEAD");
+const branch = `release-${next}`;
+const pushed = out("git", "ls-remote", "--heads", "origin", branch);
+
+if (pushed) {
+  console.log(`Continuing the pushed ${branch}`);
+  step("git", "switch", "-C", branch, `origin/${branch}`);
+} else {
+  // Bump.
+  step("git", "switch", "-C", branch, "origin/main");
+  const replace = (file, pattern) => {
+    const path = join(root, file);
+    const text = readFileSync(path, "utf8");
+    const bumped = text.replace(pattern, `$1${next}$3`);
+    if (bumped === text) fail(`couldn't find the version in ${file}`);
+    writeFileSync(path, bumped);
+  };
+  replace("Cargo.toml", workspaceVersion);
+  replace("package.json", /^(  "version": ")([^"]+)(")/m);
+  replace("src-tauri/tauri.conf.json", /^(  "version": ")([^"]+)(")/m);
+  // Refreshes only the workspace members' entries in Cargo.lock.
+  step("cargo", "update", "--workspace");
+  const changed = out("git", "diff", "--name-only").split("\n").sort().join(" ");
+  const expected = "Cargo.lock Cargo.toml package.json src-tauri/tauri.conf.json";
+  if (changed !== expected) fail(`expected only ${expected} to change, got ${changed}`);
 }
 
-step("Testing");
-run("cargo", ["test", "-p", "editor-core"]);
-run("pnpm", ["typecheck"], { shell: true });
+step("cargo", "test", "-p", "editor-core");
+step("pnpm", "typecheck");
 
-if (!remoteBranch) {
-  step("Committing and opening the PR");
-  run("git", ["commit", "--quiet", "--all", "--message", `Version ${next}`]);
-  run("git", ["push", "--quiet", "--set-upstream", "origin", branch]);
+// Release PR. `gh pr merge --delete-branch` would switch this Worktree to main, which another
+// Worktree may have checked out, so the branch is deleted after tagging instead.
+if (!pushed) {
+  step("git", "commit", "-am", `Version ${next}`);
+  step("git", "push", "-u", "origin", branch);
 }
-const prState = run("gh", ["pr", "list", "--head", branch, "--state", "all", "--json", "state", "--jq", ".[0].state"], {
-  capture: true,
-});
+const prState = out("gh", "pr", "list", "--head", branch, "--state", "all", "--json", "state", "--jq", ".[0].state");
 if (!prState) {
-  run("gh", ["pr", "create", "--base", "main", "--head", branch, "--title", `Version ${next}`, "--body", `Bumps the version to ${next}.`]);
+  step("gh", "pr", "create", "--base", "main", "--head", branch, "--title", `Version ${next}`, "--body", `Bumps the version to ${next}.`);
 }
-if (prState !== "MERGED") {
-  step("Merging the PR");
-  run("gh", ["pr", "merge", branch, "--merge"]);
+if (prState !== "MERGED") step("gh", "pr", "merge", branch, "--merge");
+const mergeCommit = out("gh", "pr", "view", branch, "--json", "mergeCommit", "--jq", ".mergeCommit.oid");
+if (!mergeCommit) fail(`the PR for ${branch} isn't merged`);
+
+// Tag the merge commit; pushing the tag starts the Installers workflow.
+step("git", "fetch", "origin");
+step("git", "tag", tag, mergeCommit);
+step("git", "push", "origin", tag);
+
+run("git", startedOn === "HEAD" ? ["switch", "--detach", startedAt] : ["switch", startedOn], { stdio: "inherit" });
+step("git", "branch", "-D", branch);
+step("git", "push", "origin", "--delete", branch);
+
+// Wait for the installers. The run takes a few seconds to show up after the push.
+let runId = "";
+for (let i = 0; i < 30 && !runId; i++) {
+  await sleep(5000);
+  runId = out("gh", "run", "list", "--workflow", "release.yml", "--branch", tag, "--limit", "1",
+    "--json", "databaseId", "--jq", ".[0].databaseId // empty");
 }
-const mergeCommit = run("gh", ["pr", "view", branch, "--json", "mergeCommit", "--jq", ".mergeCommit.oid"], {
-  capture: true,
-});
-if (!mergeCommit) fail(`The PR for ${branch} isn't merged.`);
-
-step(`Tagging ${tag}`);
-run("git", ["fetch", "--quiet", "origin"]);
-run("git", ["tag", tag, mergeCommit]);
-run("git", ["push", "--quiet", "origin", tag]);
-
-run("git", startedOn === "HEAD" ? ["switch", "--quiet", "--detach", startedAt] : ["switch", "--quiet", startedOn]);
-run("git", ["branch", "--quiet", "-D", branch]);
-
-const repo = run("gh", ["repo", "view", "--json", "url", "--jq", ".url"], { capture: true });
-console.log(`\n✓ ${tag} tagged. The installers build into a draft release: ${repo}/actions/workflows/release.yml`);
-
-function nextVersion(version, bump) {
-  if (/^\d+\.\d+\.\d+$/.test(bump)) return bump;
-  const [major, minor, patch] = version.split(".").map(Number);
-  if (bump === "patch") return `${major}.${minor}.${patch + 1}`;
-  if (bump === "minor") return `${major}.${minor + 1}.0`;
-  if (bump === "major") return `${major + 1}.0.0`;
-  fail(`Unknown bump "${bump}": use patch, minor, major or a version such as 1.2.3.`);
+if (!runId) fail(`the Installers run for ${tag} didn't start; check GitHub Actions`);
+try {
+  step("gh", "run", "watch", runId, "--exit-status");
+} catch {
+  fail(`the Installers run failed (gh run view ${runId} --log-failed); the draft release is left as is`);
 }
 
-function setVersion(file, pattern) {
-  const path = join(root, file);
-  const text = readFileSync(path, "utf8");
-  if (!pattern.test(text)) fail(`No version found in ${file}.`);
-  writeFileSync(path, text.replace(pattern, `$1${next}$2`));
+const assets = out("gh", "release", "view", tag, "--json", "assets", "--jq", ".assets[].name");
+for (const ext of [".exe", ".msi", ".deb", ".rpm", ".AppImage"]) {
+  if (!assets.split("\n").some((name) => name.endsWith(ext))) fail(`the draft release has no ${ext}`);
 }
+
+// Notes: one bullet per change on main since the last release — a merged PR's title (the first
+// line of its merge commit's body), or a direct commit's subject — leaving out version bumps.
+const log = out("git", "log", "--first-parent", "--reverse", "--format=%P%x1f%s%x1f%b%x1e", `${latestTag}..${tag}`);
+const notes = log
+  .split("\x1e")
+  .map((entry) => entry.trim())
+  .filter(Boolean)
+  .map((entry) => {
+    const [parents, subject, body] = entry.split("\x1f");
+    return parents.includes(" ") ? body.split("\n")[0].trim() || subject : subject;
+  })
+  .filter((line) => !/^Version \d+\.\d+\.\d+$/.test(line))
+  .map((line) => `- ${line}`)
+  .join("\n");
+
+step("gh", "release", "edit", tag, "--draft=false", "--latest", "--notes", notes);
+const url = out("gh", "release", "view", tag, "--json", "url", "--jq", ".url");
+console.log(`\nReleased Orchard ${tag}: ${url}`);

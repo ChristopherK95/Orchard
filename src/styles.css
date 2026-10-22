@@ -633,6 +633,12 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .msg.notice { display: flex; align-items: center; gap: 12px; color: var(--fg-3); font-size: 12px; white-space: pre-wrap; text-align: center; }
 .msg.notice::before, .msg.notice::after { content: ""; flex: 1; min-width: 24px; height: 1px; background: var(--line); }
 
+/* "Copy as markdown" under an agent message: quiet until the row is hovered or focused. */
+.msg-copy { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 6px; margin-top: 2px; font-size: 11.5px; color: var(--fg-3); background: none; border: 0; border-radius: 4px; cursor: pointer; opacity: 0; }
+.msg-copy .lucide { width: 12px; height: 12px; }
+.row:hover .msg-copy, .msg-copy:focus-visible { opacity: 1; }
+.msg-copy:hover { color: var(--fg-2); background: var(--bg-1); }
+
 /* Agent prose: full-width markdown, no bubble. */
 .msg.user.markdown { color: var(--user-bubble-fg); }
 .msg.user.markdown strong, .msg.user.markdown :not(pre) > code, .msg.user.markdown a { color: inherit; }
@@ -823,6 +829,7 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .composer-bar .hint { font-size: 12px; color: var(--fg-3); white-space: nowrap; }
 .composer-bar .send { min-height: 28px; padding: 0 10px; }
 .composer-bar .send.icon-only { width: 30px; padding: 0; }
+.composer-bar .make-default { min-height: 28px; padding: 0 8px; font-size: 12px; color: var(--fg-3); white-space: nowrap; }
 .composer-bar .attach { min-height: 28px; width: 28px; padding: 0; color: var(--fg-3); }
 .composer-bar .stop { min-height: 28px; gap: 6px; padding: 0 10px; background: var(--bg-4); }
 .composer-bar .stop .lucide { width: 12px; height: 12px; color: var(--fg-2); }
@@ -1279,6 +1286,8 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 
 /* Columns view (ticket 28): a panel per pinned Worktree, at least 640 px wide; more than fit
    scroll sideways, a step lighter than the gaps between them (and cards a step lighter again). */
+.columns-area { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.columns-bar { flex: none; display: flex; justify-content: flex-end; padding: 6px 8px 0; }
 .columns { flex: 1; min-width: 0; min-height: 0; display: flex; padding: 8px; overflow-x: auto; overflow-y: hidden; }
 /* (Each column's flex-grow is its share of the row, from 0 px: widths go by the shares.) */
 .column { flex: 1 1 0; min-width: 640px; min-height: 0; display: flex; flex-direction: column; background: var(--bg-2); border: 1px solid var(--bg-2); border-radius: 10px; overflow: hidden; --card: #18181b; --card-focus: #1e1e22; }
