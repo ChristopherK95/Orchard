@@ -1277,8 +1277,10 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 /* Picking lines by their numbers (a Code review's), and what's shown under a line. */
 .diff .no { position: relative; }
 .diff.selectable .no[data-side] { cursor: pointer; }
-.diff.selectable .no[data-side]:hover { color: var(--fg-1); }
-.diff .line.picked { box-shadow: inset 0 0 0 999px rgba(161, 161, 170, 0.16); }
+.diff.selectable .no[data-side]:hover { color: var(--fg-1); background: rgba(161, 161, 170, 0.22); }
+/* (An accent bar and brighter number make the picked range, or a shift-hover preview of it, plain.) */
+.diff .line.picked { box-shadow: inset 0 0 0 999px rgba(161, 161, 170, 0.2), inset 3px 0 0 var(--accent); }
+.diff .line.picked .no { color: var(--fg-1); font-weight: 600; }
 .diff-inline { display: block; grid-column: 1 / -1; padding: 8px 16px 8px 60px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--bg-2); color: var(--fg-1); font: 13px/1.55 var(--ui); white-space: normal; }
 .diff-inline:empty { display: none; }
 .diff.command .cmd { color: var(--danger); }

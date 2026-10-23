@@ -857,7 +857,7 @@ export function CodeReviewView(props: {
                 </div>
                 <div class="modal-foot review-foot">
                   <span class="hint">
-                    <kbd>J</kbd> / <kbd>K</kbd> next / previous file · <kbd>V</kbd> viewed · click a line number to comment, shift-click or drag for a range
+                    <kbd>J</kbd> / <kbd>K</kbd> next / previous file · <kbd>V</kbd> viewed · click a line number to comment · drag, or hold shift and click another, for a range
                   </span>
                   <button class="ghost" disabled={at() === 0} onClick={() => go(at() - 1)}>
                     <ChevronLeft />

@@ -150,6 +150,8 @@ export function DiffView(props: {
   // Picking lines: a drag in progress, and (when the caller doesn't hold it) the last pick.
   const [drag, setDrag] = createSignal<{ side: DiffSide; anchor: number; at: number } | null>(null);
   const [picked, setPicked] = createSignal<DiffSelection | null>(null);
+  // Where a shift-click would extend the pick to, shown while shift is held over a line.
+  const [preview, setPreview] = createSignal<DiffSelection | null>(null);
   let lastLine: HTMLElement | null = null;
   const range = (side: DiffSide, a: number, b: number): DiffSelection => ({ side, startLine: a === b ? null : Math.min(a, b), line: Math.max(a, b) });
   const shownSelection = () => {
@@ -158,7 +160,7 @@ export function DiffView(props: {
     return props.selection !== undefined ? props.selection : picked();
   };
   const isPicked = (side: DiffSide, n: number | null) => {
-    const sel = shownSelection();
+    const sel = drag() ? shownSelection() : (preview() ?? shownSelection());
     return !!sel && n !== null && sel.side === side && n >= (sel.startLine ?? sel.line) && n <= sel.line;
   };
   /** The line number on `side` of the line `el` is in, and that line's element. */
@@ -184,13 +186,20 @@ export function DiffView(props: {
     e.preventDefault();
     lastLine = at.line;
     const current = shownSelection();
+    setPreview(null);
     if (e.shiftKey && current && current.side === side) return finish(side, current.startLine ?? current.line, at.n);
     setDrag({ side, anchor: at.n, at: at.n });
   };
   const onMouseOver = (e: MouseEvent) => {
     const d = drag();
-    const at = d && lineOf(e.target, d.side);
-    if (!d || !at) return;
+    if (!d) {
+      const current = shownSelection();
+      const over = e.shiftKey && current ? lineOf(e.target, current.side) : null;
+      setPreview(over && current ? range(current.side, current.startLine ?? current.line, over.n) : null);
+      return;
+    }
+    const at = lineOf(e.target, d.side);
+    if (!at) return;
     lastLine = at.line;
     setDrag({ ...d, at: at.n });
   };
@@ -233,6 +242,7 @@ export function DiffView(props: {
             classList={{ selectable }}
             onMouseDown={selectable ? onMouseDown : undefined}
             onMouseOver={selectable ? onMouseOver : undefined}
+            onMouseLeave={selectable ? () => setPreview(null) : undefined}
           >
             <For each={numbered(props.lines)}>
               {(line) =>
@@ -270,6 +280,7 @@ export function DiffView(props: {
           classList={{ selectable }}
           onMouseDown={selectable ? onMouseDown : undefined}
           onMouseOver={selectable ? onMouseOver : undefined}
+          onMouseLeave={selectable ? () => setPreview(null) : undefined}
         >
           <For each={sideBySide(props.lines)}>
             {(row) =>
