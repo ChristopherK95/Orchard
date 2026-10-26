@@ -60,7 +60,7 @@ import { applyAppearance } from "./appearance";
 // The compact cut of the mark: the one for 32 px and below. Inline, not an <img>: its outer fruit
 // overhang its box, and an <img> would clip them.
 import orchardMark from "./assets/orchard-mark-small.svg?raw";
-import { Bell, ChevronDown, ChevronRight, GitBranch, GitCompareArrows, GitPullRequest, Loader, Minus, PanelLeft, PanelRight, Search, Sparkles, SquareTerminal, X } from "./icons";
+import { Bell, ChevronDown, ChevronRight, GitBranch, GitCompareArrows, GitPullRequest, Loader, PanelLeft, PanelRight, Search, Sparkles, SquareTerminal, X } from "./icons";
 
 /** The PRs and review requests read this lately aren't asked for again when the window gets focus,
  *  or the Dashboard is shown. */
@@ -1713,11 +1713,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             changes, so they're closed one by one (which asks), and the last one closes this. */}
         <div class="modal-backdrop editor-overlay" classList={{ minimized: editorMinimized() }}>
           <div class="modal editor-modal" role="dialog" aria-label="Files">
-            <button class="ghost icon editor-minimize" onClick={() => setEditorMinimized(true)} title="Minimise (keeps your tabs)" aria-label="Minimise">
-              <Minus />
-            </button>
             <ManualEditor
               requests={editorRequests()}
+              onMinimize={() => setEditorMinimized(true)}
               controls={(c) => (editorControls = c)}
               vim={settings()?.settings.editor?.vim ?? false}
               onEmpty={() => {

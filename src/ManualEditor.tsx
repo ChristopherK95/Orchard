@@ -35,7 +35,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { core, type Definition, type DiffLine, type OpenedFile, type PermissionRequest, type PoppedOutFile, type SessionId } from "./core";
 import { DiffPanel } from "./DiffView";
 import { highlightCode, languageOf, languageOfPath, parserFor } from "./highlight";
-import { ExternalLink, TextWrap, X } from "./icons";
+import { ExternalLink, Minus, TextWrap, X } from "./icons";
 import { applyDiff, invertDiff, isSettled, proposalKey, watchProposal } from "./proposals";
 
 /** What to open: a file (absolute path), a chat code block as an unsaved snippet, or a file popped
@@ -149,6 +149,8 @@ export function ManualEditor(props: {
   /** In a popped-out window (no pop-out button there). */
   poppedOut?: boolean;
   onEmpty: () => void;
+  /** Hides the file modal without closing any tab; the button only shows when this is given. */
+  onMinimize?: () => void;
   onError: (message: string) => void;
   /** Whether any file tab has unsaved changes (for closing the window). */
   onDirtyChange?: (dirty: boolean) => void;
@@ -875,6 +877,11 @@ export function ManualEditor(props: {
               Pop out
             </button>
           </Show>
+        </Show>
+        <Show when={props.onMinimize}>
+          <button class="ghost icon" onClick={() => props.onMinimize?.()} title="Minimise (keeps your tabs)" aria-label="Minimise">
+            <Minus />
+          </button>
         </Show>
       </div>
       <Show when={conflict() !== null ? tab(conflict()!) : undefined}>
