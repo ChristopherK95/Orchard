@@ -34,7 +34,7 @@ import { createStore, produce } from "solid-js/store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { core, type Definition, type DiffLine, type OpenedFile, type PermissionRequest, type PoppedOutFile, type SessionId } from "./core";
 import { DiffPanel } from "./DiffView";
-import { languageOf, languageOfPath, parserFor } from "./highlight";
+import { highlightCode, languageOf, languageOfPath, parserFor } from "./highlight";
 import { ExternalLink, TextWrap, X } from "./icons";
 import { applyDiff, invertDiff, isSettled, proposalKey, watchProposal } from "./proposals";
 
@@ -1069,16 +1069,16 @@ export function ManualEditor(props: {
               >
                 Open
               </button>
-              <button class="close-tab" aria-label="Close the peek" onClick={() => setPeek(null)}>
+              <button class="close-tab" aria-label="Close the peek" title="Close (Esc)" onClick={() => setPeek(null)}>
                 <X />
               </button>
             </div>
             <div class="def-peek-body mono">
-              <For each={p().lines}>
-                {(text, i) => (
+              <For each={highlightCode(p().lines.join("\n"), languageOfPath(p().found[p().index].path)).split("\n")}>
+                {(html, i) => (
                   <div class="def-peek-line" classList={{ on: p().start + i() === p().line }}>
                     <span class="def-peek-no">{p().start + i()}</span>
-                    <span>{text || " "}</span>
+                    <span innerHTML={html || " "} />
                   </div>
                 )}
               </For>
