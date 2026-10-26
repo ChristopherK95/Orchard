@@ -134,6 +134,14 @@ impl Index {
         added
     }
 
+    /// `files` as a list, rebuilt only after it changed.
+    fn list(&mut self) -> Arc<Vec<String>> {
+        let files = &self.files;
+        self.snapshot
+            .get_or_insert_with(|| Arc::new(files.iter().cloned().collect()))
+            .clone()
+    }
+
     /// Removes a file, or a folder and everything in it; whether anything went.
     fn remove(&mut self, rel: &str) -> bool {
         let prefix = format!("{rel}/");
@@ -590,19 +598,17 @@ impl WorktreeActor {
         *self.status.lock().expect("status lock") = WatchStatus::Polling;
     }
 
+    /// Every indexed file, relative to the Worktree.
+    pub(crate) fn file_list(&self) -> Arc<Vec<String>> {
+        self.state.lock().expect("index lock").list()
+    }
+
     /// The best `limit` matches for `query`, best first (with no query: changed files first).
     pub(crate) fn find(&self, query: &str, limit: usize, typos: bool) -> Vec<FileMatch> {
         let empty = query.trim().is_empty();
         let (files, changed) = {
             let mut state = self.state.lock().expect("index lock");
-            let snapshot = match &state.snapshot {
-                Some(snapshot) => snapshot.clone(),
-                None => {
-                    let snapshot = Arc::new(state.files.iter().cloned().collect::<Vec<_>>());
-                    state.snapshot = Some(snapshot.clone());
-                    snapshot
-                }
-            };
+            let snapshot = state.list();
             let changed: Vec<String> = if empty {
                 state
                     .changed

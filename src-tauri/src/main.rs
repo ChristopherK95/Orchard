@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use editor_core::{
     check_prerequisites, AdapterCommand, Attachment, BranchList, Core, CoreConfig, CoreError,
-    CreatedWorktree, DirEntry, FileMatch, FontFamily, LoadedSettings, MissingPrerequisite,
+    CreatedWorktree, Definition, DirEntry, FileMatch, FontFamily, LoadedSettings, MissingPrerequisite,
     NewWorktree, NodeInstall, OpenedFile, OtherConversation, PermissionMode, PoppedOutFile,
     QueuedPrompt, RecentSession, RecentWorkspace, RemovalCheck, RemoveWorktree, RemovedWorktree,
     RepoSettings, SaveOver, SessionId, SessionInfo, SessionUsage, SettingChange, SetupInfo,
@@ -358,6 +358,19 @@ async fn change_setting(
 #[tauri::command]
 async fn read_file(core: State<'_, Core>, path: String) -> CommandResult<OpenedFile> {
     core.read_file(path.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Where a name clicked in a file is defined (the file's text may be unsaved).
+#[tauri::command]
+async fn find_definition(
+    core: State<'_, Core>,
+    path: String,
+    text: String,
+    symbol: String,
+) -> CommandResult<Vec<Definition>> {
+    core.find_definition(path.as_ref(), &text, &symbol)
         .await
         .map_err(|e| e.to_string())
 }
@@ -1780,6 +1793,7 @@ fn main() {
             installed_node,
             change_setting,
             read_file,
+            find_definition,
             document_opened,
             document_changed,
             document_closed,

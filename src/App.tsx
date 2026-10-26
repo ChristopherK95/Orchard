@@ -5,6 +5,7 @@ import { createStore, produce, reconcile } from "solid-js/store";
 import {
   core,
   setupOver,
+  type BaseChange,
   type LoadedSettings,
   type MissingPrerequisite,
   type MyPullRequest,
@@ -408,14 +409,16 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   const [revealed, setRevealed] = createSignal<{ path: string; n: number } | null>(null);
   /** The Worktree being looked at gets its files indexed and watched. */
   createEffect(() => void core.showWorktree(activeWorktree()).catch(() => {}));
-  /** The Manual editor pane, open while it has file tabs. */
+  /** The Manual editor modal, open while it has file tabs. */
   const [editorOpen, setEditorOpen] = createSignal(false);
+  /** Hidden but still mounted, so its tabs and unsaved edits are kept while you do something else. */
+  const [editorMinimized, setEditorMinimized] = createSignal(false);
   /** Every open request, in order (none lost while the pane's code is still loading). */
   const [editorRequests, setEditorRequests] = createSignal<{ open: OpenRequest; n: number }[]>([]);
   let requested = 0;
   const openInEditor = (open: OpenRequest) => {
-    toMainView(); // (the Manual editor is beside the Tabs or columns)
     setEditorOpen(true);
+    setEditorMinimized(false);
     setEditorRequests((all) => [...all.slice(-20), { open, n: ++requested }]);
   };
   /** The settings page (ticket 31), open at a section. */
@@ -433,6 +436,39 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     return root.includes("\\") ? `${root.replace(/\\$/, "")}\\${rel.replaceAll("/", "\\")}` : `${root}/${rel}`;
   };
   const openWorktreeFile = (rel: string, root = activeWorktree()) => openInEditor({ kind: "file", path: worktreePath(rel, root) });
+  /** A file picked by name: its diff if it has uncommitted changes (the diff tab's "Edit file"
+   *  opens it for editing), else the file itself. */
+  const openWorktreeFileOrDiff = async (rel: string, root = activeWorktree()) => {
+    try {
+      const file = (await core.gitStatus(root)).files.find((f) => f.path === rel && !f.conflicted);
+      const letter = file && (file.unstaged ?? file.staged);
+      if (file && letter) {
+        const staged = !file.unstaged;
+        const change: BaseChange = {
+          path: rel,
+          change: letter === "?" || letter === "A" ? "added" : letter === "D" ? "deleted" : letter === "R" ? "renamed" : "modified",
+          renamedFrom: staged ? file.renamedFrom : null,
+        };
+        const side = staged ? "staged" : "unstaged";
+        const lines = await core.diffWorking(root, change, staged);
+        openInEditor({
+          kind: "diff",
+          key: [root, rel, side].join("\n"),
+          title: `${rel.split("/").pop()} (${side})`,
+          name: rel,
+          path: file.staged === "D" || file.unstaged === "D" ? null : worktreePath(rel, root),
+          before: staged || !file.staged ? "last commit" : "staged",
+          after: staged ? "staged" : "on disk",
+          renamedFrom: change.renamedFrom,
+          lines,
+        });
+        return;
+      }
+    } catch {
+      // Fall back to the plain file.
+    }
+    openWorktreeFile(rel, root);
+  };
   const runCommand = (command: PaletteCommand) =>
     command.kind === "runAction"
       ? runAction(command.name)
@@ -1419,7 +1455,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           label={worktree() ? worktreeLabel(worktree()!) : ""}
           colour={worktreeColour(activeWorktree())}
           onFile={(path) => {
-            openWorktreeFile(path);
+            void openWorktreeFileOrDiff(path);
             // (and marked in the Files drawer, if that's open)
             if (filesOpen()) setRevealed((now) => ({ path, n: (now?.n ?? 0) + 1 }));
           }}
@@ -1673,13 +1709,28 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       </div>
       </Show>
       <Show when={editorOpen()}>
-        <ManualEditor
-          requests={editorRequests()}
-          controls={(c) => (editorControls = c)}
-          vim={settings()?.settings.editor?.vim ?? false}
-          onEmpty={() => setEditorOpen(false)}
-          onError={setError}
-        />
+        {/* A modal rather than a pane. No click-outside close: the file tabs may hold unsaved
+            changes, so they're closed one by one (which asks), and the last one closes this. */}
+        <div class="modal-backdrop editor-overlay" classList={{ minimized: editorMinimized() }}>
+          <div class="modal editor-modal" role="dialog" aria-label="Files">
+            <ManualEditor
+              requests={editorRequests()}
+              onMinimize={() => setEditorMinimized(true)}
+              controls={(c) => (editorControls = c)}
+              vim={settings()?.settings.editor?.vim ?? false}
+              onEmpty={() => {
+                setEditorOpen(false);
+                setEditorMinimized(false);
+              }}
+              onError={setError}
+            />
+          </div>
+        </div>
+        <Show when={editorMinimized()}>
+          <button class="editor-restore" onClick={() => setEditorMinimized(false)} title="Back to your files">
+            Files
+          </button>
+        </Show>
       </Show>
       <Show when={mainView() === "tabs" && terminalOpen(activeWorktree())}>
         <TerminalPanel

@@ -22,6 +22,7 @@ use crate::code_review::{
 };
 use crate::create_worktree::{self, BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 use crate::dashboard::{self, ReviewRequest, WorktreeAttention};
+use crate::definition::{self, Definition};
 use crate::documents::{
     self, CheckTicket, DocumentTracker, OpenDocument, OpenedFile, PoppedOutFile, SaveOver,
 };
@@ -2784,6 +2785,59 @@ impl Core {
     /// with changed files marked.
     pub async fn list_dir(&self, worktree: &Path, dir: &str) -> Result<Vec<DirEntry>, CoreError> {
         Ok(self.actor(worktree).await?.list(dir))
+    }
+
+    /// Where `symbol`, clicked in `file` (whose current `text` may be unsaved), is defined: the
+    /// file its import names first, else the file itself, else the Worktree's files of the same
+    /// language. Nothing for a file type it doesn't know.
+    pub async fn find_definition(
+        &self,
+        file: &Path,
+        text: &str,
+        symbol: &str,
+    ) -> Result<Vec<Definition>, CoreError> {
+        let file = self.editable(file)?;
+        let worktree = self
+            .worktrees()
+            .into_iter()
+            .map(|w| w.path)
+            .find(|root| file.starts_with(root));
+        let Some(root) = worktree else {
+            return Ok(Vec::new()); // (the settings file)
+        };
+        let current = file
+            .strip_prefix(&root)
+            .map_err(|_| CoreError::NotEditable(file.clone()))?
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/");
+        let files = self.actor(&root).await?.file_list();
+        let (text, symbol) = (text.to_owned(), symbol.to_owned());
+        tokio::task::spawn_blocking(move || {
+            let relative = |rel: &str| rel.split('/').fold(root.clone(), |dir, part| dir.join(part));
+            let read = |rel: &str| {
+                let path = relative(rel);
+                let small = std::fs::metadata(&path)
+                    .is_ok_and(|m| m.len() <= definition::MAX_FILE_BYTES);
+                small.then(|| std::fs::read_to_string(path).ok()).flatten()
+            };
+            let lookup = definition::Lookup {
+                files: &files,
+                current: &current,
+                text: &text,
+                read: &read,
+            };
+            definition::find(&lookup, &symbol)
+                .into_iter()
+                .map(|found| Definition {
+                    path: relative(&found.path).to_string_lossy().into_owned(),
+                    line: found.line,
+                })
+                .collect()
+        })
+        .await
+        .map_err(|e| CoreError::File(e.to_string()))
     }
 
     /// How the Worktree's files are being followed, if they are.
