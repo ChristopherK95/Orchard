@@ -409,13 +409,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   const [revealed, setRevealed] = createSignal<{ path: string; n: number } | null>(null);
   /** The Worktree being looked at gets its files indexed and watched. */
   createEffect(() => void core.showWorktree(activeWorktree()).catch(() => {}));
-  /** The Manual editor pane, open while it has file tabs. */
+  /** The Manual editor modal, open while it has file tabs. */
   const [editorOpen, setEditorOpen] = createSignal(false);
   /** Every open request, in order (none lost while the pane's code is still loading). */
   const [editorRequests, setEditorRequests] = createSignal<{ open: OpenRequest; n: number }[]>([]);
   let requested = 0;
   const openInEditor = (open: OpenRequest) => {
-    toMainView(); // (the Manual editor is beside the Tabs or columns)
     setEditorOpen(true);
     setEditorRequests((all) => [...all.slice(-20), { open, n: ++requested }]);
   };
@@ -1707,13 +1706,19 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       </div>
       </Show>
       <Show when={editorOpen()}>
-        <ManualEditor
-          requests={editorRequests()}
-          controls={(c) => (editorControls = c)}
-          vim={settings()?.settings.editor?.vim ?? false}
-          onEmpty={() => setEditorOpen(false)}
-          onError={setError}
-        />
+        {/* A modal rather than a pane. No click-outside close: the file tabs may hold unsaved
+            changes, so they're closed one by one (which asks), and the last one closes this. */}
+        <div class="modal-backdrop editor-overlay">
+          <div class="modal editor-modal" role="dialog" aria-label="Files">
+            <ManualEditor
+              requests={editorRequests()}
+              controls={(c) => (editorControls = c)}
+              vim={settings()?.settings.editor?.vim ?? false}
+              onEmpty={() => setEditorOpen(false)}
+              onError={setError}
+            />
+          </div>
+        </div>
       </Show>
       <Show when={mainView() === "tabs" && terminalOpen(activeWorktree())}>
         <TerminalPanel

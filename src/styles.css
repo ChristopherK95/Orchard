@@ -1396,6 +1396,10 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .review-backdrop { padding: 4vh 3vw; align-items: stretch; }
 /* No borders, like Settings: the head, file list and foot are one grey frame around the diff, a
    rounded panel; the head is tinted with the Worktree's colour (as a focused column's is). */
+/* The Manual editor as a modal over the window (the popped-out window still uses it as a pane). */
+.modal-backdrop.editor-overlay { align-items: stretch; padding: 4vh 16px; }
+.modal.editor-modal { width: min(1280px, 100%); height: 100%; max-height: 100%; border-radius: var(--r-lg); }
+.modal.editor-modal .manual-editor { min-width: 0; border-left: 0; }
 .modal.review-overlay { width: min(1500px, 100%); height: 100%; max-height: 100%; background: var(--bg-2); border-color: var(--bg-2); border-radius: var(--r-lg); }
 .review-head { padding: 12px 14px 10px 18px; margin-bottom: 8px; background: color-mix(in srgb, var(--c) 18%, var(--bg-2)); }
 .review-head > b { display: flex; align-items: center; gap: 12px; }
