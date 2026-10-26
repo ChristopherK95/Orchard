@@ -1,8 +1,9 @@
 // The Manual editor pane (ticket 14): CodeMirror 6 to the right of the chat, with its own file tabs.
 // Lezer highlighting loads per language on first use. Find/replace (Ctrl+F), go to line (Ctrl+G),
 // soft-wrap, bracket matching, auto-indent (Enter keeps the line's indentation), multiple cursors
-// (Alt+click, Alt+drag, Ctrl+D), Go to definition (Ctrl+click, F12: the core follows the import
-// line, no language server); vim with `editor.vim`, where `:w` saves and `:q` closes the file
+// (Alt+click, Alt+drag, Ctrl+D), Go to definition (Ctrl+click, F12, `gd` in vim: the core follows
+// the import line, no language server; the name underlines while Ctrl/Cmd is held, and Ctrl+Shift+click,
+// Alt+F12 or `gD` peek at the definition in a small window beside the name instead); vim with `editor.vim`, where `:w` saves and `:q` closes the file
 // tab. One editor view is shared by the tabs (each keeps its own state, undo history included),
 // which keeps the pane light.
 //
@@ -13,9 +14,11 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, defineLanguageFacet, indentOnInput, Language, syntaxHighlighting } from "@codemirror/language";
 import { gotoLine, highlightSelectionMatches, searchKeymap } from "@codemirror/search";
-import { Compartment, EditorState, type Extension, type Text } from "@codemirror/state";
+import { Compartment, EditorState, type Extension, StateEffect, StateField, type Text } from "@codemirror/state";
 import {
   crosshairCursor,
+  Decoration,
+  type DecorationSet,
   drawSelection,
   dropCursor,
   EditorView,
@@ -94,14 +97,42 @@ const wrapping = new Compartment();
 const language = new Compartment();
 
 // The vim keymap is loaded only once vim is switched on.
-let vimExtension: Promise<{ ext: () => Extension; defineEx: (name: string, prefix: string, run: () => void) => void }> | undefined;
+let vimExtension:
+  | Promise<{
+      ext: () => Extension;
+      defineEx: (name: string, prefix: string, run: () => void) => void;
+      defineAction: (name: string, run: () => void) => void;
+      mapCommand: (keys: string, type: string, name: string, args: object, extra: object) => void;
+    }>
+  | undefined;
 function loadVim() {
   vimExtension ??= import("@replit/codemirror-vim").then((m) => ({
     ext: () => m.vim(),
     defineEx: (name, prefix, run) => m.Vim.defineEx(name, prefix, run),
+    defineAction: (name, run) => m.Vim.defineAction(name, run),
+    mapCommand: (keys, type, name, args, extra) => m.Vim.mapCommand(keys, type, name, args, extra),
   }));
   return vimExtension;
 }
+
+/** The name under the pointer while Ctrl/Cmd is held: underlined to show it can be followed. */
+const setLink = StateEffect.define<{ from: number; to: number } | null>();
+const linkField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    value = value.map(tr.changes);
+    for (const e of tr.effects) {
+      if (e.is(setLink)) value = e.value ? Decoration.set([Decoration.mark({ class: "cm-def-link" }).range(e.value.from, e.value.to)]) : Decoration.none;
+    }
+    return value;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+const linkTheme = EditorView.baseTheme({
+  ".cm-def-link": { textDecoration: "underline", textUnderlineOffset: "2px" },
+  "&.cm-link-mode .cm-def-link": { cursor: "pointer" },
+});
+const isName = (text: string) => /^[\p{L}_$][\p{L}\p{N}_$]*$/u.test(text);
 
 const megabytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
@@ -143,6 +174,8 @@ export function ManualEditor(props: {
   let host!: HTMLDivElement;
   let view: EditorView | undefined;
   let alive = true;
+  let pane!: HTMLElement;
+  let pointer: { x: number; y: number } | null = null;
 
   const active = () => tabs.find((t) => t.id === activeId());
   const tab = (id: number) => tabs.find((t) => t.id === id);
@@ -193,22 +226,39 @@ export function ManualEditor(props: {
       { key: "Mod-s", run: () => (void save(tabId), true), preventDefault: true },
       { key: "Mod-g", run: gotoLine, preventDefault: true },
       { key: "F12", run: (v) => (void goToDefinition(tabId, v.state.selection.main.head), true), preventDefault: true },
+      { key: "Alt-F12", run: (v) => (void goToDefinition(tabId, v.state.selection.main.head, true), true), preventDefault: true },
+      { key: "Escape", run: () => (peek() ? (setPeek(null), true) : false) },
       ...defaultKeymap,
       ...searchKeymap,
       ...historyKeymap,
       indentWithTab,
     ]),
-    // Ctrl/Cmd+click is Go to definition; extra cursors are added with Alt+click instead.
+    // Ctrl/Cmd+click is Go to definition (with Shift, a peek); extra cursors are added with Alt+click.
     EditorView.clickAddsSelectionRange.of((e) => e.altKey),
+    linkField,
+    linkTheme,
     EditorView.domEventHandlers({
       mousedown: (e, v) => {
         if (e.button !== 0 || !(e.ctrlKey || e.metaKey)) return false;
         const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
         if (pos === null) return false;
         e.preventDefault();
-        void goToDefinition(tabId, pos);
+        void goToDefinition(tabId, pos, e.shiftKey);
         return true;
       },
+      mousemove: (e, v) => {
+        pointer = { x: e.clientX, y: e.clientY };
+        markLink(v, e.ctrlKey || e.metaKey);
+        return false;
+      },
+      mouseleave: (_, v) => {
+        pointer = null;
+        markLink(v, false);
+        return false;
+      },
+      keydown: (e, v) => (e.key === "Control" || e.key === "Meta" ? (markLink(v, true), false) : false),
+      keyup: (e, v) => (e.key === "Control" || e.key === "Meta" ? (markLink(v, false), false) : false),
+      blur: (_, v) => (markLink(v, false), false),
     }),
     wrapping.of(wrap ? EditorView.lineWrapping : []),
     language.of([]),
@@ -221,6 +271,23 @@ export function ManualEditor(props: {
       snapshot(tabId);
     }),
   ];
+
+  /** Underlines the name under the pointer if Ctrl/Cmd is held (`on`), else clears it. */
+  const markLink = (v: EditorView, on: boolean) => {
+    let range: { from: number; to: number } | null = null;
+    const pos = on && pointer ? v.posAtCoords(pointer, false) : null;
+    if (pos !== null && pointer) {
+      const word = v.state.wordAt(pos);
+      // (posAtCoords snaps to the nearest character, so check the pointer is on the line's text.)
+      const at = word && v.coordsAtPos(word.from);
+      if (word && at && isName(v.state.sliceDoc(word.from, word.to)) && pointer.y >= at.top && pointer.y <= at.bottom) range = word;
+    }
+    const current = v.state.field(linkField).iter();
+    const same = range ? current.value && current.from === range.from && current.to === range.to : !current.value;
+    if (same) return;
+    v.dispatch({ effects: setLink.of(range) });
+    v.dom.classList.toggle("cm-link-mode", !!range);
+  };
 
   /** Highlighting for the tab, once its language's grammar has loaded (not for big files). */
   const highlight = async (tabId: number, lang: string | undefined) => {
@@ -365,8 +432,39 @@ export function ManualEditor(props: {
     view.focus();
   };
 
-  /** Go to definition of the name at `pos` (Ctrl/Cmd+click, F12). */
-  const goToDefinition = async (tabId: number, pos: number) => {
+  /** A definition shown in a small window beside the name, instead of going to its file. */
+  const [peek, setPeek] = createSignal<{
+    symbol: string;
+    found: Definition[];
+    index: number;
+    anchor: { top: number; left: number };
+    /** The lines shown, from the 1-based `start`; `line` is the definition's. */
+    lines: string[];
+    start: number;
+    line: number;
+  } | null>(null);
+  const PEEK_BEFORE = 2;
+  const PEEK_LINES = 22;
+
+  /** Fills the peek with the definition `index` of `found` (the file as it is on disk). */
+  const loadPeek = async (symbol: string, found: Definition[], index: number, anchor: { top: number; left: number }) => {
+    const target = found[index];
+    let opened: OpenedFile;
+    try {
+      opened = await core.readFile(target.path);
+    } catch (err) {
+      return props.onError(String(err));
+    }
+    if (!alive) return;
+    if (opened.content.kind !== "text") return setNotice("That file isn't text, so there is nothing to peek at.");
+    const all = opened.content.text.split("\n");
+    const start = Math.max(1, target.line - PEEK_BEFORE);
+    setPeek({ symbol, found, index, anchor, lines: all.slice(start - 1, start - 1 + PEEK_LINES), start, line: target.line });
+  };
+
+  /** Go to definition of the name at `pos` (Ctrl/Cmd+click, F12, `gd`); `asPeek` shows it in a
+   *  window beside the name instead (Ctrl+Shift+click, Alt+F12, `gD`). */
+  const goToDefinition = async (tabId: number, pos: number, asPeek = false) => {
     const t = tab(tabId);
     const state = currentState(tabId);
     if (!t?.path || !state) return;
@@ -374,6 +472,13 @@ export function ManualEditor(props: {
     if (!word) return;
     const symbol = state.sliceDoc(word.from, word.to);
     setDefinitions(null);
+    setPeek(null);
+    let anchor = { top: 40, left: 8 };
+    const at = view?.coordsAtPos(word.to);
+    if (at && pane) {
+      const box = pane.getBoundingClientRect();
+      anchor = { top: at.bottom - box.top + 4, left: Math.max(8, Math.min(at.left - box.left, box.width - 580)) };
+    }
     let found: Definition[];
     try {
       found = await core.findDefinition(t.path, state.doc.toString(), symbol);
@@ -383,6 +488,7 @@ export function ManualEditor(props: {
     if (!alive) return;
     if (found.length === 0) return setNotice(`No definition found for ${symbol}.`);
     setNotice("");
+    if (asPeek) return void loadPeek(symbol, found, 0, anchor);
     if (found.length === 1) return void openAt(found[0].path, found[0].line);
     setDefinitions({ symbol, found });
   };
@@ -449,6 +555,7 @@ export function ManualEditor(props: {
     const previous = activeId();
     if (view && previous !== null && previous !== id && states.has(previous)) states.set(previous, view.state);
     setActiveId(id);
+    setPeek(null);
     const state = states.get(id);
     if (view && state) {
       view.setState(state);
@@ -646,11 +753,25 @@ export function ManualEditor(props: {
     .then((stop) => (alive ? (stopEvents = stop) : stop()));
 
   /** Vim on or off in the shown tab, as the setting says (applied live). */
+  let vimKeysMapped = false;
   const syncVim = async () => {
     if (!view) return;
     if (!props.vim) return view.dispatch({ effects: vimMode.reconfigure([]) });
     const vim = await loadVim();
     if (!props.vim || !view || !alive) return; // (switched off again meanwhile)
+    if (!vimKeysMapped) {
+      vimKeysMapped = true;
+      // `gd` goes to the definition and `gD` peeks at it, as the clicks do.
+      const defineKey = (keys: string, name: string, asPeek: boolean) => {
+        vim.defineAction(name, () => {
+          const id = activeId();
+          if (id !== null && view) void goToDefinition(id, view.state.selection.main.head, asPeek);
+        });
+        vim.mapCommand(keys, "action", name, {}, { context: "normal" });
+      };
+      defineKey("gd", "orchardGoToDefinition", false);
+      defineKey("gD", "orchardPeekDefinition", true);
+    }
     vim.defineEx("write", "w", () => void (activeId() !== null && save(activeId()!)));
     vim.defineEx("quit", "q", () => activeId() !== null && close(activeId()!));
     vim.defineEx("wq", "wq", () => {
@@ -707,7 +828,7 @@ export function ManualEditor(props: {
   });
 
   return (
-    <section class="manual-editor">
+    <section class="manual-editor" ref={pane}>
       <div class="editor-tabs">
         <For each={tabs}>
           {(t) => (
@@ -913,6 +1034,55 @@ export function ManualEditor(props: {
               editTitle="Open the file itself (as it is now)"
               onEdit={() => void openFile(proposal().file)}
             />
+          </div>
+        )}
+      </Show>
+      <Show when={peek()}>
+        {(p) => (
+          <div class="def-peek" style={{ top: `${p().anchor.top}px`, left: `${p().anchor.left}px` }}>
+            <div class="def-peek-head">
+              <span class="mono grow" title={p().found[p().index].path}>
+                {p().found[p().index].path.split(/[\\/]/).slice(-2).join("/")}:{p().line}
+              </span>
+              <Show when={p().found.length > 1}>
+                <button class="ghost" disabled={p().index === 0} onClick={() => void loadPeek(p().symbol, p().found, p().index - 1, p().anchor)}>
+                  ‹
+                </button>
+                <span class="muted">
+                  {p().index + 1} of {p().found.length}
+                </span>
+                <button
+                  class="ghost"
+                  disabled={p().index === p().found.length - 1}
+                  onClick={() => void loadPeek(p().symbol, p().found, p().index + 1, p().anchor)}
+                >
+                  ›
+                </button>
+              </Show>
+              <button
+                class="ghost"
+                onClick={() => {
+                  const d = p().found[p().index];
+                  setPeek(null);
+                  void openAt(d.path, d.line);
+                }}
+              >
+                Open
+              </button>
+              <button class="close-tab" aria-label="Close the peek" onClick={() => setPeek(null)}>
+                <X />
+              </button>
+            </div>
+            <div class="def-peek-body mono">
+              <For each={p().lines}>
+                {(text, i) => (
+                  <div class="def-peek-line" classList={{ on: p().start + i() === p().line }}>
+                    <span class="def-peek-no">{p().start + i()}</span>
+                    <span>{text || " "}</span>
+                  </div>
+                )}
+              </For>
+            </div>
           </div>
         )}
       </Show>

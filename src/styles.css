@@ -1232,7 +1232,13 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .trigger .needs-dot { width: 6px; height: 6px; }
 
 /* Manual editor pane. */
-.manual-editor { flex: 1 1 0; min-width: 320px; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bg-1); }
+.def-peek { position: absolute; z-index: 20; width: min(560px, calc(100% - 16px)); max-height: 50%; display: flex; flex-direction: column; background: var(--bg-2); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
+.def-peek-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.def-peek-body { overflow: auto; padding: 4px 0; font-size: 12.5px; line-height: 1.6; }
+.def-peek-line { display: flex; gap: 12px; padding: 0 10px; white-space: pre; }
+.def-peek-line.on { background: color-mix(in srgb, var(--fg-1) 8%, transparent); }
+.def-peek-no { flex: none; width: 3ch; text-align: right; color: var(--fg-dim); }
+.manual-editor { position: relative; flex: 1 1 0; min-width: 320px; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bg-1); }
 .editor-tabs { flex: none; height: 38px; display: flex; align-items: stretch; gap: 0; padding: 0 4px 0 0; background: var(--bg-2); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
 .editor-tabs::-webkit-scrollbar { display: none; }
 .editor-tab { flex: none; display: flex; align-items: center; border-right: 1px solid var(--line); border-top: 2px solid transparent; }
