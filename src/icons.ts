@@ -41,6 +41,7 @@ export { default as MoveRight } from "lucide-solid/icons/move-right";
 export { default as PanelRight } from "lucide-solid/icons/panel-right";
 export { default as Paperclip } from "lucide-solid/icons/paperclip";
 export { default as Pencil } from "lucide-solid/icons/pencil";
+export { default as Minus } from "lucide-solid/icons/minus";
 export { default as Pin } from "lucide-solid/icons/pin";
 export { default as PinOff } from "lucide-solid/icons/pin-off";
 export { default as Play } from "lucide-solid/icons/play";

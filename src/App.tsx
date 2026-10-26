@@ -60,7 +60,7 @@ import { applyAppearance } from "./appearance";
 // The compact cut of the mark: the one for 32 px and below. Inline, not an <img>: its outer fruit
 // overhang its box, and an <img> would clip them.
 import orchardMark from "./assets/orchard-mark-small.svg?raw";
-import { Bell, ChevronDown, ChevronRight, GitBranch, GitCompareArrows, GitPullRequest, Loader, PanelLeft, PanelRight, Search, Sparkles, SquareTerminal, X } from "./icons";
+import { Bell, ChevronDown, ChevronRight, GitBranch, GitCompareArrows, GitPullRequest, Loader, Minus, PanelLeft, PanelRight, Search, Sparkles, SquareTerminal, X } from "./icons";
 
 /** The PRs and review requests read this lately aren't asked for again when the window gets focus,
  *  or the Dashboard is shown. */
@@ -411,11 +411,14 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   createEffect(() => void core.showWorktree(activeWorktree()).catch(() => {}));
   /** The Manual editor modal, open while it has file tabs. */
   const [editorOpen, setEditorOpen] = createSignal(false);
+  /** Hidden but still mounted, so its tabs and unsaved edits are kept while you do something else. */
+  const [editorMinimized, setEditorMinimized] = createSignal(false);
   /** Every open request, in order (none lost while the pane's code is still loading). */
   const [editorRequests, setEditorRequests] = createSignal<{ open: OpenRequest; n: number }[]>([]);
   let requested = 0;
   const openInEditor = (open: OpenRequest) => {
     setEditorOpen(true);
+    setEditorMinimized(false);
     setEditorRequests((all) => [...all.slice(-20), { open, n: ++requested }]);
   };
   /** The settings page (ticket 31), open at a section. */
@@ -1708,17 +1711,28 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       <Show when={editorOpen()}>
         {/* A modal rather than a pane. No click-outside close: the file tabs may hold unsaved
             changes, so they're closed one by one (which asks), and the last one closes this. */}
-        <div class="modal-backdrop editor-overlay">
+        <div class="modal-backdrop editor-overlay" classList={{ minimized: editorMinimized() }}>
           <div class="modal editor-modal" role="dialog" aria-label="Files">
+            <button class="ghost icon editor-minimize" onClick={() => setEditorMinimized(true)} title="Minimise (keeps your tabs)" aria-label="Minimise">
+              <Minus />
+            </button>
             <ManualEditor
               requests={editorRequests()}
               controls={(c) => (editorControls = c)}
               vim={settings()?.settings.editor?.vim ?? false}
-              onEmpty={() => setEditorOpen(false)}
+              onEmpty={() => {
+                setEditorOpen(false);
+                setEditorMinimized(false);
+              }}
               onError={setError}
             />
           </div>
         </div>
+        <Show when={editorMinimized()}>
+          <button class="editor-restore" onClick={() => setEditorMinimized(false)} title="Back to your files">
+            Files
+          </button>
+        </Show>
       </Show>
       <Show when={mainView() === "tabs" && terminalOpen(activeWorktree())}>
         <TerminalPanel
