@@ -64,6 +64,12 @@ export interface SessionInfo {
 }
 
 /** A file as the Manual editor opens it; `version` goes back with the save. */
+/** Where a name is defined: an absolute path and a 1-based line. */
+export interface Definition {
+  path: string;
+  line: number;
+}
+
 export interface OpenedFile {
   path: string;
   content:
@@ -1072,6 +1078,10 @@ export const core = {
     invoke<void>("update_pop_out", { label, text, savedText, version }),
   /** Opens a file (a Worktree's, or the settings file) for the Manual editor. */
   readFile: (path: string) => invoke<OpenedFile>("read_file", { path }),
+  /** Where `symbol`, clicked in the file at `path` (whose current `text` may be unsaved), is
+   *  defined: the file its import names, else the file itself, else the Worktree's likes. */
+  findDefinition: (path: string, text: string, symbol: string) =>
+    invoke<Definition[]>("find_definition", { path, text, symbol }),
   /** Saves `text` ("\n" line endings, written as `lineEnding`) if `over` allows; refused with
    *  `changedOnDisk` if the file changed since it was read. */
   saveFile: (path: string, text: string, lineEnding: string, over: SaveOver) =>

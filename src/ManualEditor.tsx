@@ -1,7 +1,8 @@
 // The Manual editor pane (ticket 14): CodeMirror 6 to the right of the chat, with its own file tabs.
 // Lezer highlighting loads per language on first use. Find/replace (Ctrl+F), go to line (Ctrl+G),
 // soft-wrap, bracket matching, auto-indent (Enter keeps the line's indentation), multiple cursors
-// (Ctrl+click, Alt+drag, Ctrl+D); vim with `editor.vim`, where `:w` saves and `:q` closes the file
+// (Alt+click, Alt+drag, Ctrl+D), Go to definition (Ctrl+click, F12: the core follows the import
+// line, no language server); vim with `editor.vim`, where `:w` saves and `:q` closes the file
 // tab. One editor view is shared by the tabs (each keeps its own state, undo history included),
 // which keeps the pane light.
 //
@@ -28,7 +29,7 @@ import { classHighlighter } from "@lezer/highlight";
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { core, type DiffLine, type OpenedFile, type PermissionRequest, type PoppedOutFile, type SessionId } from "./core";
+import { core, type Definition, type DiffLine, type OpenedFile, type PermissionRequest, type PoppedOutFile, type SessionId } from "./core";
 import { DiffPanel } from "./DiffView";
 import { languageOf, languageOfPath, parserFor } from "./highlight";
 import { ExternalLink, TextWrap, X } from "./icons";
@@ -191,11 +192,24 @@ export function ManualEditor(props: {
     keymap.of([
       { key: "Mod-s", run: () => (void save(tabId), true), preventDefault: true },
       { key: "Mod-g", run: gotoLine, preventDefault: true },
+      { key: "F12", run: (v) => (void goToDefinition(tabId, v.state.selection.main.head), true), preventDefault: true },
       ...defaultKeymap,
       ...searchKeymap,
       ...historyKeymap,
       indentWithTab,
     ]),
+    // Ctrl/Cmd+click is Go to definition; extra cursors are added with Alt+click instead.
+    EditorView.clickAddsSelectionRange.of((e) => e.altKey),
+    EditorView.domEventHandlers({
+      mousedown: (e, v) => {
+        if (e.button !== 0 || !(e.ctrlKey || e.metaKey)) return false;
+        const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
+        if (pos === null) return false;
+        e.preventDefault();
+        void goToDefinition(tabId, pos);
+        return true;
+      },
+    }),
     wrapping.of(wrap ? EditorView.lineWrapping : []),
     language.of([]),
     syntaxHighlighting(classHighlighter),
@@ -241,6 +255,7 @@ export function ManualEditor(props: {
     }
     setTabs(tabs.length, full);
     show(id);
+    return id;
   };
 
   /** A popped-out file arriving in this window (or coming back to it), with its unsaved text and
@@ -285,9 +300,10 @@ export function ManualEditor(props: {
     }
     close(tabId, true);
   };
-  const openFile = async (asked: string) => {
+  /** Opens the file (its tab comes forward if it's open); its tab's id, if it got one. */
+  const openFile = async (asked: string): Promise<number | undefined> => {
     const existing = tabs.find((t) => t.path === asked);
-    if (existing) return show(existing.id);
+    if (existing) return show(existing.id), existing.id;
     if (opening.has(asked)) return;
     opening.add(asked);
     let opened: OpenedFile;
@@ -304,7 +320,7 @@ export function ManualEditor(props: {
     }
     // The same file asked for by another spelling of its path: one tab.
     const same = tabs.find((t) => t.path === opened.path);
-    if (same) return show(same.id);
+    if (same) return show(same.id), same.id;
     const path = opened.path;
     const title = path.split(/[\\/]/).pop() ?? path;
     const content = opened.content;
@@ -319,7 +335,7 @@ export function ManualEditor(props: {
             : `Too big to open here (${megabytes(content.bytes)}).`;
       return addTab({ ...base, placeholder, readOnly: true }, null);
     }
-    addTab(
+    return addTab(
       {
         ...base,
         title: content.readOnly ? `${title} (read-only)` : title,
@@ -334,6 +350,41 @@ export function ManualEditor(props: {
       content.text,
       content.readOnly ? undefined : languageOfPath(path),
     );
+  };
+
+  /** Where Go to definition found several: the name, and the places to pick from. */
+  const [definitions, setDefinitions] = createSignal<{ symbol: string; found: Definition[] } | null>(null);
+
+  /** Opens the file at the 1-based line, the line in view. */
+  const openAt = async (path: string, line: number) => {
+    const id = await openFile(path);
+    if (id === undefined || !alive || !view || activeId() !== id || !states.has(id)) return;
+    const doc = view.state.doc;
+    const at = doc.line(Math.min(Math.max(line, 1), doc.lines));
+    view.dispatch({ selection: { anchor: at.from }, effects: EditorView.scrollIntoView(at.from, { y: "center" }) });
+    view.focus();
+  };
+
+  /** Go to definition of the name at `pos` (Ctrl/Cmd+click, F12). */
+  const goToDefinition = async (tabId: number, pos: number) => {
+    const t = tab(tabId);
+    const state = currentState(tabId);
+    if (!t?.path || !state) return;
+    const word = state.wordAt(pos);
+    if (!word) return;
+    const symbol = state.sliceDoc(word.from, word.to);
+    setDefinitions(null);
+    let found: Definition[];
+    try {
+      found = await core.findDefinition(t.path, state.doc.toString(), symbol);
+    } catch (err) {
+      return props.onError(String(err));
+    }
+    if (!alive) return;
+    if (found.length === 0) return setNotice(`No definition found for ${symbol}.`);
+    setNotice("");
+    if (found.length === 1) return void openAt(found[0].path, found[0].line);
+    setDefinitions({ symbol, found });
   };
 
   /** A diff to review, in a tab of its own (the same one again if it's open: brought up to date). */
@@ -765,6 +816,30 @@ export function ManualEditor(props: {
         <div class="editor-banner muted" onClick={() => setNotice("")} title="Click to dismiss">
           {notice()}
         </div>
+      </Show>
+      <Show when={definitions()}>
+        {(picked) => (
+          <div class="editor-banner definitions">
+            <span class="muted">{picked().symbol} is defined in:</span>
+            <For each={picked().found}>
+              {(d) => (
+                <button
+                  class="ghost"
+                  title={d.path}
+                  onClick={() => {
+                    setDefinitions(null);
+                    void openAt(d.path, d.line);
+                  }}
+                >
+                  {d.path.split(/[\\/]/).slice(-2).join("/")}:{d.line}
+                </button>
+              )}
+            </For>
+            <button class="ghost" onClick={() => setDefinitions(null)}>
+              Dismiss
+            </button>
+          </div>
+        )}
       </Show>
       <Show when={active()?.note}>{(note) => <div class="editor-banner muted">{note()}</div>}</Show>
       <Show when={active()?.placeholder}>

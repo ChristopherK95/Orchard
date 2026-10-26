@@ -1249,6 +1249,7 @@ body.resizing-rows { user-select: none; -webkit-user-select: none; cursor: row-r
 .diff-head .added-key { color: var(--diff-add-fg); }
 .editor-banner { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; background: var(--bg-2); }
 .editor-banner.warning { background: var(--needs-tint); color: var(--fg-1); }
+.editor-banner.definitions { flex-wrap: wrap; }
 .editor-banner button { min-height: 26px; padding: 0 10px; font-size: 12px; }
 .editor-host { flex: 1; min-height: 0; overflow: hidden; }
 .editor-host.hidden { display: none; }

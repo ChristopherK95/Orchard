@@ -9,6 +9,7 @@ mod code_review;
 mod core;
 mod create_worktree;
 mod dashboard;
+mod definition;
 mod diff;
 mod documents;
 mod edit_notes;
@@ -46,6 +47,7 @@ pub use crate::core::{
 };
 pub use crate::create_worktree::{BranchInfo, BranchList, CreatedWorktree, NewWorktree};
 pub use crate::dashboard::{AttentionReason, ReviewRequest, WorktreeAttention};
+pub use crate::definition::Definition;
 pub use crate::documents::{FileContent, OpenDocument, OpenedFile, PoppedOutFile, SaveOver};
 pub use crate::edit_notes::EditNote;
 pub use crate::files::{DirEntry, FileMatch, FileWatchConfig, IndexStats, WatchStatus};
