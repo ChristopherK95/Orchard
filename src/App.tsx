@@ -5,6 +5,7 @@ import { createStore, produce, reconcile } from "solid-js/store";
 import {
   core,
   setupOver,
+  type BaseChange,
   type LoadedSettings,
   type MissingPrerequisite,
   type MyPullRequest,
@@ -433,6 +434,39 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     return root.includes("\\") ? `${root.replace(/\\$/, "")}\\${rel.replaceAll("/", "\\")}` : `${root}/${rel}`;
   };
   const openWorktreeFile = (rel: string, root = activeWorktree()) => openInEditor({ kind: "file", path: worktreePath(rel, root) });
+  /** A file picked by name: its diff if it has uncommitted changes (the diff tab's "Edit file"
+   *  opens it for editing), else the file itself. */
+  const openWorktreeFileOrDiff = async (rel: string, root = activeWorktree()) => {
+    try {
+      const file = (await core.gitStatus(root)).files.find((f) => f.path === rel && !f.conflicted);
+      const letter = file && (file.unstaged ?? file.staged);
+      if (file && letter) {
+        const staged = !file.unstaged;
+        const change: BaseChange = {
+          path: rel,
+          change: letter === "?" || letter === "A" ? "added" : letter === "D" ? "deleted" : letter === "R" ? "renamed" : "modified",
+          renamedFrom: staged ? file.renamedFrom : null,
+        };
+        const side = staged ? "staged" : "unstaged";
+        const lines = await core.diffWorking(root, change, staged);
+        openInEditor({
+          kind: "diff",
+          key: [root, rel, side].join("\n"),
+          title: `${rel.split("/").pop()} (${side})`,
+          name: rel,
+          path: file.staged === "D" || file.unstaged === "D" ? null : worktreePath(rel, root),
+          before: staged || !file.staged ? "last commit" : "staged",
+          after: staged ? "staged" : "on disk",
+          renamedFrom: change.renamedFrom,
+          lines,
+        });
+        return;
+      }
+    } catch {
+      // Fall back to the plain file.
+    }
+    openWorktreeFile(rel, root);
+  };
   const runCommand = (command: PaletteCommand) =>
     command.kind === "runAction"
       ? runAction(command.name)
@@ -1419,7 +1453,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           label={worktree() ? worktreeLabel(worktree()!) : ""}
           colour={worktreeColour(activeWorktree())}
           onFile={(path) => {
-            openWorktreeFile(path);
+            void openWorktreeFileOrDiff(path);
             // (and marked in the Files drawer, if that's open)
             if (filesOpen()) setRevealed((now) => ({ path, n: (now?.n ?? 0) + 1 }));
           }}
