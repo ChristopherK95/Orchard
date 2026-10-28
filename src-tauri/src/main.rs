@@ -743,6 +743,14 @@ async fn close_tab(core: State<'_, Core>, session_id: SessionId) -> CommandResul
     core.close_tab(session_id).await.map_err(|e| e.to_string())
 }
 
+/// Closes a Tab without keeping it in the Recent sessions (the Worktree switcher's "Close all and forget").
+#[tauri::command]
+async fn close_and_forget(core: State<'_, Core>, session_id: SessionId) -> CommandResult<()> {
+    core.close_and_forget(session_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// The slash commands (and skills) a session's Agent offers, for the composer's `/` menu.
 #[tauri::command]
 fn available_commands(
@@ -1820,6 +1828,7 @@ fn main() {
             find_files,
             list_dir,
             close_tab,
+            close_and_forget,
             clear_session,
             recent_sessions,
             reopen_session,

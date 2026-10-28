@@ -25,6 +25,7 @@ import { answerByKey } from "./PermissionCard";
 import { NewWorktreeDialog } from "./NewWorktreeDialog";
 import { RemoveWorktreeDialog } from "./RemoveWorktreeDialog";
 import { WorktreesOverview } from "./WorktreesOverview";
+import { WorktreeSwitcher } from "./WorktreeSwitcher";
 import { AgentPicker } from "./AgentPicker";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
 import { FilesDrawer } from "./FilesDrawer";
@@ -45,13 +46,15 @@ const TerminalPanel = lazy(() => import("./TerminalPanel").then((m) => ({ defaul
 import { Board } from "./Board";
 import { Dashboard, type PrStart } from "./Dashboard";
 import { Transcript } from "./Transcript";
-import { ContextStrip, removedWorktree, ReviewBadge, Sidebar, unfoldWorktree, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
+import { ContextStrip, removedWorktree, ReviewBadge, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 import { notify, onNotificationClicked } from "./notify";
+import { clear as clearNotification, eventOf, raise, sessionKey, setupKey, type Notification, type NotificationEvent } from "./notifications";
+import { Notifications } from "./Notifications";
 import { keepOutput, Setup, type SetupView } from "./Setup";
 import { StateBadge } from "./StateDot";
 import { setShells, shellRunning, showShellOf } from "./shells";
 import { Banner, Composer, FindOtherConversations, OtherConversations, RecentList, setDraft } from "./Chat";
-import { Columns, COLUMNS_MIN_WIDTH } from "./Columns";
+import { Columns, COLUMNS_MIN_WIDTH, SessionTabs } from "./Columns";
 import { createTabView, type TabView } from "./TabView";
 import { BareTitlebar, WindowControls } from "./WindowControls";
 import { WorkspacePicker } from "./WorkspacePicker";
@@ -60,7 +63,7 @@ import { applyAppearance } from "./appearance";
 // The compact cut of the mark: the one for 32 px and below. Inline, not an <img>: its outer fruit
 // overhang its box, and an <img> would clip them.
 import orchardMark from "./assets/orchard-mark-small.svg?raw";
-import { Bell, ChevronDown, ChevronRight, GitBranch, GitCompareArrows, GitPullRequest, Loader, PanelLeft, PanelRight, Search, Sparkles, SquareTerminal, X } from "./icons";
+import { Bell, ChevronDown, ChevronRight, GitBranch, GitCompareArrows, GitPullRequest, History, LayoutGrid, Loader, PanelRight, Plus, Search, Settings, Sparkles, SquareTerminal, X } from "./icons";
 
 /** The PRs and review requests read this lately aren't asked for again when the window gets focus,
  *  or the Dashboard is shown. */
@@ -247,7 +250,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       setDashboardOpen(false);
       setBoardOpen(false);
     });
-  /** The Worktrees pinned as columns, and those in sidebar order. */
+  /** The Worktrees pinned as columns, in the Worktree switcher's order. */
   const [pinned, setPinnedList] = createSignal<string[]>([]);
   /** The columns' widths, as shares of the row (none: even). */
   const [columnShares, setColumnShares] = createSignal<Record<string, number>>({});
@@ -284,9 +287,6 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     for (const path of paths) if (!pinned().includes(path)) await setPinned(path, true);
     if (!wanted.has(activeWorktree()) && paths[0]) setActiveWorktree(paths[0]);
   };
-  /** The sidebar folded to its icon rail, per view (the Columns view starts folded, for room). */
-  const [railIn, setRailIn] = createStore({ tabs: false, columns: true });
-  const collapsed = () => railIn[mainView()];
   /** The Columns view is offered from COLUMNS_MIN_WIDTH up. */
   const [wide, setWide] = createSignal(window.innerWidth >= COLUMNS_MIN_WIDTH);
   /** Each column's view slot, by Worktree (Y / N answer the focused one's card). */
@@ -343,25 +343,41 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     ),
   );
   const needYou = () => order().filter((id) => sessions[id]?.state === "needsYou").length;
+  /** The header's needs-you count: in the Columns view, not those already shown in a column. */
+  const needYouUnseen = () =>
+    view() === "columns" ? order().filter((id) => sessions[id]?.state === "needsYou" && !onScreen(id)).length : needYou();
+  /** The Worktrees button's count: sessions that need you outside the active Worktree. */
+  const needYouElsewhere = () => order().filter((id) => sessions[id]?.state === "needsYou" && sessions[id].worktree !== activeWorktree()).length;
   /** "New Worktree from this branch" (from the Git drawer's branch picker). */
   const [creatingFrom, setCreatingFrom] = createSignal<string | undefined>(undefined);
   const newWorktreeFrom = (branch: string) => {
     setCreatingFrom(branch);
     setCreatingWorktree(true);
   };
-  /** The branch picker opened from a branch name (a column's header, the breadcrumb, the sidebar). */
+  /** The branch picker opened from a branch name (a column's header, the breadcrumb). */
   const [branchPopover, setBranchPopover] = createSignal<BranchPopover | null>(null);
   const toggleBranches = (worktree: string, anchor: Element) =>
     setBranchPopover((open) => (open?.worktree === worktree ? null : popoverUnder(worktree, anchor)));
   /** Each Worktree's Recent sessions (closed Tabs), as the core last reported them. */
   const [recent, setRecent] = createStore<Record<string, RecentSession[]>>({});
   const [recentOpen, setRecentOpen] = createSignal(false);
-  /** Where the Recent menu opens (it's fixed, so the scrolling sidebar doesn't clip it). */
-  const [recentAt, setRecentAt] = createSignal({ left: 0, top: 0 });
-  createEffect(() => {
-    const path = activeWorktree();
+  /** Where the Recent menu opens, under the Tabs view's Recent button (its right edge in line). */
+  const [recentAt, setRecentAt] = createSignal({ right: 0, top: 0 });
+  const loadRecent = (path: string) => {
     if (!recent[path]) void core.recentSessions(path).then((list) => !recent[path] && setRecent(path, list));
-  });
+  };
+  createEffect(() => loadRecent(activeWorktree()));
+  /** The Worktree switcher (Ctrl+Space). */
+  const [switcherOpen, setSwitcherOpen] = createSignal(false);
+  /** The header's Worktrees button. */
+  const openSwitcher = () => {
+    setRecentOpen(false);
+    setSwitcherOpen(true);
+    setNotifications([]); // (it shows what each Worktree needs)
+  };
+  /** The sticky Notifications, oldest first; in memory only, so a restart starts with none. */
+  const [notifications, setNotifications] = createSignal<Notification[]>([]);
+  const dismiss = (key: string) => setNotifications((list) => clearNotification(list, key));
   /** The Files drawer and Ctrl+P; `revision` per Worktree, bumped when its files change. */
   /** The drawer on the right edge: the Worktree's files, or its git status (one at a time). */
   const [drawer, setDrawer] = createSignal<"files" | "git" | null>(null);
@@ -532,6 +548,21 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   const [removing, setRemoving] = createSignal<WorktreeTab | null>(null);
   /** The Worktrees overview (which are merged and can go) is open. */
   const [overviewOpen, setOverviewOpen] = createSignal(false);
+  /** The dialogs that cover the Tab (the keyboard shortcuts stand down while one is open). */
+  const dialogs = {
+    removing,
+    switcher: switcherOpen,
+    overview: overviewOpen,
+    creatingWorktree,
+    palette: paletteOpen,
+    agentPicker: agentPickerOpen,
+    switching,
+    settings: settingsAt,
+    reviewing,
+    prOf,
+  };
+  /** Whether a dialog is open, other than `but` (a shortcut may open its own dialog again). */
+  const dialogOpen = (but?: keyof typeof dialogs) => Object.entries(dialogs).some(([name, open]) => name !== but && !!open());
   /** A Worktree was removed (from its dialog, or with others from the overview). */
   const afterRemoved = (path: string, warning: string | null) => {
     if (warning) setNotice(warning);
@@ -557,7 +588,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   createEffect(() => settings() && applyAppearance(settings()!.settings.appearance));
   /** Something to know that isn't an error (e.g. a fetch failed, so a Worktree started from stale refs). */
   const [notice, setNotice] = createSignal("");
-  /** Each Worktree's sessions, in Tab order (asked for several times per sidebar row). */
+  /** Each Worktree's sessions, in Tab order (asked for several times per switcher card). */
   const sessionsBy = createMemo(() => {
     const by = new Map<string, SessionInfo[]>();
     for (const id of order()) {
@@ -569,7 +600,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     return by;
   });
   const sessionsIn = (path: string): SessionInfo[] => sessionsBy().get(path) ?? [];
-  // (The same row for a removed Worktree each time, so the sidebar keeps it rather than redrawing it.)
+  // (The same row for a removed Worktree each time, so the switcher and columns keep it rather than redrawing it.)
   const removedRows = new Map<string, WorktreeTab>();
   const rowWorktrees = createMemo((): WorktreeTab[] => {
     const listed = worktrees();
@@ -707,6 +738,32 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   };
 
   const closeTab = (id: SessionId) => core.closeTab(id).catch((err) => setError(String(err)));
+  /** A removed Worktree's "Close all and forget": its sessions closed, not kept in Recent sessions. */
+  const forgetSessionsIn = async (path: string) => {
+    const results = await Promise.allSettled(sessionsIn(path).map((s) => core.closeAndForget(s.id)));
+    const failures = results.flatMap((r) => (r.status === "rejected" ? [String(r.reason)] : []));
+    if (failures.length) setError(failures.join("\n"));
+  };
+
+  /** Whether going to a Worktree in the Columns view gives it a column first. */
+  const needsColumn = (path: string) => mainView() === "columns" && !pinned().includes(path);
+  /** Goes to a Worktree: in the Columns view its column (given one first), else as `selectWorktree`. */
+  const goToWorktree = (path: string) => (needsColumn(path) ? void pin(path) : selectWorktree(path));
+
+  /** Picking a Worktree's card in the switcher: in the Columns view its column, given one first; in
+   *  the Tabs view its last-used Tab (or the empty-Worktree screen). Either closes the Board or Dashboard. */
+  const pickWorktree = (path: string) => {
+    setSwitcherOpen(false);
+    toMainView();
+    goToWorktree(path);
+  };
+  /** A session line in the switcher: straight to it (in the Columns view, its column given one first). */
+  const pickSession = async (id: SessionId) => {
+    setSwitcherOpen(false);
+    const path = sessions[id]?.worktree;
+    if (path && needsColumn(path)) await pin(path);
+    await show(id);
+  };
 
   /** A new Agent session in the active Worktree (`quiet` as for `show`). */
   const newSession = async (path = activeWorktree(), opts: { quiet?: boolean } = {}): Promise<SessionId | undefined> => {
@@ -823,12 +880,37 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     if (state !== "working") turnWaiters.delete(id);
   };
 
+  /** Whether a Worktree's setup screen (or its column) is on screen. */
+  const setupOnScreen = (path: string) =>
+    !boardOpen() && !dashboardOpen() && (mainView() === "columns" ? pinned().includes(path) : activeWorktree() === path && activeId() === null);
+  const notifiedOnScreen = (n: Notification) =>
+    n.session === null ? setupOnScreen(n.worktree) : !boardOpen() && !dashboardOpen() && onScreen(n.session);
+  const raiseNotification = (n: Omit<Notification, "at">) => {
+    if (!notifiedOnScreen({ ...n, at: 0 })) setNotifications((list) => raise(list, { ...n, at: Date.now() }));
+  };
+  // Opening a Notification's session any way at all (Ctrl+K, Alt+↑/↓, the switcher) clears it.
+  createEffect(() => {
+    const list = notifications();
+    const left = list.filter((n) => !notifiedOnScreen(n));
+    if (left.length !== list.length) setNotifications(left);
+  });
+  /** Clicking a Notification: on to its session (or, for a failed setup, its Worktree). */
+  const openNotification = (n: Notification) => {
+    dismiss(n.key);
+    if (n.session !== null) return void (sessions[n.session] && show(n.session));
+    toMainView();
+    goToWorktree(n.worktree);
+  };
+
   // A session you're not looking at (another Tab is visible, or the window is in the background)
-  // raises an OS notification when it needs you (spec story 25).
+  // raises an OS notification when it needs you (spec story 25). The in-app Notification follows
+  // the same check, but also while the window has focus, and for an unexpected exit.
   const onStateChanged = (id: SessionId, state: SessionState) => {
-    const { name, state: previous } = sessions[id]; // read before the store updates
+    const { name, state: previous, worktree } = sessions[id]; // read before the store updates
     setSessions(id, "state", state);
     onBenchState(id, state);
+    const event: NotificationEvent | null = eventOf(previous, state, !!settings()?.settings.notifications.turnFinished);
+    if (event) raiseNotification({ key: sessionKey(id), worktree, session: id, name, event });
     const unseen = !onScreen(id) || boardOpen() || dashboardOpen() || !document.hasFocus();
     if (!unseen) return;
     if (state === "needsYou") void notify(id, `${name} needs you`, "The Agent is waiting for your answer.");
@@ -866,6 +948,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         // Closed (its × or a middle-click, or its Worktree is being removed): its Tab goes.
         const id = event.sessionId;
         const path = sessions[id]?.worktree;
+        dismiss(sessionKey(id)); // (nothing left to go to)
         setOrder((ids) => ids.filter((other) => other !== id));
         setSessions(produce((all) => void delete all[id]));
         // Back to what's left of its Worktree, or to the main checkout if the Worktree's gone.
@@ -886,6 +969,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         setSettings(event.settings);
       } else if (event.kind === "setupChanged") {
         const { worktree, commands, status } = event;
+        const failed = status.kind === "failed" || status.kind === "sessionFailed";
+        if (failed && setups[worktree]?.status.kind !== status.kind)
+          raiseNotification({ key: setupKey(worktree), worktree, session: null, name: "Worktree setup", event: "setupFailed" });
         updateSetup(worktree, (s) => Object.assign(s, { commands, status }));
         if (setupWaiters.get(worktree)?.(status)) setupWaiters.delete(worktree);
         // Setup finished while you watched it: on to its session (behind the Dashboard, if that's up).
@@ -925,29 +1011,37 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     untilGone(unlistenClicks);
     // Y/N answer the oldest open permission card anywhere in the Tab (outside text fields).
     const onKey = (e: KeyboardEvent) => {
+      // Ctrl+Space toggles the Worktree switcher (not in the Terminal, whose shell may use the key).
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === "Space" && !e.defaultPrevented && !e.isComposing && !document.activeElement?.closest(".terminal-panel")) {
+        e.preventDefault();
+        if (e.repeat) return;
+        if (switcherOpen()) setSwitcherOpen(false);
+        else if (!dialogOpen()) openSwitcher();
+        return;
+      }
       // (Ctrl+P is never the browser's print, even with a dialog open.)
       if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !agentPickerOpen() && !switching() && !settingsAt() && !reviewing() && !prOf()) setPaletteOpen(true);
+        if (!dialogOpen("palette")) setPaletteOpen(true);
         return;
       }
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "o") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !agentPickerOpen() && !settingsAt() && !reviewing() && !prOf()) setSwitching(true);
+        if (!dialogOpen("switching")) setSwitching(true);
         return;
       }
       // (Not when the Manual editor or the Terminal took it: there it's theirs.)
       if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k" && !e.defaultPrevented && !document.activeElement?.closest(".terminal-panel")) {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !switching() && !settingsAt() && !reviewing() && !prOf()) setAgentPickerOpen(true);
+        if (!dialogOpen("agentPicker")) setAgentPickerOpen(true);
         return;
       }
       if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ",") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !agentPickerOpen() && !switching() && !reviewing() && !prOf()) openSettingsPage();
+        if (!dialogOpen("settings")) openSettingsPage();
         return;
       }
-      if (removing() || overviewOpen() || creatingWorktree() || paletteOpen() || agentPickerOpen() || switching() || settingsAt() || reviewing() || prOf()) return; // a dialog is open over the Tab
+      if (dialogOpen()) return; // a dialog is open over the Tab
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
         return void toggleDrawer("files");
@@ -1104,48 +1198,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
 
   return (
     <div class="workspace" classList={{ "board-open": view() === "board" }}>
-      <Sidebar
-        workspaceName={props.workspace.name}
-        workspaceRoot={props.workspace.root}
-        collapsed={collapsed()}
-        mark={orchardMark}
-        worktrees={rowWorktrees()}
-        active={activeWorktree()}
-        pinned={mainView() === "columns" ? pinned() : null}
-        sessionsIn={sessionsIn}
-        activeSession={activeId()}
-        settingUp={(path) => !!setups[path] && !setupOver(setups[path].status)}
-        onSelect={(path) => {
-          toMainView();
-          if (mainView() === "columns" && !pinned().includes(path)) void pin(path);
-          else selectWorktree(path);
-        }}
-        onShowTerminal={(path) => {
-          toMainView();
-          if (mainView() === "columns" && !pinned().includes(path)) void pin(path);
-          else selectWorktree(path);
-          if (!terminalOpen(path)) toggleTerminalOf(path);
-        }}
-        onShowSession={(id) => void show(id)}
-        onCloseSession={(id) => void closeTab(id)}
-        onNewSession={(path) => void newSession(path)}
-        onRecent={(path, r) => {
-          const toggle = recentOpen() && path === activeWorktree();
-          if (path !== activeWorktree()) selectWorktree(path); // (the menu lists the active Worktree's)
-          setRecentAt({ left: r.left, top: r.bottom + 4 });
-          setRecentOpen(!toggle);
-        }}
-        onNewWorktree={() => setCreatingWorktree(true)}
-        onOverview={() => setOverviewOpen(true)}
-        onSwitchWorkspace={() => setSwitching(true)}
-        onSearch={() => !removing() && !creatingWorktree() && setPaletteOpen(true)}
-        onSettings={() => openSettingsPage()}
-        onOpenMyPr={openMyPr}
-        onPrBoard={() => openBoard("prs")}
-        onCodeReview={(number) => void openCodeReviewTab(number)}
-      />
       <Show when={recentOpen() && mainView() === "tabs"}>
-        <div class="menu scroll" style={{ left: `${recentAt().left}px`, top: `${recentAt().top}px` }}>
+        <div class="menu scroll" style={{ right: `${recentAt().right}px`, top: `${recentAt().top}px` }}>
           <Show when={recent[activeWorktree()]?.length}>
             <div class="menu-label">Recent sessions</div>
             <For each={recent[activeWorktree()] ?? []}>
@@ -1164,17 +1218,20 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       <div class="inset">
       {/* The window's title bar (no native one): drag it by any bare part; double-click maximises. */}
       <header class="app-header" ref={titlebar} data-tauri-drag-region>
-        <button
-          class="ghost icon"
-          onClick={() => setRailIn(mainView(), (now) => !now)}
-          title={collapsed() ? "Open the sidebar" : "Fold the sidebar to icons"}
-          aria-label="Toggle the sidebar"
-        >
-          <PanelLeft />
+        <button class="outline worktrees-button" onClick={openSwitcher} title="Every Worktree, names in full (Ctrl+Space)" aria-label="Worktree switcher">
+          <LayoutGrid />
+          <span class="label">Worktrees</span>
+          <Show when={needYouElsewhere() > 0}>
+            <span class="badge needs" title="Sessions in other Worktrees that need you">
+              {needYouElsewhere()}
+            </span>
+          </Show>
         </button>
         <span class="vsep" />
         <nav class="breadcrumb" data-tauri-drag-region>
-          <span class="crumb">{props.workspace.name}</span>
+          <button class="crumb workspace-crumb" onClick={() => setSwitching(true)} title={`${props.workspace.root}\nSwitch repository (Ctrl+Shift+O)`}>
+            {props.workspace.name}
+          </button>
           <ChevronRight />
           <Show
             when={mainView() === "tabs"}
@@ -1252,19 +1309,17 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             Board
           </button>
         </div>
-        <Show when={needYou() > 0}>
+        <Show when={needYouUnseen() > 0}>
           <button class="outline needs-you-button" onClick={() => openBoard("sessions")} title="See them on the Board">
             <Bell />
-            {needYou()} need{needYou() === 1 ? "s" : ""} you
+            {needYouUnseen()} need{needYouUnseen() === 1 ? "s" : ""} you
           </button>
         </Show>
-        <Show when={collapsed()}>
-          <button class="search-button" onClick={() => !removing() && !creatingWorktree() && setPaletteOpen(true)} title="Go to a file in this Worktree, or start a session">
-            <Search />
-            <span class="grow">Search files…</span>
-            <kbd>Ctrl P</kbd>
-          </button>
-        </Show>
+        <button class="search-button" onClick={() => !removing() && !creatingWorktree() && setPaletteOpen(true)} title="Go to a file in this Worktree, or start a session">
+          <Search />
+          <span class="grow">Search files…</span>
+          <kbd>Ctrl P</kbd>
+        </button>
         <button
           class="terminal-button"
           classList={{ outline: !terminalOpen(activeWorktree()) }}
@@ -1297,6 +1352,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         </Show>
         <button class="ghost icon" classList={{ on: filesOpen() }} onClick={() => toggleDrawer("files")} title="This Worktree's files (Ctrl+Shift+E)" aria-label="Files drawer">
           <PanelRight />
+        </button>
+        <button class="ghost icon" onClick={() => openSettingsPage()} title="Settings (Ctrl+,)" aria-label="Settings">
+          <Settings />
         </button>
         <WindowControls />
       </header>
@@ -1375,6 +1433,41 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         />
       </Show>
       <Show when={mainView() === "tabs"}>
+        <SessionTabs
+          path={activeWorktree()}
+          sessions={sessionsIn(activeWorktree())}
+          shown={activeId()}
+          facts={session()}
+          onShow={(id) => id !== activeId() && void show(id)}
+          onClose={(id) => void closeTab(id)}
+          actions={
+            // (A Review Worktree has only its Code review's session.)
+            <Show when={!worktree()?.removed && worktree()?.review === null}>
+              <button
+                class="ghost icon"
+                onClick={() => void newSession()}
+                disabled={!!setups[activeWorktree()] && !setupOver(setups[activeWorktree()].status)}
+                title="New Agent session in this Worktree"
+                aria-label="New Agent session"
+              >
+                <Plus />
+              </button>
+              <button
+                class="ghost icon recent-menu"
+                classList={{ on: recentOpen() }}
+                onClick={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  setRecentAt({ right: window.innerWidth - r.right, top: r.bottom + 4 });
+                  setRecentOpen((now) => !now);
+                }}
+                title="Closed sessions in this Worktree, and its conversations started elsewhere"
+                aria-label="Recent sessions"
+              >
+                <History />
+              </button>
+            </Show>
+          }
+        />
         <ContextStrip
           worktree={worktree()}
           session={session()}
@@ -1473,13 +1566,69 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             return w ? worktreeLabel(w) : path.split(/[\\/]/).pop() ?? path;
           }}
           colour={worktreeColour}
-          onPick={(id) => {
-            unfoldWorktree(props.workspace.root, sessions[id].worktree);
-            void show(id);
-          }}
+          onPick={(id) => void show(id)}
           onClose={() => setAgentPickerOpen(false)}
         />
       </Show>
+      <Show when={switcherOpen()}>
+        <WorktreeSwitcher
+          worktrees={rowWorktrees()}
+          active={activeWorktree()}
+          activeSession={mainView() === "columns" ? shownIn(activeWorktree()) ?? null : activeId()}
+          pinned={mainView() === "columns" ? pinned() : null}
+          sessionsIn={sessionsIn}
+          settingUp={(path) => !!setups[path] && !setupOver(setups[path].status)}
+          recentIn={(path) => recent[path] ?? []}
+          loadRecent={loadRecent}
+          onPick={pickWorktree}
+          onCodeReview={(number) => {
+            setSwitcherOpen(false);
+            void openCodeReviewTab(number);
+          }}
+          onShowSession={(id) => void pickSession(id)}
+          onShowTerminal={(path) => {
+            pickWorktree(path);
+            if (!terminalOpen(path)) toggleTerminalOf(path);
+          }}
+          onCloseSession={(id) => void closeTab(id)}
+          onForget={(path) => void forgetSessionsIn(path)}
+          onNewSession={(path) => {
+            setSwitcherOpen(false);
+            void (async () => {
+              if (needsColumn(path)) await pin(path);
+              await newSession(path);
+            })();
+          }}
+          onReopen={(r) => {
+            setSwitcherOpen(false);
+            void reopen(core.reopenSession(r.acpId));
+          }}
+          onOpenConversation={(c) => {
+            setSwitcherOpen(false);
+            void reopen(core.openConversation(c));
+          }}
+          onPin={(path) => void pin(path)}
+          onUnpin={unpin}
+          onNewWorktree={() => {
+            setSwitcherOpen(false);
+            setCreatingWorktree(true);
+          }}
+          onCleanUp={() => {
+            setSwitcherOpen(false);
+            setOverviewOpen(true);
+          }}
+          onClose={() => setSwitcherOpen(false)}
+        />
+      </Show>
+      <Notifications
+        notifications={notifications()}
+        worktreeName={(path) => {
+          const w = rowWorktrees().find((w) => w.path === path);
+          return w ? worktreeLabel(w) : path.split(/[\\/]/).pop() ?? path;
+        }}
+        onOpen={openNotification}
+        onClose={dismiss}
+      />
       <Show when={overviewOpen()}>
         <WorktreesOverview
           root={props.workspace.root}
