@@ -12,6 +12,8 @@ import { ReviewBadge, ShellBadge, worktreeColour, worktreeLabel, type WorktreeTa
 export interface WorktreeSwitcherProps {
   worktrees: WorktreeTab[];
   active: string;
+  /** The session on screen (the Tabs view's Tab, or the focused column's), highlighted. */
+  activeSession: SessionId | null;
   /** The Columns view's pinned Worktrees; null in the Tabs view. */
   pinned: string[] | null;
   sessionsIn: (path: string) => SessionInfo[];
@@ -47,13 +49,13 @@ function StatusBadge(props: { sessions: SessionInfo[]; settingUp: boolean }) {
   return (
     <Show
       when={!has("needsYou")}
-      fallback={<span class="state-badge needsYou">Needs you</span>}
+      fallback={<span class="state-badge needsYou">{STATE_LABEL.needsYou}</span>}
     >
       <Show when={!props.settingUp} fallback={<span class="state-badge"><Loader class="spin" />Setting up</span>}>
-        <Show when={!has("working")} fallback={<span class="state-badge working"><span class="dot" />Working</span>}>
-          <Show when={!has("idle") && !has("suspended")} fallback={<span class="state-badge idle">Idle</span>}>
+        <Show when={!has("working")} fallback={<span class="state-badge working"><span class="dot" />{STATE_LABEL.working}</span>}>
+          <Show when={!has("idle") && !has("suspended")} fallback={<span class="state-badge idle">{STATE_LABEL.idle}</span>}>
             <Show when={has("exited")}>
-              <span class="state-badge exited">exited</span>
+              <span class="state-badge exited">{STATE_LABEL.exited}</span>
             </Show>
           </Show>
         </Show>
@@ -99,15 +101,15 @@ export function WorktreeSwitcher(props: WorktreeSwitcherProps) {
   onMount(() => {
     input.focus();
     grid.querySelectorAll(".switcher-card")[selected()]?.scrollIntoView({ block: "nearest" });
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        props.onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    onCleanup(() => window.removeEventListener("keydown", onKey));
   });
-  const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      props.onClose();
-    }
-  };
-  window.addEventListener("keydown", onKey);
-  onCleanup(() => window.removeEventListener("keydown", onKey));
 
   return (
     <div class="modal-backdrop switcher-backdrop" onClick={(e) => e.target === e.currentTarget && props.onClose()}>
@@ -187,7 +189,7 @@ export function WorktreeSwitcher(props: WorktreeSwitcherProps) {
                     <div class="switcher-sessions">
                       <For each={sessions()}>
                         {(s) => (
-                          <div class={`switcher-session ${s.state}`}>
+                          <div class={`switcher-session ${s.state}`} classList={{ on: s.id === props.activeSession }}>
                             <button class="switcher-session-main" onClick={() => props.onShowSession(s.id)} title={`Go to ${s.name}`}>
                               <Show when={s.state === "working"} fallback={<StateDot state={s.state} />}>
                                 <Loader class="spin" />
