@@ -3,7 +3,7 @@
 // Worktree switcher is opened (App.tsx clears them); nothing clears them by time.
 import { createEffect, createSignal, For, onCleanup, untrack } from "solid-js";
 import { GitBranch, X } from "./icons";
-import type { Notification, NotificationEvent } from "./notifications";
+import type { Notification, NotificationEvent } from "./notificationData";
 import { worktreeColour } from "./Worktrees";
 
 const EVENT_TEXT: Record<NotificationEvent, string> = {

@@ -48,7 +48,7 @@ import { Dashboard, type PrStart } from "./Dashboard";
 import { Transcript } from "./Transcript";
 import { ContextStrip, removedWorktree, ReviewBadge, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 import { notify, onNotificationClicked } from "./notify";
-import { clear as clearNotification, eventOf, raise, sessionKey, setupKey, type Notification, type NotificationEvent } from "./notifications";
+import { clear as clearNotification, eventOf, raise, sessionKey, setupKey, type Notification, type NotificationEvent } from "./notificationData";
 import { Notifications } from "./Notifications";
 import { keepOutput, Setup, type SetupView } from "./Setup";
 import { StateBadge } from "./StateDot";
