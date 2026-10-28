@@ -6,12 +6,12 @@ use std::path::{Path, PathBuf};
 
 use editor_core::{
     check_prerequisites, AdapterCommand, Attachment, BranchList, Core, CoreConfig, CoreError,
-    CreatedWorktree, Definition, DirEntry, FileMatch, FontFamily, LoadedSettings,
-    MissingPrerequisite, NewWorktree, NodeInstall, OpenedFile, OtherConversation, PermissionMode,
-    PoppedOutFile, QueuedPrompt, RecentSession, RecentWorkspace, RemovalCheck, RemoveWorktree,
-    RemovedWorktree, RepoSettings, SaveOver, SessionId, SessionInfo, SessionUsage, SettingChange,
-    SetupInfo, SlashCommand, TerminalId, TerminalInfo, TerminalOutput, TerminalStream, Tools,
-    TranscriptDelta, TranscriptPage, WorkspaceInfo, WorktreeInfo, WorktreeMerge,
+    CreatedWorktree, Definition, DirEntry, FileMatch, FontFamily, LoadedSettings, MissingPrerequisite,
+    NewWorktree, NodeInstall, OpenedFile, OtherConversation, PermissionMode, PoppedOutFile,
+    QueuedPrompt, RecentSession, RecentWorkspace, RemovalCheck, RemoveWorktree, RemovedWorktree,
+    RepoSettings, SaveOver, SessionId, SessionInfo, SessionUsage, SettingChange, SetupInfo,
+    SlashCommand, TerminalId, TerminalInfo, TerminalOutput, TerminalStream, Tools, TranscriptDelta,
+    TranscriptPage, WorkspaceInfo, WorktreeInfo, WorktreeMerge,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};

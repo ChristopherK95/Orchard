@@ -981,6 +981,15 @@ struct OpenQuestion {
     responder: Responder,
 }
 
+/// What becomes of a closed Tab's session.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AfterClose {
+    /// It goes to its Worktree's Recent sessions, to reopen later.
+    KeepInRecent,
+    /// It's gone for good.
+    Forget,
+}
+
 impl Core {
     pub fn new(config: CoreConfig) -> Self {
         let (events, _) = broadcast::channel(1024);
@@ -2815,14 +2824,11 @@ impl Core {
         let files = self.actor(&root).await?.file_list();
         let (text, symbol) = (text.to_owned(), symbol.to_owned());
         tokio::task::spawn_blocking(move || {
-            let relative = |rel: &str| {
-                rel.split('/')
-                    .fold(root.clone(), |dir, part| dir.join(part))
-            };
+            let relative = |rel: &str| rel.split('/').fold(root.clone(), |dir, part| dir.join(part));
             let read = |rel: &str| {
                 let path = relative(rel);
-                let small =
-                    std::fs::metadata(&path).is_ok_and(|m| m.len() <= definition::MAX_FILE_BYTES);
+                let small = std::fs::metadata(&path)
+                    .is_ok_and(|m| m.len() <= definition::MAX_FILE_BYTES);
                 small.then(|| std::fs::read_to_string(path).ok()).flatten()
             };
             let lookup = definition::Lookup {
@@ -4775,16 +4781,16 @@ impl Core {
     /// Closes a Tab without losing its conversation: the Agent process stops, and the session
     /// goes to its Worktree's Recent sessions (to reopen later, even after a restart).
     pub async fn close_tab(&self, id: SessionId) -> Result<(), CoreError> {
-        self.close_tab_keeping(id, true).await
+        self.close_tab_then(id, AfterClose::KeepInRecent).await
     }
 
     /// Closes a Tab for good: like `close_tab`, but its session isn't kept in the Recent sessions
     /// (the Worktree switcher's "Close all and forget", for a Worktree whose folder is gone).
     pub async fn close_and_forget(&self, id: SessionId) -> Result<(), CoreError> {
-        self.close_tab_keeping(id, false).await
+        self.close_tab_then(id, AfterClose::Forget).await
     }
 
-    async fn close_tab_keeping(&self, id: SessionId, keep: bool) -> Result<(), CoreError> {
+    async fn close_tab_then(&self, id: SessionId, after: AfterClose) -> Result<(), CoreError> {
         let session = self.session(id)?;
         session.wait_settled().await;
         if session
@@ -4799,7 +4805,7 @@ impl Core {
         let _ = self.stop_agent(&session).await;
         let saved = session.saved();
         self.forget_session(&session);
-        if keep && saved.started {
+        if after == AfterClose::KeepInRecent && saved.started {
             let mut state = self.inner.state.lock().expect("state lock");
             app_state::remember_closed(&mut state.recent, saved.clone());
         }
