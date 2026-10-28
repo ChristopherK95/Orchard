@@ -24,6 +24,7 @@ import {
   type SubmitError,
   type Verdict,
 } from "./core";
+import { DiffSearch } from "./DiffSearch";
 import { DiffView, type DiffSelection } from "./DiffView";
 import { languageOfPath } from "./highlight";
 import { ChevronLeft, ChevronRight, CircleCheck, GitPullRequest, Loader, MessageSquare, MoveRight, PanelRight, Pencil, RefreshCw, Send, Sparkles, Trash2, TriangleAlert, X } from "./icons";
@@ -813,6 +814,7 @@ export function CodeReviewView(props: {
                                 <Show when={file().renamedFrom}>{(from) => <span class="muted">{from()} → </span>}</Show>
                                 {file().path}
                               </span>
+                              <DiffSearch box={() => diffBox} file={file().path} />
                               <span class="review-stat mono">
                                 <span class="added-key">+{file().additions}</span> <span class="removed-key">−{file().deletions}</span>
                               </span>

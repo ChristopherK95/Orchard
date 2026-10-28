@@ -9,6 +9,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { core, type OpenPullRequest, type PushToPullRequestOutcome, type PullRequestProgress, type SessionId, type SessionInfo, type CommitChanges, type DiffLine, type PullRequestOutcome, type Review, type ReviewCommit, type ReviewFile } from "./core";
+import { DiffSearch } from "./DiffSearch";
 import { DiffView } from "./DiffView";
 import { LETTER, ReviewFiles, useReviewKeys } from "./ReviewFiles";
 import { languageOfPath } from "./highlight";
@@ -528,6 +529,7 @@ export function ReviewOverlay(props: {
                           <Show when={file().renamedFrom}>{(from) => <span class="muted">{from()} → </span>}</Show>
                           {file().path}
                         </span>
+                        <DiffSearch box={() => diffBox} file={file().path} />
                         <Show when={stats(file())}>
                           {(s) => (
                             <span class="review-stat mono">
