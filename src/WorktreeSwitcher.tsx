@@ -112,7 +112,8 @@ export function WorktreeSwitcher(props: WorktreeSwitcherProps) {
   });
 
   return (
-    <div class="modal-backdrop switcher-backdrop" onClick={(e) => e.target === e.currentTarget && props.onClose()}>
+    // The panel has no background of its own, so a click anywhere but a card or a control closes it.
+    <div class="modal-backdrop switcher-backdrop" onClick={(e) => !(e.target as Element).closest(".switcher-card, .switcher-search, button") && props.onClose()}>
       <div class="modal worktree-switcher" role="dialog" aria-label="Worktree switcher">
         <div class="switcher-head">
           <LayoutGrid />

@@ -452,19 +452,21 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 /* The Worktree switcher: about 90% of the window, a grid of ~300 px cards (as many columns as fit)
    that scrolls down; names wrap in full, never cut. */
 .switcher-backdrop { align-items: center; padding: 0; }
-.modal.worktree-switcher { width: 90vw; height: 90vh; max-height: 90vh; }
-.switcher-head { flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 12px 12px 18px; border-bottom: 1px solid var(--line); }
-.switcher-head > .lucide { color: var(--fg-3); }
+/* No panel of its own: the cards float on the backdrop, slightly see-through, and the active and
+   selected ones less so. */
+.modal.worktree-switcher { width: 90vw; height: 90vh; max-height: 90vh; background: transparent; border: 0; box-shadow: none; }
+.switcher-head { flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 18px; }
+.switcher-head > .lucide { color: var(--fg-2); }
 .switcher-head > b { font-size: 15px; font-weight: 600; }
 .switcher-search { display: flex; align-items: center; gap: 8px; width: min(360px, 40vw); height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg-2); }
 .switcher-search .lucide { color: var(--fg-3); }
 .switcher-search input { flex: 1; min-width: 0; height: 30px; border: 0; padding: 0; background: transparent; font-size: 13px; }
 .switcher-search input:focus { box-shadow: none; }
-.switcher-grid { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); align-content: start; gap: 12px; padding: 16px 18px 20px; }
-.switcher-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--card); min-width: 0; }
-.switcher-card.selected { background: var(--card-focus); border-color: var(--line-strong); }
-.switcher-card.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.switcher-card.needs-you { background: var(--needs-tint); border-color: var(--needs-border); }
+.switcher-grid { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); align-content: start; gap: 12px; padding: 4px 18px 20px; }
+.switcher-card { --fill: color-mix(in srgb, var(--card) 72%, transparent); display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--fill); min-width: 0; }
+.switcher-card.selected { --fill: color-mix(in srgb, var(--card-focus) 96%, transparent); border-color: var(--line-strong); }
+.switcher-card.on { --fill: color-mix(in srgb, var(--card-focus) 96%, transparent); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.switcher-card.needs-you { background: linear-gradient(var(--needs-tint), var(--needs-tint)), var(--fill); border-color: var(--needs-border); }
 .switcher-card.needs-you.on { border-color: var(--accent); }
 .switcher-card.removed { opacity: 0.6; }
 .switcher-card.removed.selected { opacity: 0.85; }
@@ -496,7 +498,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .switcher-recent-row { display: flex; align-items: center; justify-content: flex-start; gap: 8px; min-height: 26px; padding: 0 6px; border: 0; background: transparent; font-size: 12.5px; font-weight: 400; text-align: left; }
 .switcher-recent-row:hover:not(:disabled) { background: var(--bg-3); }
 .switcher-new { align-items: center; justify-content: center; flex-direction: row; min-height: 96px; border-style: dashed; color: var(--fg-2); font-size: 13px; cursor: pointer; }
-.switcher-new:hover:not(:disabled) { background: var(--card-focus); }
+.switcher-new:hover:not(:disabled) { background: color-mix(in srgb, var(--card-focus) 96%, transparent); }
 
 /* Notifications (ticket 50): a stack at the bottom right, over the Terminal panel and the Board but
    under the dialogs; Notifications.tsx sets its bottom so it stays above the composers. Newest at the bottom. Each
