@@ -2815,11 +2815,14 @@ impl Core {
         let files = self.actor(&root).await?.file_list();
         let (text, symbol) = (text.to_owned(), symbol.to_owned());
         tokio::task::spawn_blocking(move || {
-            let relative = |rel: &str| rel.split('/').fold(root.clone(), |dir, part| dir.join(part));
+            let relative = |rel: &str| {
+                rel.split('/')
+                    .fold(root.clone(), |dir, part| dir.join(part))
+            };
             let read = |rel: &str| {
                 let path = relative(rel);
-                let small = std::fs::metadata(&path)
-                    .is_ok_and(|m| m.len() <= definition::MAX_FILE_BYTES);
+                let small =
+                    std::fs::metadata(&path).is_ok_and(|m| m.len() <= definition::MAX_FILE_BYTES);
                 small.then(|| std::fs::read_to_string(path).ok()).flatten()
             };
             let lookup = definition::Lookup {
@@ -4772,6 +4775,16 @@ impl Core {
     /// Closes a Tab without losing its conversation: the Agent process stops, and the session
     /// goes to its Worktree's Recent sessions (to reopen later, even after a restart).
     pub async fn close_tab(&self, id: SessionId) -> Result<(), CoreError> {
+        self.close_tab_keeping(id, true).await
+    }
+
+    /// Closes a Tab for good: like `close_tab`, but its session isn't kept in the Recent sessions
+    /// (the Worktree switcher's "Close all and forget", for a Worktree whose folder is gone).
+    pub async fn close_and_forget(&self, id: SessionId) -> Result<(), CoreError> {
+        self.close_tab_keeping(id, false).await
+    }
+
+    async fn close_tab_keeping(&self, id: SessionId, keep: bool) -> Result<(), CoreError> {
         let session = self.session(id)?;
         session.wait_settled().await;
         if session
@@ -4786,7 +4799,7 @@ impl Core {
         let _ = self.stop_agent(&session).await;
         let saved = session.saved();
         self.forget_session(&session);
-        if saved.started {
+        if keep && saved.started {
             let mut state = self.inner.state.lock().expect("state lock");
             app_state::remember_closed(&mut state.recent, saved.clone());
         }

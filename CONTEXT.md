@@ -36,6 +36,10 @@ _Avoid_: Upstream (that's the branch it pushes to), target
 Every Worktree of the Workspace but the main checkout (which can't be removed) in one list, with whether its branch is merged into its Base (or into another branch its PR targeted, such as a project branch), so finished ones can be removed. Merged counts however the PR landed: a merge commit or fast-forward (the branch's commits are in the Base), or a squash or rebase (its changes are). A remote branch that was deleted is shown, but doesn't count as merged by itself. A Review Worktree counts once its Code review is done.
 _Avoid_: Clean-up, prune
 
+**Worktree switcher**:
+The overlay (Ctrl+Space) showing every Worktree of the Workspace as a card in a grid, each with its name in full, where its sessions stand and its sessions to go to. Picking a card goes to that Worktree (its last-used Tab, or its column in the Columns view). A Worktree whose folder is gone but whose sessions still run has a dimmed card, with "Close all and forget".
+_Avoid_: Worktree grid, launcher
+
 **Tool call**:
 One action the Agent takes with a tool (reading or editing a file, running a command, …), shown as a compact row in the transcript with its status.
 _Avoid_: Step, action

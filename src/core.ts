@@ -1021,6 +1021,8 @@ export const core = {
   sessions: () => invoke<SessionInfo[]>("sessions"),
   /** Closes a Tab; its session goes to its Worktree's Recent sessions. */
   closeTab: (sessionId: SessionId) => invoke<void>("close_tab", { sessionId }),
+  /** Closes a Tab without keeping it in the Recent sessions. */
+  closeAndForget: (sessionId: SessionId) => invoke<void>("close_and_forget", { sessionId }),
   clearSession: (sessionId: SessionId) => invoke<SessionId>("clear_session", { sessionId }),
   recentSessions: (worktree: string) => invoke<RecentSession[]>("recent_sessions", { worktree }),
   /** Reopens a Recent session in a new Tab, with its conversation. */

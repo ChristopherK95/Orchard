@@ -6,12 +6,12 @@ use std::path::{Path, PathBuf};
 
 use editor_core::{
     check_prerequisites, AdapterCommand, Attachment, BranchList, Core, CoreConfig, CoreError,
-    CreatedWorktree, Definition, DirEntry, FileMatch, FontFamily, LoadedSettings, MissingPrerequisite,
-    NewWorktree, NodeInstall, OpenedFile, OtherConversation, PermissionMode, PoppedOutFile,
-    QueuedPrompt, RecentSession, RecentWorkspace, RemovalCheck, RemoveWorktree, RemovedWorktree,
-    RepoSettings, SaveOver, SessionId, SessionInfo, SessionUsage, SettingChange, SetupInfo,
-    SlashCommand, TerminalId, TerminalInfo, TerminalOutput, TerminalStream, Tools, TranscriptDelta,
-    TranscriptPage, WorkspaceInfo, WorktreeInfo, WorktreeMerge,
+    CreatedWorktree, Definition, DirEntry, FileMatch, FontFamily, LoadedSettings,
+    MissingPrerequisite, NewWorktree, NodeInstall, OpenedFile, OtherConversation, PermissionMode,
+    PoppedOutFile, QueuedPrompt, RecentSession, RecentWorkspace, RemovalCheck, RemoveWorktree,
+    RemovedWorktree, RepoSettings, SaveOver, SessionId, SessionInfo, SessionUsage, SettingChange,
+    SetupInfo, SlashCommand, TerminalId, TerminalInfo, TerminalOutput, TerminalStream, Tools,
+    TranscriptDelta, TranscriptPage, WorkspaceInfo, WorktreeInfo, WorktreeMerge,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -741,6 +741,14 @@ async fn clear_session(core: State<'_, Core>, session_id: SessionId) -> CommandR
 #[tauri::command]
 async fn close_tab(core: State<'_, Core>, session_id: SessionId) -> CommandResult<()> {
     core.close_tab(session_id).await.map_err(|e| e.to_string())
+}
+
+/// Closes a Tab without keeping it in the Recent sessions (the Worktree switcher's "Close all and forget").
+#[tauri::command]
+async fn close_and_forget(core: State<'_, Core>, session_id: SessionId) -> CommandResult<()> {
+    core.close_and_forget(session_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// The slash commands (and skills) a session's Agent offers, for the composer's `/` menu.
@@ -1820,6 +1828,7 @@ fn main() {
             find_files,
             list_dir,
             close_tab,
+            close_and_forget,
             clear_session,
             recent_sessions,
             reopen_session,

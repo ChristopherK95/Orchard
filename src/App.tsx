@@ -25,6 +25,7 @@ import { answerByKey } from "./PermissionCard";
 import { NewWorktreeDialog } from "./NewWorktreeDialog";
 import { RemoveWorktreeDialog } from "./RemoveWorktreeDialog";
 import { WorktreesOverview } from "./WorktreesOverview";
+import { WorktreeSwitcher } from "./WorktreeSwitcher";
 import { AgentPicker } from "./AgentPicker";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
 import { FilesDrawer } from "./FilesDrawer";
@@ -358,10 +359,12 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   const [recentOpen, setRecentOpen] = createSignal(false);
   /** Where the Recent menu opens (it's fixed, so the scrolling sidebar doesn't clip it). */
   const [recentAt, setRecentAt] = createSignal({ left: 0, top: 0 });
-  createEffect(() => {
-    const path = activeWorktree();
+  const loadRecent = (path: string) => {
     if (!recent[path]) void core.recentSessions(path).then((list) => !recent[path] && setRecent(path, list));
-  });
+  };
+  createEffect(() => loadRecent(activeWorktree()));
+  /** The Worktree switcher (Ctrl+Space). */
+  const [switcherOpen, setSwitcherOpen] = createSignal(false);
   /** The Files drawer and Ctrl+P; `revision` per Worktree, bumped when its files change. */
   /** The drawer on the right edge: the Worktree's files, or its git status (one at a time). */
   const [drawer, setDrawer] = createSignal<"files" | "git" | null>(null);
@@ -707,6 +710,25 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   };
 
   const closeTab = (id: SessionId) => core.closeTab(id).catch((err) => setError(String(err)));
+  /** A removed Worktree's "Close all and forget": its sessions closed, not kept in Recent sessions. */
+  const forgetSessionsIn = (path: string) =>
+    Promise.all(sessionsIn(path).map((s) => core.closeAndForget(s.id))).catch((err) => setError(String(err)));
+
+  /** Picking a Worktree's card in the switcher: in the Columns view its column, given one first; in
+   *  the Tabs view its last-used Tab (or the empty-Worktree screen). Either closes the Board or Dashboard. */
+  const pickWorktree = (path: string) => {
+    setSwitcherOpen(false);
+    toMainView();
+    if (mainView() === "columns" && !pinned().includes(path)) void pin(path);
+    else selectWorktree(path);
+  };
+  /** A session line in the switcher: straight to it (in the Columns view, its column given one first). */
+  const pickSession = async (id: SessionId) => {
+    setSwitcherOpen(false);
+    const path = sessions[id]?.worktree;
+    if (path && mainView() === "columns" && !pinned().includes(path)) await pin(path);
+    await show(id);
+  };
 
   /** A new Agent session in the active Worktree (`quiet` as for `show`). */
   const newSession = async (path = activeWorktree(), opts: { quiet?: boolean } = {}): Promise<SessionId | undefined> => {
@@ -925,29 +947,40 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     untilGone(unlistenClicks);
     // Y/N answer the oldest open permission card anywhere in the Tab (outside text fields).
     const onKey = (e: KeyboardEvent) => {
+      // Ctrl+Space toggles the Worktree switcher (not in the Terminal, whose shell may use the key).
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === "Space" && !document.activeElement?.closest(".terminal-panel")) {
+        e.preventDefault();
+        if (e.repeat) return;
+        if (switcherOpen()) setSwitcherOpen(false);
+        else if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !agentPickerOpen() && !switching() && !settingsAt() && !reviewing() && !prOf()) {
+          setRecentOpen(false);
+          setSwitcherOpen(true);
+        }
+        return;
+      }
       // (Ctrl+P is never the browser's print, even with a dialog open.)
       if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !agentPickerOpen() && !switching() && !settingsAt() && !reviewing() && !prOf()) setPaletteOpen(true);
+        if (!removing() && !switcherOpen() && !overviewOpen() && !creatingWorktree() && !agentPickerOpen() && !switching() && !settingsAt() && !reviewing() && !prOf()) setPaletteOpen(true);
         return;
       }
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "o") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !agentPickerOpen() && !settingsAt() && !reviewing() && !prOf()) setSwitching(true);
+        if (!removing() && !switcherOpen() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !agentPickerOpen() && !settingsAt() && !reviewing() && !prOf()) setSwitching(true);
         return;
       }
       // (Not when the Manual editor or the Terminal took it: there it's theirs.)
       if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k" && !e.defaultPrevented && !document.activeElement?.closest(".terminal-panel")) {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !switching() && !settingsAt() && !reviewing() && !prOf()) setAgentPickerOpen(true);
+        if (!removing() && !switcherOpen() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !switching() && !settingsAt() && !reviewing() && !prOf()) setAgentPickerOpen(true);
         return;
       }
       if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ",") {
         e.preventDefault();
-        if (!removing() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !agentPickerOpen() && !switching() && !reviewing() && !prOf()) openSettingsPage();
+        if (!removing() && !switcherOpen() && !overviewOpen() && !creatingWorktree() && !paletteOpen() && !agentPickerOpen() && !switching() && !reviewing() && !prOf()) openSettingsPage();
         return;
       }
-      if (removing() || overviewOpen() || creatingWorktree() || paletteOpen() || agentPickerOpen() || switching() || settingsAt() || reviewing() || prOf()) return; // a dialog is open over the Tab
+      if (removing() || switcherOpen() || overviewOpen() || creatingWorktree() || paletteOpen() || agentPickerOpen() || switching() || settingsAt() || reviewing() || prOf()) return; // a dialog is open over the Tab
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
         return void toggleDrawer("files");
@@ -1137,6 +1170,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         }}
         onNewWorktree={() => setCreatingWorktree(true)}
         onOverview={() => setOverviewOpen(true)}
+        onSwitcher={() => {
+          setRecentOpen(false);
+          setSwitcherOpen(true);
+        }}
         onSwitchWorkspace={() => setSwitching(true)}
         onSearch={() => !removing() && !creatingWorktree() && setPaletteOpen(true)}
         onSettings={() => openSettingsPage()}
@@ -1478,6 +1515,51 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             void show(id);
           }}
           onClose={() => setAgentPickerOpen(false)}
+        />
+      </Show>
+      <Show when={switcherOpen()}>
+        <WorktreeSwitcher
+          worktrees={rowWorktrees()}
+          active={activeWorktree()}
+          pinned={mainView() === "columns" ? pinned() : null}
+          sessionsIn={sessionsIn}
+          settingUp={(path) => !!setups[path] && !setupOver(setups[path].status)}
+          recentIn={(path) => recent[path] ?? []}
+          loadRecent={loadRecent}
+          onPick={pickWorktree}
+          onShowSession={(id) => void pickSession(id)}
+          onShowTerminal={(path) => {
+            pickWorktree(path);
+            if (!terminalOpen(path)) toggleTerminalOf(path);
+          }}
+          onCloseSession={(id) => void closeTab(id)}
+          onForget={(path) => void forgetSessionsIn(path)}
+          onNewSession={(path) => {
+            setSwitcherOpen(false);
+            void (async () => {
+              if (mainView() === "columns" && !pinned().includes(path)) await pin(path);
+              await newSession(path);
+            })();
+          }}
+          onReopen={(r) => {
+            setSwitcherOpen(false);
+            void reopen(core.reopenSession(r.acpId));
+          }}
+          onOpenConversation={(c) => {
+            setSwitcherOpen(false);
+            void reopen(core.openConversation(c));
+          }}
+          onPin={(path) => void pin(path)}
+          onUnpin={unpin}
+          onNewWorktree={() => {
+            setSwitcherOpen(false);
+            setCreatingWorktree(true);
+          }}
+          onCleanUp={() => {
+            setSwitcherOpen(false);
+            setOverviewOpen(true);
+          }}
+          onClose={() => setSwitcherOpen(false)}
         />
       </Show>
       <Show when={overviewOpen()}>

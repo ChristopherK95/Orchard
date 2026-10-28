@@ -72,7 +72,7 @@ function worktreeSignal(sessions: SessionInfo[], settingUp: boolean): JSX.Elemen
 
 /** The Worktree's running shells, in its sidebar row: how many, and whether one runs something.
  *  Clicking it (the row handles that) shows its Terminal panel. */
-function ShellBadge(props: { path: string }) {
+export function ShellBadge(props: { path: string }) {
   const shells = () => shellsIn(props.path);
   const title = () =>
     `Shells running here (click to show the terminal):\n${shells()
@@ -150,6 +150,8 @@ export interface SidebarProps {
   onRecent: (path: string, anchor: DOMRect) => void;
   onNewWorktree: () => void;
   onOverview: () => void;
+  /** Opens the Worktree switcher. */
+  onSwitcher: () => void;
   onSwitchWorkspace: () => void;
   onSearch: () => void;
   onSettings: () => void;
@@ -258,6 +260,9 @@ export function Sidebar(props: SidebarProps) {
         </button>
         <div class="group-label">
           <span class="grow">Worktrees</span>
+          <button class="ghost icon" onClick={() => props.onSwitcher()} title="Every Worktree, names in full (Ctrl+Space)" aria-label="Worktree switcher">
+            <LayoutGrid />
+          </button>
           <button class="ghost icon" onClick={() => props.onOverview()} title="Every Worktree, and which are merged and can be removed" aria-label="Worktrees overview">
             <ListTree />
           </button>

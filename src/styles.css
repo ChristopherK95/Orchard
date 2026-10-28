@@ -558,6 +558,52 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .modal-error { margin: 0; padding: 0 20px 12px; }
 /* The Worktrees overview: one row per Worktree, the merged (removable) ones first. */
 .modal.worktrees-overview { width: min(680px, 100%); }
+/* The Worktree switcher: about 90% of the window, a grid of ~300 px cards (as many columns as fit)
+   that scrolls down; names wrap in full, never cut. */
+.switcher-backdrop { align-items: center; padding: 0; }
+.modal.worktree-switcher { width: 90vw; height: 90vh; max-height: 90vh; }
+.switcher-head { flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 12px 12px 18px; border-bottom: 1px solid var(--line); }
+.switcher-head > .lucide { color: var(--fg-3); }
+.switcher-head > b { font-size: 15px; font-weight: 600; }
+.switcher-search { display: flex; align-items: center; gap: 8px; width: min(360px, 40vw); height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg-2); }
+.switcher-search .lucide { color: var(--fg-3); }
+.switcher-search input { flex: 1; min-width: 0; height: 30px; border: 0; padding: 0; background: transparent; font-size: 13px; }
+.switcher-search input:focus { box-shadow: none; }
+.switcher-grid { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); align-content: start; gap: 12px; padding: 16px 18px 20px; }
+.switcher-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--card); min-width: 0; }
+.switcher-card.selected { background: var(--card-focus); border-color: var(--line-strong); }
+.switcher-card.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.switcher-card.needs-you { background: var(--needs-tint); border-color: var(--needs-border); }
+.switcher-card.needs-you.on { border-color: var(--accent); }
+.switcher-card.removed { opacity: 0.6; }
+.switcher-card.removed.selected { opacity: 0.85; }
+.switcher-card-main { display: flex; align-items: flex-start; gap: 8px; width: 100%; min-height: 0; padding: 0; border: 0; background: transparent; text-align: left; justify-content: flex-start; color: var(--fg-1); }
+.switcher-card-main:hover:not(:disabled) { background: transparent; text-decoration: underline; text-decoration-color: var(--fg-dim); }
+.switcher-card-main .wt-glyph { flex: none; width: 15px; height: 15px; margin-top: 2px; color: var(--c); }
+.switcher-name { font: 500 13.5px var(--mono); overflow-wrap: anywhere; white-space: normal; }
+.switcher-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.switcher-badges .state-badge { height: 18px; padding: 0 7px; font-size: 11px; }
+.switcher-badges .shell-badge { cursor: pointer; display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 5px; color: var(--fg-3); font-size: 11px; }
+.switcher-gone { font-size: 11.5px; color: var(--exited-text); }
+.switcher-column { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--fg-3); }
+.switcher-column.has { color: var(--fg-1); }
+.switcher-column .lucide { width: 12px; height: 12px; }
+.switcher-sessions { display: flex; flex-direction: column; gap: 2px; }
+.switcher-session { display: flex; align-items: center; gap: 4px; }
+.switcher-session-main { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: flex-start; gap: 8px; min-height: 26px; padding: 0 6px; border: 0; border-radius: var(--r-md); background: transparent; font-size: 12.5px; font-weight: 400; text-align: left; }
+.switcher-session-main:hover:not(:disabled) { background: var(--bg-3); }
+.switcher-session-main .name { color: var(--fg-1); overflow-wrap: anywhere; }
+.switcher-session-main .state { margin-left: auto; color: var(--fg-3); font-size: 11.5px; white-space: nowrap; }
+.switcher-session .close-tab { flex: none; }
+.switcher-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: auto; }
+.switcher-actions button.on { background: var(--bg-3); }
+.switcher-actions .switcher-forget { color: var(--danger); }
+.switcher-recent { display: flex; flex-direction: column; gap: 2px; padding-top: 6px; border-top: 1px solid var(--line); font-size: 12.5px; }
+.switcher-recent .note { color: var(--fg-3); font-size: 12px; padding: 2px 6px; }
+.switcher-recent-row { display: flex; align-items: center; justify-content: flex-start; gap: 8px; min-height: 26px; padding: 0 6px; border: 0; background: transparent; font-size: 12.5px; font-weight: 400; text-align: left; }
+.switcher-recent-row:hover:not(:disabled) { background: var(--bg-3); }
+.switcher-new { align-items: center; justify-content: center; flex-direction: row; min-height: 96px; border-style: dashed; color: var(--fg-2); font-size: 13px; cursor: pointer; }
+.switcher-new:hover:not(:disabled) { background: var(--card-focus); }
 .worktrees-overview .fetch-note { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-3); }
 .worktrees-overview .fetch-note .lucide { width: 12px; height: 12px; }
 .overview-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
