@@ -230,7 +230,7 @@ export function Sidebar(props: SidebarProps) {
               </button>
             )}
           </For>
-          <button class="rail-item add" onClick={() => props.onNewWorktree()} title="New Worktree with an Agent session" aria-label="New Worktree">
+          <button class="rail-item add" onClick={() => props.onNewWorktree()} title="New Worktree with an Agent session (Ctrl+N)" aria-label="New Worktree">
             <Plus />
           </button>
           <span class="grow" />
@@ -261,7 +261,7 @@ export function Sidebar(props: SidebarProps) {
           <button class="ghost icon" onClick={() => props.onOverview()} title="Every Worktree, and which are merged and can be removed" aria-label="Worktrees overview">
             <ListTree />
           </button>
-          <button class="ghost icon" onClick={() => props.onNewWorktree()} title="New Worktree with an Agent session" aria-label="New Worktree">
+          <button class="ghost icon" onClick={() => props.onNewWorktree()} title="New Worktree with an Agent session (Ctrl+N)" aria-label="New Worktree">
             <Plus />
           </button>
         </div>
