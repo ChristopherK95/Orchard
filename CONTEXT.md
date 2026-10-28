@@ -68,7 +68,7 @@ The overview of every Agent session in the Workspace, grouped by Agent session s
 _Avoid_: Overview (the Dashboard is the overview of the user's work; the Board is only the sessions)
 
 **Dashboard**:
-The live status wall of the user's own work in the Workspace, and the view a Workspace opens on: the Agent sessions that need them, reviews requested from them, their open PRs by stage, Worktrees that need attention or can be cleaned up. Each item leads to where it lives (a Tab, the PR overlay, a Code review, a Worktree); a PR with failing checks or review feedback can start an Agent session on it; and, in a column beside them, statistics of the user's work over a chosen period.
+The live status wall of the user's own work in the Workspace, and the view a Workspace opens on: the Agent sessions that need them, reviews requested from them, their open PRs by stage, Worktrees that need attention or can be cleaned up. Each item leads to where it lives (a Tab, the PR overlay, a Code review, a Worktree); a PR with failing checks or review feedback can start an Agent session on it (one CodeRabbit still asks changes of shows how many, and its comments can be read and chosen first: the Agent makes each change, or replies on GitHub saying why not); and, in a column beside them, statistics of the user's work over a chosen period.
 _Avoid_: Home, Board (that's only the Agent sessions)
 
 **Columns view**:

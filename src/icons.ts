@@ -65,6 +65,7 @@ export { default as X } from "lucide-solid/icons/x";
 export { default as Zap } from "lucide-solid/icons/zap";
 export { default as ArrowDownUp } from "lucide-solid/icons/arrow-down-up";
 export { default as Bell } from "lucide-solid/icons/bell";
+export { default as Bot } from "lucide-solid/icons/bot";
 export { default as ChevronsUpDown } from "lucide-solid/icons/chevrons-up-down";
 export { default as Ellipsis } from "lucide-solid/icons/ellipsis";
 export { default as Eraser } from "lucide-solid/icons/eraser";

@@ -5,15 +5,18 @@
 // Worktrees ready to clean up, how many sessions are Working and Idle. The layout follows the
 // window's width: one column when narrow (statistics last), and on a very wide one the right side
 // splits in two, the sessions, reviews and PRs beside the Worktrees. Each item leads to where it lives (the Workspace view
-// decides how); a PR with failing checks or review feedback can start an Agent session on it. The
+// decides how); a PR with failing checks or review feedback can start an Agent session on it, and
+// one CodeRabbit still asks changes of shows how many, and opens them to start one on. The
 // GitHub sections say when they were last read, and say so inline when `gh` can't be used, while
 // the local ones work as ever.
 import { createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
 import { ago } from "./Chat";
-import type { AttentionReason, Check, MergeState, MyPullRequest, PullRequestStage, ReviewRequest, SessionInfo, StatisticsDays, WorktreeAttention, WorktreeMerge } from "./core";
+import { CodeRabbitComments } from "./CodeRabbitComments";
+import type { AttentionReason, Check, CodeRabbitFeedback, MergeState, MyPullRequest, PullRequestStage, ReviewRequest, SessionInfo, StatisticsDays, WorktreeAttention, WorktreeMerge } from "./core";
 import { attention, cleanUp, reviewRequests, statistics } from "./dashboardData";
 import {
   Bell,
+  Bot,
   ChevronRight,
   ChartLine,
   CircleCheck,
@@ -103,8 +106,10 @@ export function Dashboard(props: {
   onCleanUp: () => void;
   /** The PR board. */
   onAllPrs: () => void;
-  /** Starts an Agent session on the PR with its prompt in the composer. */
-  onStartSession: (pr: MyPullRequest) => void;
+  /** Starts an Agent session on the PR with its prompt (else the one its stage asks for) in the composer. */
+  onStartSession: (pr: MyPullRequest, prompt?: Promise<string>) => void;
+  /** CodeRabbit's open review comments on the PR. */
+  codeRabbitComments: (pr: MyPullRequest) => Promise<CodeRabbitFeedback>;
   /** Where each PR's start stands, by number (kept outside the rows, which each refresh makes anew). */
   starts: Record<number, PrStart | undefined>;
 }) {
@@ -123,6 +128,9 @@ export function Dashboard(props: {
   const openPrs = () => myPrs.prs().filter((p) => p.state === "open");
   // A suspended session counts as Idle, as in the Worktree switcher: it's only been put to sleep while idle.
   const count = (...states: SessionInfo["state"][]) => props.sessions.filter((s) => states.includes(s.state)).length;
+
+  /** The PR whose CodeRabbit comments are shown. */
+  const [codeRabbitOf, setCodeRabbitOf] = createSignal<MyPullRequest | null>(null);
 
   // Typing goes here once it's shown, not to the composer hidden under it.
   let root!: HTMLElement;
@@ -236,7 +244,7 @@ export function Dashboard(props: {
                       {group.title}
                       <span class="badge">{here().length}</span>
                     </div>
-                    <For each={here()}>{(pr) => <PrRow pr={pr} worktree={worktreeOn(pr.head)} start={props.starts[pr.number]} onOpen={() => props.onPr(pr)} onStartSession={() => props.onStartSession(pr)} />}</For>
+                    <For each={here()}>{(pr) => <PrRow pr={pr} worktree={worktreeOn(pr.head)} start={props.starts[pr.number]} onOpen={() => props.onPr(pr)} onStartSession={() => props.onStartSession(pr)} onCodeRabbit={() => setCodeRabbitOf(pr)} />}</For>
                   </Show>
                 );
               }}
@@ -283,6 +291,11 @@ export function Dashboard(props: {
           </Section>
         </div>
       </div>
+      <Show when={codeRabbitOf()}>
+        {(pr) => (
+          <CodeRabbitComments pr={pr()} load={() => props.codeRabbitComments(pr())} onStart={(prompt) => props.onStartSession(pr(), prompt)} onClose={() => setCodeRabbitOf(null)} />
+        )}
+      </Show>
     </section>
   );
 }
@@ -376,8 +389,9 @@ function Row(props: { colour?: string; title: string; onOpen: () => void; childr
   );
 }
 
-/** One of the user's PRs; one with failing checks or changes requested can start an Agent session on it. */
-function PrRow(props: { pr: MyPullRequest; worktree?: WorktreeTab; start?: PrStart; onOpen: () => void; onStartSession: () => void }) {
+/** One of the user's PRs; one with failing checks or changes requested can start an Agent session on
+ *  it, and one CodeRabbit still asks changes of opens its comments. */
+function PrRow(props: { pr: MyPullRequest; worktree?: WorktreeTab; start?: PrStart; onOpen: () => void; onStartSession: () => void; onCodeRabbit: () => void }) {
   const p = () => props.pr;
   const starting = () => !!props.start?.starting;
   const failed = () => props.start?.error ?? "";
@@ -388,8 +402,14 @@ function PrRow(props: { pr: MyPullRequest; worktree?: WorktreeTab; start?: PrSta
       onOpen={props.onOpen}
       title={`#${p().number} ${p().title}`}
       below={
-        <Show when={canStart() || failed()}>
+        <Show when={canStart() || p().codeRabbitComments || failed()}>
           <div class="dashboard-row-actions" onClick={(e) => e.stopPropagation()}>
+            <Show when={p().codeRabbitComments}>
+              <button onClick={() => props.onCodeRabbit()} disabled={starting()} title="What CodeRabbit still asks to change, to start an Agent session on">
+                <Bot />
+                CodeRabbit comments ({p().codeRabbitComments})
+              </button>
+            </Show>
             <Show when={canStart()}>
               <button
                 onClick={() => props.onStartSession()}
@@ -419,6 +439,11 @@ function PrRow(props: { pr: MyPullRequest; worktree?: WorktreeTab; start?: PrSta
       <span class="dashboard-row-title">{p().title}</span>
       <span class="pr-number">#{p().number}</span>
       <span class="dashboard-row-wt">{p().head}</span>
+      <Show when={p().codeRabbitComments}>
+        <span class="dashboard-tag" title={`CodeRabbit asks for changes in ${p().codeRabbitComments === 1 ? "1 comment" : `${p().codeRabbitComments} comments`} not resolved`}>
+          CodeRabbit: changes requested
+        </span>
+      </Show>
       <Show when={p().conflicts}>
         <span class="pr-card-line bad">
           <TriangleAlert />

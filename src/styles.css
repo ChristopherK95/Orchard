@@ -1158,6 +1158,54 @@ button.review-badge:hover:not(:disabled) { background: color-mix(in srgb, var(--
 .dashboard-row-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 0 0 8px; cursor: default; }
 .dashboard-row-actions button { min-height: 26px; padding: 0 10px; gap: 6px; font-size: 12.5px; font-weight: 400; }
 .dashboard-row-actions .error { margin: 0; }
+/* CodeRabbit's open comments on a PR: a card each, chosen with its box, opened out by its title.
+   Its severity is a coloured pill, its file name stands out from its folder, its other labels are quiet. */
+.modal.code-rabbit { width: min(820px, 100%); }
+.code-rabbit-title { align-items: flex-start; }
+.code-rabbit-title > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.code-rabbit-title b { font-size: 15px; font-weight: 600; line-height: 1.35; color: var(--fg-1); }
+.code-rabbit-title .pr-number { font-weight: 400; color: var(--fg-3); }
+.code-rabbit-eyebrow { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 500; letter-spacing: 0.02em; color: var(--fg-3); }
+.code-rabbit-eyebrow .lucide { width: 13px; height: 13px; }
+.code-rabbit-bar { display: flex; align-items: center; padding: 4px 20px 0 31px; }
+.code-rabbit-all { display: inline-flex; align-items: center; gap: 10px; font-size: 12px; color: var(--fg-3); cursor: pointer; }
+.code-rabbit-all input { width: 14px; height: 14px; margin: 0; }
+.code-rabbit-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.code-rabbit-list li { cursor: pointer; display: flex; flex-direction: column; gap: 6px; padding: 10px 10px 10px 12px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--card); opacity: 0.6; transition: opacity 120ms; }
+.code-rabbit-list li.chosen, .code-rabbit-list li.open { opacity: 1; }
+.code-rabbit-list li:hover { border-color: var(--line-strong); }
+.code-rabbit-list li.open { cursor: default; }
+.code-rabbit-head { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.code-rabbit-head .overview-check { margin-top: 3px; }
+.code-rabbit-head > .ghost.icon { margin: -4px -2px 0 0; }
+.code-rabbit-severity { flex: none; height: 19px; display: inline-flex; align-items: center; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 600; --sev: var(--fg-2); color: var(--sev); background: color-mix(in srgb, var(--sev) 14%, transparent); }
+.code-rabbit-severity.sev-critical { --sev: var(--danger); }
+.code-rabbit-severity.sev-major { --sev: color-mix(in srgb, var(--danger) 50%, var(--warn)); }
+.code-rabbit-severity.sev-minor { --sev: var(--warn); }
+.code-rabbit-severity.sev-info { --sev: var(--info); }
+.code-rabbit-open { flex: 1; min-width: 0; min-height: 0; display: flex; align-items: flex-start; justify-content: flex-start; gap: 6px; padding: 0; background: transparent; border: 0; color: var(--fg-1); font-size: 13.5px; font-weight: 500; line-height: 1.4; text-align: left; white-space: normal; }
+.code-rabbit-open:hover:not(:disabled) { background: transparent; }
+.code-rabbit-open:hover:not(:disabled) .code-rabbit-headline { text-decoration: underline; text-decoration-color: var(--fg-3); text-underline-offset: 3px; }
+.code-rabbit-open .lucide { flex: none; width: 14px; height: 14px; margin-top: 3px; color: var(--fg-3); }
+.code-rabbit-open .code-rabbit-severity { margin-top: 0; }
+.code-rabbit-glimpse { margin: 0; padding-left: 46px; font-size: 12.5px; line-height: 1.5; color: var(--fg-3); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.code-rabbit-meta { display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: 46px; font-size: 12px; color: var(--fg-2); }
+.code-rabbit-meta > :not(.code-rabbit-path) { flex: none; }
+/* The path gives way first: its folder is cut short, never its file name and line. */
+.code-rabbit-path { flex: 0 1 auto; min-width: 0; display: flex; font-size: 11.5px; white-space: nowrap; }
+.code-rabbit-dir { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--fg-3); }
+.code-rabbit-file { flex: none; color: var(--fg-1); }
+.code-rabbit-file .muted { color: var(--fg-3); }
+.code-rabbit-tag { height: 18px; display: inline-flex; align-items: center; padding: 0 7px; border: 1px solid var(--line); border-radius: 999px; font-size: 11px; color: var(--fg-3); }
+.code-rabbit-replies { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-3); }
+.code-rabbit-replies .lucide { width: 12px; height: 12px; }
+.code-rabbit-more { cursor: auto; display: flex; flex-direction: column; gap: 10px; margin: 4px 0 0 46px; padding-top: 10px; border-top: 1px solid var(--line); }
+.code-rabbit-more .markdown { font-size: 13px; line-height: 1.6; }
+.code-rabbit-prompt button.link { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-2); font-size: 12px; text-decoration: none; }
+.code-rabbit-prompt button.link .lucide { width: 13px; height: 13px; }
+.code-rabbit-prompt pre { margin: 6px 0 0; padding: 10px 12px; max-height: 240px; overflow: auto; border-radius: var(--r-md); background: var(--bg-2); font: 12px/1.5 var(--mono); color: var(--fg-2); white-space: pre-wrap; }
+.code-rabbit-reply { display: flex; flex-direction: column; gap: 2px; padding-left: 10px; border-left: 2px solid var(--line); font-size: 12.5px; }
+.code-rabbit-reply .markdown { font-size: 13px; }
 /* Statistics: read-only cards, as the rows look but leading nowhere. */
 .dashboard-period { padding: 2px; }
 .dashboard-period button { min-height: 22px; padding: 0 9px; font-size: 12px; }

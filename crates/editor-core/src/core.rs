@@ -17,6 +17,7 @@ use crate::attachments::{self, Attachment};
 use crate::auto_suspend::{
     self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, SystemClock, SystemProbe,
 };
+use crate::code_rabbit::CodeRabbitFeedback;
 use crate::code_review::{
     self, CodeReview, NewReviewComment, PendingComment, Question, SinceLastReview, Verdict,
 };
@@ -4246,6 +4247,36 @@ impl Core {
         };
         read.await
             .map_err(|e: String| CoreError::Git(not_about_creating(e)))
+    }
+
+    /// CodeRabbit's open review comments on PR `number`: the review threads it started that aren't
+    /// resolved (`gh api graphql`), each with what's been said on it since.
+    pub async fn code_rabbit_comments(
+        &self,
+        worktree: &Path,
+        number: u64,
+    ) -> Result<CodeRabbitFeedback, CoreError> {
+        use crate::pull_request::{gh_text, not_about_creating};
+        let worktree = self.known_worktree(worktree)?;
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let number_field = format!("number={number}");
+        let query = format!("query={}", crate::code_rabbit::THREAD_QUERY);
+        let args = [
+            "api",
+            "graphql",
+            "-F",
+            "owner={owner}",
+            "-F",
+            "name={repo}",
+            "-F",
+            &number_field,
+            "-f",
+            &query,
+        ];
+        gh_text(&gh, &worktree, &args)
+            .await
+            .and_then(|out| crate::code_rabbit::open_comments(number, &out))
+            .map_err(|e| CoreError::Git(not_about_creating(e)))
     }
 
     /// "Push", for a branch whose PR is already open: commits whatever isn't committed yet with

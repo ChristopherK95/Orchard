@@ -1196,6 +1196,24 @@ async fn review_feedback_prompt(
         .map_err(|e| e.to_string())
 }
 
+/// CodeRabbit's open review comments on PR `number`.
+#[tauri::command]
+async fn code_rabbit_comments(
+    core: State<'_, Core>,
+    worktree: String,
+    number: u64,
+) -> CommandResult<editor_core::CodeRabbitFeedback> {
+    core.code_rabbit_comments(worktree.as_ref(), number)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The prompt that starts an Agent session on the CodeRabbit comments chosen.
+#[tauri::command]
+fn code_rabbit_prompt(feedback: editor_core::CodeRabbitFeedback, chosen: Vec<u64>) -> String {
+    editor_core::code_rabbit_prompt(&feedback, &chosen)
+}
+
 /// Opens the Code review of PR `number` (making its Review Worktree the first time).
 #[tauri::command]
 async fn open_code_review(
@@ -1874,6 +1892,8 @@ fn main() {
             set_statistics_period,
             failing_check_prompt,
             review_feedback_prompt,
+            code_rabbit_comments,
+            code_rabbit_prompt,
             rerun_checks,
             push_to_pull_request,
             open_code_review,

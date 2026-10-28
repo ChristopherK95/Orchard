@@ -782,12 +782,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   /** Where each PR's "Start an Agent session" stands, by number: kept here, as the Dashboard's rows
    *  are made anew with each refresh of the PRs (and the Dashboard goes once the session shows). */
   const [prStarts, setPrStarts] = createStore<Record<number, PrStart | undefined>>({});
-  /** Starts one, unless one is already under way for that PR; what went wrong stays on its row. */
-  const startOnPr = async (pr: MyPullRequest) => {
+  /** Starts one (with `prompt`, else the one its stage asks for), unless one is already under way
+   *  for that PR; what went wrong stays on its row. */
+  const startOnPr = async (pr: MyPullRequest, prompt?: Promise<string>) => {
     if (prStarts[pr.number]?.starting) return;
     setPrStarts(pr.number, { starting: true, error: "" });
     try {
-      await startSessionOn(pr);
+      await startSessionOn(pr, prompt);
       setPrStarts(pr.number, undefined);
     } catch (err) {
       setPrStarts(pr.number, { starting: false, error: String(err) });
@@ -795,13 +796,14 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   };
 
   /** "Start an Agent session" on one of the user's PRs (from the Dashboard): its prompt (the failed
-   *  checks' logs, or the changes asked for) goes in the composer of a new session in the Worktree
+   *  checks' logs, the changes asked for, or `asked`) goes in the composer of a new session in the Worktree
    *  on its branch, unsent, and that session's Tab is shown. With no such Worktree one is made
    *  first, and with a Worktree setup it's the session the setup starts. Rejects with what went
    *  wrong, for the Dashboard's row to say. */
-  const startSessionOn = async (pr: MyPullRequest) => {
+  const startSessionOn = async (pr: MyPullRequest, asked?: Promise<string>) => {
     const why = (err: unknown) => Promise.reject(err instanceof Error ? err.message : String(err));
-    const asking = pr.stage === "checksFailing" ? core.failingCheckPrompt(mainWorktree(), pr.number) : core.reviewFeedbackPrompt(mainWorktree(), pr.number);
+    const asking =
+      asked ?? (pr.stage === "checksFailing" ? core.failingCheckPrompt(mainWorktree(), pr.number) : core.reviewFeedbackPrompt(mainWorktree(), pr.number));
     const prompt = await asking.catch(why);
     const there = rowWorktrees().find((w) => !w.removed && w.branch === pr.head);
     const startIn = async (path: string) => {
@@ -1396,7 +1398,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           }}
           onCleanUp={() => setOverviewOpen(true)}
           onAllPrs={() => openBoard("prs")}
-          onStartSession={(pr) => void startOnPr(pr)}
+          onStartSession={(pr, prompt) => void startOnPr(pr, prompt)}
+          codeRabbitComments={(pr) => core.codeRabbitComments(mainWorktree(), pr.number)}
           starts={prStarts}
         />
       </Show>
