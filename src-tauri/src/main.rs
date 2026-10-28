@@ -743,6 +743,14 @@ async fn close_tab(core: State<'_, Core>, session_id: SessionId) -> CommandResul
     core.close_tab(session_id).await.map_err(|e| e.to_string())
 }
 
+/// Closes a Tab without keeping it in the Recent sessions (the Worktree switcher's "Close all and forget").
+#[tauri::command]
+async fn close_and_forget(core: State<'_, Core>, session_id: SessionId) -> CommandResult<()> {
+    core.close_and_forget(session_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// The slash commands (and skills) a session's Agent offers, for the composer's `/` menu.
 #[tauri::command]
 fn available_commands(
@@ -1186,6 +1194,24 @@ async fn review_feedback_prompt(
     core.review_feedback_prompt(worktree.as_ref(), number)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// CodeRabbit's open review comments on PR `number`.
+#[tauri::command]
+async fn code_rabbit_comments(
+    core: State<'_, Core>,
+    worktree: String,
+    number: u64,
+) -> CommandResult<editor_core::CodeRabbitFeedback> {
+    core.code_rabbit_comments(worktree.as_ref(), number)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The prompt that starts an Agent session on the CodeRabbit comments chosen.
+#[tauri::command]
+fn code_rabbit_prompt(feedback: editor_core::CodeRabbitFeedback, chosen: Vec<u64>) -> String {
+    editor_core::code_rabbit_prompt(&feedback, &chosen)
 }
 
 /// Opens the Code review of PR `number` (making its Review Worktree the first time).
@@ -1820,6 +1846,7 @@ fn main() {
             find_files,
             list_dir,
             close_tab,
+            close_and_forget,
             clear_session,
             recent_sessions,
             reopen_session,
@@ -1865,6 +1892,8 @@ fn main() {
             set_statistics_period,
             failing_check_prompt,
             review_feedback_prompt,
+            code_rabbit_comments,
+            code_rabbit_prompt,
             rerun_checks,
             push_to_pull_request,
             open_code_review,

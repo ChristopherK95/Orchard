@@ -5,6 +5,7 @@ mod acp;
 mod app_state;
 mod attachments;
 mod auto_suspend;
+mod code_rabbit;
 mod code_review;
 mod core;
 mod create_worktree;
@@ -36,6 +37,9 @@ mod worktrees;
 pub use crate::acp::{AcpError, AdapterCommand, PROTOCOL_VERSION};
 pub use crate::attachments::Attachment;
 pub use crate::auto_suspend::{AutoSuspendReason, Clock, MemoryProbe, MemorySample};
+pub use crate::code_rabbit::{
+    code_rabbit_prompt, CodeRabbitComment, CodeRabbitFeedback, CodeRabbitReply,
+};
 pub use crate::code_review::{
     CodeReview, CodeReviewFile, NewReviewComment, PendingComment, PendingReview, Question,
     SinceLastReview, Verdict,

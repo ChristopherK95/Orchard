@@ -2,7 +2,7 @@
 // where each stands: draft, waiting for review, changes requested, checks failing, approved, and
 // done (the latest merged or closed). A card says what's holding it up: who's reviewed it and how,
 // which checks failed, whether it conflicts. Clicking one opens it in the PR overlay. Opened from
-// the sidebar's Pull requests; the same list feeds both, read again every few minutes.
+// the Dashboard's PRs; the same list feeds both, read again every few minutes.
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { createEffect, createMemo, createSignal, For, type JSX, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { ago } from "./Chat";

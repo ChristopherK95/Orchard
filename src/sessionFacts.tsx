@@ -1,4 +1,4 @@
-// What a session card says besides its name and state, for the sidebar's cards and the Board's:
+// What a session card says besides its name and state, for the Board's cards and the session tabs:
 // how long since it was active, the model, how full its context is and what it has cost.
 import { type Accessor, createSignal, Show } from "solid-js";
 import { ago } from "./Chat";

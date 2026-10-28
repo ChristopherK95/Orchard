@@ -257,6 +257,8 @@ pub struct MyPullRequest {
     pub checks: Vec<Check>,
     /// It can't be merged as it is: it conflicts with the branch it goes into.
     pub conflicts: bool,
+    /// How many review threads CodeRabbit started on it aren't resolved: the changes it still asks for.
+    pub code_rabbit_comments: u32,
     pub updated_at: String,
     pub merged_at: Option<String>,
     pub closed_at: Option<String>,
@@ -302,8 +304,24 @@ pub(crate) async fn mine(gh: &Path, worktree: &Path) -> Result<Vec<MyPullRequest
         ]
     };
     let (open, done) = (list("open", "100"), list("closed", MINE_DONE));
-    let (open, done) = tokio::join!(gh_text(gh, worktree, &open), gh_text(gh, worktree, &done));
+    let search = format!("q={}", crate::code_rabbit::OPEN_SEARCH);
+    let query = format!("query={}", crate::code_rabbit::COUNT_QUERY);
+    let rabbit = ["api", "graphql", "-F", &search, "-f", &query];
+    let (open, done, rabbit) = tokio::join!(
+        gh_text(gh, worktree, &open),
+        gh_text(gh, worktree, &done),
+        gh_text(gh, worktree, &rabbit)
+    );
     let mut prs = mine_listed(&open?)?;
+    // CodeRabbit's comments are extra: the PRs are shown without them when they can't be read.
+    let rabbit = rabbit.and_then(|out| crate::code_rabbit::open_counts(&out));
+    for pr in &mut prs {
+        pr.code_rabbit_comments = rabbit
+            .as_ref()
+            .ok()
+            .and_then(|counts| counts.get(&pr.number).copied())
+            .unwrap_or(0);
+    }
     prs.extend(mine_listed(&done?)?);
     Ok(prs)
 }
@@ -364,6 +382,7 @@ fn mine_listed(stdout: &str) -> Result<Vec<MyPullRequest>, String> {
                 reviewers,
                 checks,
                 conflicts: pr.mergeable == "CONFLICTING",
+                code_rabbit_comments: 0,
                 updated_at: pr.updated_at,
                 merged_at: pr.merged_at.filter(|at| !at.is_empty()),
                 closed_at: pr.closed_at.filter(|at| !at.is_empty()),

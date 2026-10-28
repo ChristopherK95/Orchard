@@ -36,6 +36,14 @@ _Avoid_: Upstream (that's the branch it pushes to), target
 Every Worktree of the Workspace but the main checkout (which can't be removed) in one list, with whether its branch is merged into its Base (or into another branch its PR targeted, such as a project branch), so finished ones can be removed. Merged counts however the PR landed: a merge commit or fast-forward (the branch's commits are in the Base), or a squash or rebase (its changes are). A remote branch that was deleted is shown, but doesn't count as merged by itself. A Review Worktree counts once its Code review is done.
 _Avoid_: Clean-up, prune
 
+**Worktree switcher**:
+The overlay (Ctrl+Space) showing every Worktree of the Workspace as a card in a grid, each with its name in full, where its sessions stand and its sessions to go to. Picking a card goes to that Worktree (its last-used Tab, or its column in the Columns view). A Worktree whose folder is gone but whose sessions still run has a dimmed card, with "Close all and forget".
+_Avoid_: Worktree grid, launcher
+
+**Notification**:
+A sticky in-app card at the bottom right, raised when an Agent session that isn't on screen needs you, finishes its turn (if that setting is on) or exits unexpectedly, or when a Worktree setup fails. One per session, at most 10. It stays until closed, until its session is opened, or until the Worktree switcher is opened; never by time, and not kept across a restart. The OS notification mirrors it (for needs you and finished, while the window is in the background).
+_Avoid_: toast, alert
+
 **Tool call**:
 One action the Agent takes with a tool (reading or editing a file, running a command, …), shown as a compact row in the transcript with its status.
 _Avoid_: Step, action
@@ -60,15 +68,15 @@ The overview of every Agent session in the Workspace, grouped by Agent session s
 _Avoid_: Overview (the Dashboard is the overview of the user's work; the Board is only the sessions)
 
 **Dashboard**:
-The live status wall of the user's own work in the Workspace, and the view a Workspace opens on: the Agent sessions that need them, reviews requested from them, their open PRs by stage, Worktrees that need attention or can be cleaned up. Each item leads to where it lives (a Tab, the PR overlay, a Code review, a Worktree); a PR with failing checks or review feedback can start an Agent session on it; and, in a column beside them, statistics of the user's work over a chosen period.
+The live status wall of the user's own work in the Workspace, and the view a Workspace opens on: the Agent sessions that need them, reviews requested from them, their open PRs by stage, Worktrees that need attention or can be cleaned up. Each item leads to where it lives (a Tab, the PR overlay, a Code review, a Worktree); a PR with failing checks or review feedback can start an Agent session on it (one CodeRabbit still asks changes of shows how many, and its comments can be read and chosen first: the Agent makes each change, or replies on GitHub saying why not); and, in a column beside them, statistics of the user's work over a chosen period.
 _Avoid_: Home, Board (that's only the Agent sessions)
 
 **Columns view**:
-The wide-display alternative to the Tabs view (offered from 1,600 px): each pinned Worktree side by side as a column, each column showing one of its Agent sessions at a time. More columns than fit scroll sideways.
+The wide-display alternative to the Tabs view (offered from 1,600 px): each pinned Worktree side by side as a column, each column showing one of its Agent sessions at a time (picked from its session tabs, as in the Tabs view). More columns than fit scroll sideways.
 _Avoid_: Split view, panes
 
 **Pinned Worktree**:
-A Worktree that has a column in the Columns view (choosing it in the sidebar adds one, "Close column" in the column's menu closes it). Pins are kept per Workspace across restarts; the columns follow the sidebar's order.
+A Worktree that has a column in the Columns view ("Give it a column" on its Worktree switcher card, or picking the card, adds one; "Close column" there or in the column's menu closes it). Pins are kept per Workspace across restarts; the columns follow the Worktree switcher's order.
 
 **Focused column**:
 The one column of the Columns view that takes input: the next prompt, Y / N, the Files/Git drawer and Ctrl+P all go to its Worktree. Only its composer takes the keyboard.
@@ -78,7 +86,7 @@ Where the user views and hand-edits a file in a Worktree (or the settings file, 
 _Avoid_: Text editor window, code view
 
 **Terminal panel**:
-The user's own shell in a Worktree's folder: docked beside the chat in the Tabs view and under the column's transcript in the Columns view. Opening or closing it is per Worktree and holds in both views (Ctrl+` toggles the active Worktree's, which in the Columns view is the focused column's). Each Worktree has one shell, started the first time a panel shows that Worktree. It keeps running while out of sight (a dev server, say) and a panel comes back to its output. It stops when the user stops it, or when its Worktree is removed or the Workspace closes. It runs the repo's Windows shell setting on Windows, and `$SHELL` on Linux. The sidebar marks each Worktree whose shells are running (how many, and whether one is running something), so the ones out of sight aren't forgotten; clicking the mark shows that Worktree's panel.
+The user's own shell in a Worktree's folder: docked beside the chat in the Tabs view and under the column's transcript in the Columns view. Opening or closing it is per Worktree and holds in both views (Ctrl+` toggles the active Worktree's, which in the Columns view is the focused column's). Each Worktree has one shell, started the first time a panel shows that Worktree. It keeps running while out of sight (a dev server, say) and a panel comes back to its output. It stops when the user stops it, or when its Worktree is removed or the Workspace closes. It runs the repo's Windows shell setting on Windows, and `$SHELL` on Linux. The Worktree switcher marks each Worktree whose shells are running (how many, and whether one is running something), so the ones out of sight aren't forgotten; clicking the mark shows that Worktree's panel.
 _Avoid_: Console, integrated terminal
 
 **Action**:

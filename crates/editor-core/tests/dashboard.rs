@@ -273,3 +273,82 @@ async fn a_worktree_whose_folder_is_gone_doesnt_hide_the_others() {
     assert!(listed.iter().any(|w| w.path == kept), "{listed:?}");
     assert!(!listed.iter().any(|w| w.path == gone), "{listed:?}");
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn code_rabbits_open_comments_are_counted_and_read() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let gh = FakeGh::new(
+        r#"case "$*" in
+"pr list"*"--state open"*) cat <<'JSON'
+[{"number":12,"title":"Fix the parser","url":"u12","state":"OPEN","isDraft":false,"headRefName":"fix","baseRefName":"main",
+  "reviewDecision":"","latestReviews":[{"author":{"login":"coderabbitai"},"state":"COMMENTED","body":"Actionable comments posted: 1"}],
+  "reviewRequests":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","updatedAt":"2026-10-08T12:00:00Z","mergedAt":null,"closedAt":null},
+ {"number":13,"title":"Other","url":"u13","state":"OPEN","isDraft":false,"headRefName":"other","baseRefName":"main",
+  "reviewDecision":"","latestReviews":[],"reviewRequests":[],"statusCheckRollup":[],"mergeable":"MERGEABLE",
+  "updatedAt":"2026-10-07T12:00:00Z","mergedAt":null,"closedAt":null}]
+JSON
+;;
+"pr list"*) echo '[]' ;;
+"api graphql"*"search("*) cat <<'JSON'
+{"data":{"search":{"nodes":[{"number":12,"reviewThreads":{"nodes":[
+  {"isResolved":false,"comments":{"nodes":[{"author":{"login":"coderabbitai"}}]}}]}}]}}}
+JSON
+;;
+"api graphql"*) cat <<'JSON'
+{"data":{"repository":{"pullRequest":{"title":"Fix the parser","reviewThreads":{"nodes":[
+  {"isResolved":false,"isOutdated":false,"path":"src/parse.rs","line":7,"originalLine":7,
+   "comments":{"nodes":[{"databaseId":101,"url":"u","author":{"login":"coderabbitai"},
+     "body":"_⚠️ Potential issue_\n\n**Guard against an empty input.**"}]}}]}}}}}
+JSON
+;;
+esac"#,
+    );
+    let core = core_with_gh(&fake, &gh);
+    let root = core.open_workspace(&setup.repo()).await.unwrap().root;
+
+    let prs = core.my_pull_requests(&root).await.unwrap();
+    let counts: Vec<_> = prs
+        .iter()
+        .map(|p| (p.number, p.code_rabbit_comments))
+        .collect();
+    assert_eq!(counts, [(12, 1), (13, 0)]);
+
+    let feedback = core.code_rabbit_comments(&root, 12).await.unwrap();
+    assert_eq!(feedback.comments.len(), 1);
+    assert_eq!(
+        feedback.comments[0].headline,
+        "Guard against an empty input."
+    );
+    // (The fake keeps the last call's arguments: the threads'.)
+    let args = gh.args();
+    assert!(args.iter().any(|a| a == "number=12"), "{args:?}");
+    let prompt = editor_core::code_rabbit_prompt(&feedback, &[101]);
+    assert!(prompt.contains("src/parse.rs:7"), "{prompt}");
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn prs_are_listed_when_code_rabbits_comments_cant_be_read() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let gh = FakeGh::new(
+        r#"case "$*" in
+"pr list"*"--state open"*) cat <<'JSON'
+[{"number":12,"title":"Fix the parser","url":"u12","state":"OPEN","isDraft":false,"headRefName":"fix","baseRefName":"main",
+  "reviewDecision":"","latestReviews":[],"reviewRequests":[],"statusCheckRollup":[],"mergeable":"MERGEABLE",
+  "updatedAt":"2026-10-08T12:00:00Z","mergedAt":null,"closedAt":null}]
+JSON
+;;
+"pr list"*) echo '[]' ;;
+"api graphql"*) echo 'GraphQL: something went wrong' >&2; exit 1 ;;
+esac"#,
+    );
+    let core = core_with_gh(&fake, &gh);
+    let root = core.open_workspace(&setup.repo()).await.unwrap().root;
+
+    let prs = core.my_pull_requests(&root).await.unwrap();
+    assert_eq!(prs.len(), 1);
+    assert_eq!(prs[0].code_rabbit_comments, 0);
+}

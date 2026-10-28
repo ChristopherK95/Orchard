@@ -83,7 +83,7 @@ function face(name: string, clothes: string): (string | null)[][] {
 }
 
 /** A face as one outline per colour (a few nodes rather than a rect per pixel: avatars are on every
- *  sidebar card, Board card and column tab). */
+ *  Board card and session tab). */
 type Shape = { fill: string; d: string };
 
 const drawn = new Map<string, Shape[]>();

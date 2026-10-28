@@ -585,7 +585,7 @@ export interface PullRequestDetails {
   commits: { shortId: string; subject: string; author: string; date: string }[];
 }
 
-/** One of the user's PRs, as the sidebar and the PR board show it. */
+/** One of the user's PRs, as the Dashboard and the PR board show it. */
 export interface MyPullRequest {
   number: number;
   title: string;
@@ -602,9 +602,42 @@ export interface MyPullRequest {
   checks: Check[];
   /** It conflicts with the branch it goes into. */
   conflicts: boolean;
+  /** How many review threads CodeRabbit started on it aren't resolved: the changes it still asks for. */
+  codeRabbitComments: number;
   updatedAt: string;
   mergedAt: string | null;
   closedAt: string | null;
+}
+
+/** CodeRabbit's open review comments on one PR. */
+export interface CodeRabbitFeedback {
+  number: number;
+  title: string;
+  comments: CodeRabbitComment[];
+}
+
+/** One review thread CodeRabbit started that isn't resolved. */
+export interface CodeRabbitComment {
+  /** The thread's first comment's id (what a reply on GitHub goes to). */
+  id: number;
+  path: string;
+  /** The line it's on now, else (outdated) the one it was made on. */
+  line: number | null;
+  /** The code it was made on has changed since. */
+  outdated: boolean;
+  /** How much it matters: "Critical", "Major", "Minor", "Trivial" or "Info". */
+  severity: string | null;
+  /** The rest of CodeRabbit's labels for it ("Functional Correctness", "Quick win"). */
+  tags: string[];
+  /** What it's about in a line. */
+  headline: string;
+  /** The rest of what it says, in Markdown. */
+  body: string;
+  /** What CodeRabbit wrote for an AI agent to act on. */
+  agentPrompt: string | null;
+  url: string;
+  /** What's been said on the thread since, in order. */
+  replies: { author: string; body: string }[];
 }
 
 /** A Worktree (the main checkout too) that needs attention, with every reason, for the Dashboard. */
@@ -1021,6 +1054,8 @@ export const core = {
   sessions: () => invoke<SessionInfo[]>("sessions"),
   /** Closes a Tab; its session goes to its Worktree's Recent sessions. */
   closeTab: (sessionId: SessionId) => invoke<void>("close_tab", { sessionId }),
+  /** Closes a Tab without keeping it in the Recent sessions. */
+  closeAndForget: (sessionId: SessionId) => invoke<void>("close_and_forget", { sessionId }),
   clearSession: (sessionId: SessionId) => invoke<SessionId>("clear_session", { sessionId }),
   recentSessions: (worktree: string) => invoke<RecentSession[]>("recent_sessions", { worktree }),
   /** Reopens a Recent session in a new Tab, with its conversation. */
@@ -1179,6 +1214,10 @@ export const core = {
   failingCheckPrompt: (worktree: string, number: number) => invoke<string>("failing_check_prompt", { worktree, number }),
   /** The prompt that starts an Agent session on PR `number`'s requested changes and unresolved threads. */
   reviewFeedbackPrompt: (worktree: string, number: number) => invoke<string>("review_feedback_prompt", { worktree, number }),
+  /** CodeRabbit's open review comments on PR `number`. */
+  codeRabbitComments: (worktree: string, number: number) => invoke<CodeRabbitFeedback>("code_rabbit_comments", { worktree, number }),
+  /** The prompt that starts an Agent session on the CodeRabbit comments chosen (by id). */
+  codeRabbitPrompt: (feedback: CodeRabbitFeedback, chosen: number[]) => invoke<string>("code_rabbit_prompt", { feedback, chosen }),
   /** Opens PR `number`'s Code review, making its Review Worktree the first time. */
   openCodeReview: (number: number) => invoke<CodeReview>("open_code_review", { number }),
   /** One file's diff in the Code review: the PR's, or only what changed since the last review. */

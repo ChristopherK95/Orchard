@@ -306,6 +306,7 @@ const SHORTCUTS: { title: string; keys: [string, string][] }[] = [
   {
     title: "Anywhere",
     keys: [
+      ["Ctrl Space", "The Worktree switcher: every Worktree, names in full"],
       ["Ctrl P", "Go to a file in this Worktree, or start a session"],
       ["Ctrl N", "A new Worktree with an Agent session"],
       ["Ctrl Shift O", "Open another repository"],

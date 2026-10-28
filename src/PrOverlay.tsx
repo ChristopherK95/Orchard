@@ -2,7 +2,7 @@
 // read through the GitHub CLI. Where it stands (open, draft, merged, closed; whether it can be
 // merged; its checks), who's on it (author, assignees, reviewers and where each stands), and what's
 // been said: the description and conversation, the comments on its code by thread, its commits.
-// Opened from the title bar in the Tabs view, a column's header, a Board card, or the sidebar's list
+// Opened from the title bar in the Tabs view, a column's header, a Board card, or the Dashboard's list
 // of the user's PRs (any of the repo's, by number). Comments can be narrowed to the people in some
 // of the organisation's teams (a sub-team counts as its top team).
 import { openUrl } from "@tauri-apps/plugin-opener";
