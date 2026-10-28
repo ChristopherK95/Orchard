@@ -21,12 +21,13 @@ export function DiffSearch(props: { box: () => HTMLElement | undefined; file: st
     const Highlight = HighlightOf();
     if (!h || !Highlight) return;
     const all = matches();
+    // Deleted first because replacing a registered highlight in place can leave the webview painting
+    // the old ranges (the matches of the shorter query) until something else repaints them.
+    h.delete("diff-search");
+    h.delete("diff-search-current");
     if (all.length) {
       h.set("diff-search", new Highlight(...all));
       h.set("diff-search-current", new Highlight(all[at()]));
-    } else {
-      h.delete("diff-search");
-      h.delete("diff-search-current");
     }
   };
 
