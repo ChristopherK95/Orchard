@@ -48,6 +48,8 @@ import { Dashboard, type PrStart } from "./Dashboard";
 import { Transcript } from "./Transcript";
 import { ContextStrip, removedWorktree, ReviewBadge, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 import { notify, onNotificationClicked } from "./notify";
+import { clear as clearNotification, eventOf, raise, sessionKey, setupKey, type Notification, type NotificationEvent } from "./notifications";
+import { Notifications } from "./Notifications";
 import { keepOutput, Setup, type SetupView } from "./Setup";
 import { StateBadge } from "./StateDot";
 import { setShells, shellRunning, showShellOf } from "./shells";
@@ -369,6 +371,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     setRecentOpen(false);
     setSwitcherOpen(true);
   };
+  /** The sticky Notifications, oldest first; in memory only, so a restart starts with none. */
+  const [notifications, setNotifications] = createSignal<Notification[]>([]);
+  const dismiss = (key: string) => setNotifications((list) => clearNotification(list, key));
   /** The Files drawer and Ctrl+P; `revision` per Worktree, bumped when its files change. */
   /** The drawer on the right edge: the Worktree's files, or its git status (one at a time). */
   const [drawer, setDrawer] = createSignal<"files" | "git" | null>(null);
@@ -849,17 +854,45 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     if (state !== "working") turnWaiters.delete(id);
   };
 
+  /** Whether a Worktree's setup screen (or its column) is on screen. */
+  const setupOnScreen = (path: string) =>
+    !boardOpen() && !dashboardOpen() && (mainView() === "columns" ? pinned().includes(path) : activeWorktree() === path && activeId() === null);
+  const notifiedOnScreen = (n: Notification) =>
+    n.session === null ? setupOnScreen(n.worktree) : !boardOpen() && !dashboardOpen() && onScreen(n.session);
+  const raiseNotification = (n: Omit<Notification, "at">) => {
+    if (!notifiedOnScreen({ ...n, at: 0 })) setNotifications((list) => raise(list, { ...n, at: Date.now() }));
+  };
+  // Opening a Notification's session any way at all (Ctrl+K, Alt+↑/↓, the switcher) clears it.
+  createEffect(() => {
+    const list = notifications();
+    const left = list.filter((n) => !notifiedOnScreen(n));
+    if (left.length !== list.length) setNotifications(left);
+  });
+  // Opening the Worktree switcher clears them all: it shows what each Worktree needs.
+  createEffect(() => switcherOpen() && setNotifications([]));
+  /** Clicking a Notification: on to its session (or, for a failed setup, its Worktree). */
+  const openNotification = (n: Notification) => {
+    dismiss(n.key);
+    if (n.session !== null) return void (sessions[n.session] && show(n.session));
+    toMainView();
+    if (mainView() === "columns" && !pinned().includes(n.worktree)) void pin(n.worktree);
+    else selectWorktree(n.worktree);
+  };
+
   // A session you're not looking at (another Tab is visible, or the window is in the background)
-  // raises an OS notification when it needs you (spec story 25).
+  // raises an OS notification when it needs you (spec story 25). The in-app Notification follows
+  // the same check, but also while the window has focus, and for an unexpected exit.
   const onStateChanged = (id: SessionId, state: SessionState) => {
-    const { name, state: previous } = sessions[id]; // read before the store updates
+    const { name, state: previous, worktree } = sessions[id]; // read before the store updates
     setSessions(id, "state", state);
     onBenchState(id, state);
+    const event: NotificationEvent | null = eventOf(previous, state, !!settings()?.settings.notifications.turnFinished);
+    if (!event) return;
+    raiseNotification({ key: sessionKey(id), worktree, session: id, name, event });
     const unseen = !onScreen(id) || boardOpen() || dashboardOpen() || !document.hasFocus();
     if (!unseen) return;
-    if (state === "needsYou") void notify(id, `${name} needs you`, "The Agent is waiting for your answer.");
-    else if (settings()?.settings.notifications.turnFinished && previous === "working" && state === "idle")
-      void notify(id, `${name} finished`, "The Agent's turn is done.");
+    if (event === "needsYou") void notify(id, `${name} needs you`, "The Agent is waiting for your answer.");
+    else if (event === "finished") void notify(id, `${name} finished`, "The Agent's turn is done.");
   };
 
   let sawWorktreesEvent = false;
@@ -892,6 +925,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         // Closed (its × or a middle-click, or its Worktree is being removed): its Tab goes.
         const id = event.sessionId;
         const path = sessions[id]?.worktree;
+        dismiss(sessionKey(id)); // (nothing left to go to)
         setOrder((ids) => ids.filter((other) => other !== id));
         setSessions(produce((all) => void delete all[id]));
         // Back to what's left of its Worktree, or to the main checkout if the Worktree's gone.
@@ -912,6 +946,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         setSettings(event.settings);
       } else if (event.kind === "setupChanged") {
         const { worktree, commands, status } = event;
+        const failed = status.kind === "failed" || status.kind === "sessionFailed";
+        if (failed && setups[worktree]?.status.kind !== status.kind)
+          raiseNotification({ key: setupKey(worktree), worktree, session: null, name: "Worktree setup", event: "setupFailed" });
         updateSetup(worktree, (s) => Object.assign(s, { commands, status }));
         if (setupWaiters.get(worktree)?.(status)) setupWaiters.delete(worktree);
         // Setup finished while you watched it: on to its session (behind the Dashboard, if that's up).
@@ -1562,6 +1599,15 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onClose={() => setSwitcherOpen(false)}
         />
       </Show>
+      <Notifications
+        notifications={notifications()}
+        worktreeName={(path) => {
+          const w = rowWorktrees().find((w) => w.path === path);
+          return w ? worktreeLabel(w) : path.split(/[\\/]/).pop() ?? path;
+        }}
+        onOpen={openNotification}
+        onClose={dismiss}
+      />
       <Show when={overviewOpen()}>
         <WorktreesOverview
           root={props.workspace.root}

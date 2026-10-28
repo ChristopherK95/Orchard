@@ -40,6 +40,10 @@ _Avoid_: Clean-up, prune
 The overlay (Ctrl+Space) showing every Worktree of the Workspace as a card in a grid, each with its name in full, where its sessions stand and its sessions to go to. Picking a card goes to that Worktree (its last-used Tab, or its column in the Columns view). A Worktree whose folder is gone but whose sessions still run has a dimmed card, with "Close all and forget".
 _Avoid_: Worktree grid, launcher
 
+**Notification**:
+A sticky in-app card at the bottom right, raised when an Agent session that isn't on screen needs you, finishes its turn (if that setting is on) or exits unexpectedly, or when a Worktree setup fails. One per session, at most 10. It stays until closed, until its session is opened, or until the Worktree switcher is opened; never by time, and not kept across a restart. The OS notification mirrors it (for needs you and finished, while the window is in the background).
+_Avoid_: toast, alert
+
 **Tool call**:
 One action the Agent takes with a tool (reading or editing a file, running a command, …), shown as a compact row in the transcript with its status.
 _Avoid_: Step, action

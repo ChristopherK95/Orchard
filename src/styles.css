@@ -495,6 +495,39 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .switcher-recent-row:hover:not(:disabled) { background: var(--bg-3); }
 .switcher-new { align-items: center; justify-content: center; flex-direction: row; min-height: 96px; border-style: dashed; color: var(--fg-2); font-size: 13px; cursor: pointer; }
 .switcher-new:hover:not(:disabled) { background: var(--card-focus); }
+
+/* Notifications (ticket 50): a stack at the bottom right, over the Terminal panel and the Board but
+   under the dialogs; Notifications.tsx sets its bottom so it stays above the composers. Newest at the bottom. Each
+   card sits in a slot whose row grows from nothing, so a new one slides in while the others move up,
+   and a closed one fades before its row closes. */
+.notifications { position: fixed; right: 16px; z-index: 40; display: flex; flex-direction: column; pointer-events: none; }
+.notification-slot { display: grid; grid-template-rows: 1fr; padding-top: 8px; animation: notification-in 240ms ease-out; }
+.notification-slot.leaving { animation: notification-out 280ms ease-in forwards; }
+@keyframes notification-in {
+  from { grid-template-rows: 0fr; padding-top: 0; opacity: 0; transform: translateX(110%); }
+  to { grid-template-rows: 1fr; padding-top: 8px; opacity: 1; transform: none; }
+}
+@keyframes notification-out {
+  0% { opacity: 1; grid-template-rows: 1fr; padding-top: 8px; }
+  50% { opacity: 0; grid-template-rows: 1fr; padding-top: 8px; }
+  100% { opacity: 0; grid-template-rows: 0fr; padding-top: 0; }
+}
+.notification { min-height: 0; overflow: hidden; pointer-events: auto; display: flex; align-items: flex-start; gap: 4px; padding: 10px 6px 10px 12px; background: var(--bg-2); border: 1px solid var(--line); border-left: 3px solid var(--c); border-radius: var(--r-sm) var(--r-lg) var(--r-lg) var(--r-sm); box-shadow: var(--e-3); }
+.notification.needs-you { background: linear-gradient(var(--needs-tint), var(--needs-tint)), var(--bg-2); border-color: var(--needs-border); border-left-color: var(--c); }
+.notification-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 0; border: 0; background: transparent; text-align: left; font-weight: 400; color: var(--fg-1); }
+.notification-main:hover:not(:disabled) { background: transparent; }
+.notification-main:hover:not(:disabled) .notification-session { text-decoration: underline; text-decoration-color: var(--fg-dim); }
+.notification-worktree { display: flex; align-items: flex-start; gap: 6px; }
+.notification-worktree .wt-glyph { flex: none; width: 13px; height: 13px; margin-top: 2px; color: var(--c); }
+.notification-worktree-name { font: 500 12.5px var(--mono); overflow-wrap: anywhere; white-space: normal; }
+.notification-session { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.notification-event { display: flex; align-items: center; gap: 8px; }
+.notification-event .state-badge { height: 18px; padding: 0 7px; font-size: 11px; }
+.notification-time { font-size: 11.5px; color: var(--fg-3); }
+.notification-close { flex: none; }
+@media (prefers-reduced-motion: reduce) {
+  .notification-slot, .notification-slot.leaving { animation: none; }
+}
 .worktrees-overview .fetch-note { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-3); }
 .worktrees-overview .fetch-note .lucide { width: 12px; height: 12px; }
 .overview-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
