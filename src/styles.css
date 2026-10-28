@@ -462,7 +462,9 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .switcher-search .lucide { color: var(--fg-3); }
 .switcher-search input { flex: 1; min-width: 0; height: 30px; border: 0; padding: 0; background: transparent; font-size: 13px; }
 .switcher-search input:focus { box-shadow: none; }
-.switcher-grid { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); align-content: start; gap: 12px; padding: 4px 18px 20px; }
+/* The grid is centred both ways; margin: auto (not align-content) so a tall grid still scrolls from its top. */
+.switcher-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; padding: 4px 18px 20px; }
+.switcher-grid { margin: auto; width: 100%; max-width: calc(var(--cols) * 300px + (var(--cols) - 1) * 12px); display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); align-content: start; gap: 12px; }
 .switcher-card { --fill: color-mix(in srgb, var(--card) 72%, transparent); display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--fill); min-width: 0; }
 .switcher-card.selected { --fill: color-mix(in srgb, var(--card-focus) 96%, transparent); border-color: var(--line-strong); }
 .switcher-card.on { --fill: color-mix(in srgb, var(--card-focus) 96%, transparent); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }

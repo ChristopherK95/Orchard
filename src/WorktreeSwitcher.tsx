@@ -150,130 +150,133 @@ export function WorktreeSwitcher(props: WorktreeSwitcherProps) {
             <X />
           </button>
         </div>
-        <div class="switcher-grid" ref={grid}>
-          <For each={shown()}>
-            {(w, i) => {
-              const sessions = () => props.sessionsIn(w.path);
-              const hasColumn = () => !!props.pinned?.includes(w.path);
-              const canStart = () => !w.removed && w.review === null;
-              return (
-                <div
-                  class="switcher-card"
-                  classList={{
-                    on: w.path === props.active,
-                    selected: i() === selected(),
-                    removed: !!w.removed,
-                    "needs-you": sessions().some((s) => s.state === "needsYou"),
-                  }}
-                  style={{ "--c": worktreeColour(w.path) }}
-                  onMouseEnter={() => setSelected(i())}
-                >
-                  <button class="switcher-card-main" onClick={() => props.onPick(w.path)} title={w.path}>
-                    <GitBranch class="wt-glyph" />
-                    <span class="switcher-name">{nameOf(w)}</span>
-                  </button>
-                  <div class="switcher-badges" onClick={(e) => (e.target as Element).closest(".shell-badge") && props.onShowTerminal(w.path)}>
-                    <StatusBadge sessions={sessions()} settingUp={props.settingUp(w.path)} />
-                    <Show when={w.review}>{(n) => <ReviewBadge number={n()} onOpen={props.onCodeReview} />}</Show>
-                    <ShellBadge path={w.path} />
-                    <Show when={w.removed}>
-                      <span class="switcher-gone">folder removed</span>
-                    </Show>
-                    <Show when={props.pinned && !w.removed}>
-                      <span class="switcher-column" classList={{ has: hasColumn() }}>
-                        <Columns2 />
-                        {hasColumn() ? "Has a column" : "No column"}
-                      </span>
-                    </Show>
-                  </div>
-                  <Show when={sessions().length}>
-                    <div class="switcher-sessions">
-                      <For each={sessions()}>
-                        {(s) => (
-                          <div class={`switcher-session ${s.state}`} classList={{ on: s.id === props.activeSession }}>
-                            <button class="switcher-session-main" onClick={() => props.onShowSession(s.id)} title={`Go to ${s.name}`}>
-                              <Show when={s.state === "working"} fallback={<StateDot state={s.state} />}>
-                                <Loader class="spin" />
-                              </Show>
-                              <span class="name">{s.name}</span>
-                              <span class="state">{STATE_LABEL[s.state]}</span>
-                              <Show when={s.unread > 0}>
-                                <span class="count-badge">{s.unread} new</span>
-                              </Show>
-                            </button>
-                            <Show when={w.removed}>
-                              <button class="ghost icon close-tab" onClick={() => props.onCloseSession(s.id)} title="Close" aria-label={`Close ${s.name}`}>
-                                <X />
-                              </button>
-                            </Show>
-                          </div>
-                        )}
-                      </For>
+        <div class="switcher-scroll">
+          {/* A square-ish grid (4 cards 2×2, 9 cards 3×3), as wide as the window allows. */}
+          <div class="switcher-grid" ref={grid} style={{ "--cols": Math.max(1, Math.ceil(Math.sqrt(shown().length))) }}>
+            <For each={shown()}>
+              {(w, i) => {
+                const sessions = () => props.sessionsIn(w.path);
+                const hasColumn = () => !!props.pinned?.includes(w.path);
+                const canStart = () => !w.removed && w.review === null;
+                return (
+                  <div
+                    class="switcher-card"
+                    classList={{
+                      on: w.path === props.active,
+                      selected: i() === selected(),
+                      removed: !!w.removed,
+                      "needs-you": sessions().some((s) => s.state === "needsYou"),
+                    }}
+                    style={{ "--c": worktreeColour(w.path) }}
+                    onMouseEnter={() => setSelected(i())}
+                  >
+                    <button class="switcher-card-main" onClick={() => props.onPick(w.path)} title={w.path}>
+                      <GitBranch class="wt-glyph" />
+                      <span class="switcher-name">{nameOf(w)}</span>
+                    </button>
+                    <div class="switcher-badges" onClick={(e) => (e.target as Element).closest(".shell-badge") && props.onShowTerminal(w.path)}>
+                      <StatusBadge sessions={sessions()} settingUp={props.settingUp(w.path)} />
+                      <Show when={w.review}>{(n) => <ReviewBadge number={n()} onOpen={props.onCodeReview} />}</Show>
+                      <ShellBadge path={w.path} />
+                      <Show when={w.removed}>
+                        <span class="switcher-gone">folder removed</span>
+                      </Show>
+                      <Show when={props.pinned && !w.removed}>
+                        <span class="switcher-column" classList={{ has: hasColumn() }}>
+                          <Columns2 />
+                          {hasColumn() ? "Has a column" : "No column"}
+                        </span>
+                      </Show>
                     </div>
-                  </Show>
-                  <div class="switcher-actions">
-                    <Show when={canStart() && !props.settingUp(w.path)}>
-                      <button class="ghost small" onClick={() => props.onNewSession(w.path)} title="New Agent session in this Worktree">
-                        <Plus />
-                        New session
-                      </button>
+                    <Show when={sessions().length}>
+                      <div class="switcher-sessions">
+                        <For each={sessions()}>
+                          {(s) => (
+                            <div class={`switcher-session ${s.state}`} classList={{ on: s.id === props.activeSession }}>
+                              <button class="switcher-session-main" onClick={() => props.onShowSession(s.id)} title={`Go to ${s.name}`}>
+                                <Show when={s.state === "working"} fallback={<StateDot state={s.state} />}>
+                                  <Loader class="spin" />
+                                </Show>
+                                <span class="name">{s.name}</span>
+                                <span class="state">{STATE_LABEL[s.state]}</span>
+                                <Show when={s.unread > 0}>
+                                  <span class="count-badge">{s.unread} new</span>
+                                </Show>
+                              </button>
+                              <Show when={w.removed}>
+                                <button class="ghost icon close-tab" onClick={() => props.onCloseSession(s.id)} title="Close" aria-label={`Close ${s.name}`}>
+                                  <X />
+                                </button>
+                              </Show>
+                            </div>
+                          )}
+                        </For>
+                      </div>
                     </Show>
-                    <Show when={canStart()}>
-                      <button
-                        class="ghost small"
-                        classList={{ on: recentOf() === w.path }}
-                        onClick={() => toggleRecent(w.path)}
-                        title="Closed sessions in this Worktree, and its conversations started elsewhere"
-                        aria-expanded={recentOf() === w.path}
-                      >
-                        <History />
-                        Recent
-                      </button>
-                    </Show>
-                    <Show when={props.pinned && !w.removed}>
-                      <Show
-                        when={hasColumn()}
-                        fallback={
-                          <button class="ghost small" onClick={() => props.onPin(w.path)} title="Give it a column in the Columns view">
-                            <Columns2 />
-                            Give it a column
-                          </button>
-                        }
-                      >
-                        <button class="ghost small" onClick={() => props.onUnpin(w.path)} title="Close its column (its sessions keep running)">
-                          <X />
-                          Close column
+                    <div class="switcher-actions">
+                      <Show when={canStart() && !props.settingUp(w.path)}>
+                        <button class="ghost small" onClick={() => props.onNewSession(w.path)} title="New Agent session in this Worktree">
+                          <Plus />
+                          New session
                         </button>
                       </Show>
-                    </Show>
-                    <Show when={w.removed && sessions().length}>
-                      <button class="ghost small switcher-forget" onClick={() => props.onForget(w.path)} title="Close its sessions without keeping them in Recent sessions">
-                        <Trash2 />
-                        Close all and forget
-                      </button>
+                      <Show when={canStart()}>
+                        <button
+                          class="ghost small"
+                          classList={{ on: recentOf() === w.path }}
+                          onClick={() => toggleRecent(w.path)}
+                          title="Closed sessions in this Worktree, and its conversations started elsewhere"
+                          aria-expanded={recentOf() === w.path}
+                        >
+                          <History />
+                          Recent
+                        </button>
+                      </Show>
+                      <Show when={props.pinned && !w.removed}>
+                        <Show
+                          when={hasColumn()}
+                          fallback={
+                            <button class="ghost small" onClick={() => props.onPin(w.path)} title="Give it a column in the Columns view">
+                              <Columns2 />
+                              Give it a column
+                            </button>
+                          }
+                        >
+                          <button class="ghost small" onClick={() => props.onUnpin(w.path)} title="Close its column (its sessions keep running)">
+                            <X />
+                            Close column
+                          </button>
+                        </Show>
+                      </Show>
+                      <Show when={w.removed && sessions().length}>
+                        <button class="ghost small switcher-forget" onClick={() => props.onForget(w.path)} title="Close its sessions without keeping them in Recent sessions">
+                          <Trash2 />
+                          Close all and forget
+                        </button>
+                      </Show>
+                    </div>
+                    <Show when={recentOf() === w.path}>
+                      <div class="switcher-recent">
+                        <For each={props.recentIn(w.path)} fallback={<span class="note">No Recent sessions.</span>}>
+                          {(r) => (
+                            <button class="switcher-recent-row" onClick={() => props.onReopen(r)} title="Reopen with its conversation">
+                              <Sparkles />
+                              {r.name}
+                            </button>
+                          )}
+                        </For>
+                        <FindOtherConversations worktree={w.path} onOpen={props.onOpenConversation} />
+                      </div>
                     </Show>
                   </div>
-                  <Show when={recentOf() === w.path}>
-                    <div class="switcher-recent">
-                      <For each={props.recentIn(w.path)} fallback={<span class="note">No Recent sessions.</span>}>
-                        {(r) => (
-                          <button class="switcher-recent-row" onClick={() => props.onReopen(r)} title="Reopen with its conversation">
-                            <Sparkles />
-                            {r.name}
-                          </button>
-                        )}
-                      </For>
-                      <FindOtherConversations worktree={w.path} onOpen={props.onOpenConversation} />
-                    </div>
-                  </Show>
-                </div>
-              );
-            }}
-          </For>
-          <button class="switcher-card switcher-new" classList={{ selected: selected() === shown().length }} onClick={() => props.onNewWorktree()} onMouseEnter={() => setSelected(shown().length)}>
-            <Plus />
-            New Worktree
-          </button>
+                );
+              }}
+            </For>
+            <button class="switcher-card switcher-new" classList={{ selected: selected() === shown().length }} onClick={() => props.onNewWorktree()} onMouseEnter={() => setSelected(shown().length)}>
+              <Plus />
+              New Worktree
+            </button>
+          </div>
         </div>
       </div>
     </div>
