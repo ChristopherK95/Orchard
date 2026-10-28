@@ -121,7 +121,7 @@ export function Dashboard(props: {
   };
   const needYou = () => props.sessions.filter((s) => s.state === "needsYou");
   const openPrs = () => myPrs.prs().filter((p) => p.state === "open");
-  // A suspended session counts as Idle, as in the sidebar: it's only been put to sleep while idle.
+  // A suspended session counts as Idle, as in the Worktree switcher: it's only been put to sleep while idle.
   const count = (...states: SessionInfo["state"][]) => props.sessions.filter((s) => states.includes(s.state)).length;
 
   // Typing goes here once it's shown, not to the composer hidden under it.

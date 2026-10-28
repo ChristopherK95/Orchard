@@ -1,6 +1,6 @@
 // Switching a Worktree's branch (ticket 20): the list of branches the Git drawer shows inline, and
-// the same list as a popover from the branch name in a column's header, the Tabs view's breadcrumb
-// or the sidebar's Worktree row. Not while a session there is mid-turn or a merge or rebase is in
+// the same list as a popover from the branch name in a column's header or the Tabs view's
+// breadcrumb. Not while a session there is mid-turn or a merge or rebase is in
 // progress; branches checked out in another Worktree lead to it.
 import { createMemo, createResource, createSignal, For, onCleanup, Show } from "solid-js";
 import { core, type BranchInfo, type BranchList as Branches, type GitStatus } from "./core";

@@ -72,7 +72,7 @@ interface Outcome {
 
 export function WorktreesOverview(props: {
   root: string;
-  /** The sidebar's list: a change (one removed, files changed) looks again. */
+  /** The Workspace's Worktrees (the switcher's list): a change (one removed, files changed) looks again. */
   worktrees: WorktreeTab[];
   label: (path: string) => string;
   sessionCount: (path: string) => number;
@@ -90,13 +90,13 @@ export function WorktreesOverview(props: {
   const [fetchError, setFetchError] = createSignal("");
   const [fetched, setFetched] = createSignal(0);
   // Branches are looked at again only when they move: a file saved changes a count of uncommitted
-  // changes, not whether the branch is merged, so the counts are the sidebar's.
+  // changes, not whether the branch is merged, so the counts are the switcher's.
   const listed = createMemo(() => mergeKey(props.worktrees));
   const [rows] = createResource(() => [listed(), fetched()] as const, () => mergeOverview());
   const changedIn = createMemo(() => new Map(props.worktrees.map((w) => [w.path, w.changed])), undefined, {
     equals: (a, b) => a.size === b.size && [...a].every(([path, n]) => b.get(path) === n),
   });
-  // Ready to remove first; the rest as the sidebar orders them. Not the main checkout: it stays.
+  // Ready to remove first; the rest as the switcher orders them. Not the main checkout: it stays.
   const sorted = createMemo(() => {
     const all = (rows.latest ?? []).filter((r) => !r.isMain).map((r) => ({ ...r, changed: changedIn().get(r.path) ?? r.changed }));
     return [...all.filter(ready), ...all.filter((r) => !ready(r))];

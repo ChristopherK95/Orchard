@@ -1,5 +1,5 @@
 // The Worktree switcher (ticket 48): every Worktree as a card in a grid over the window, each with
-// its name in full (the sidebar cuts long branch names). Ctrl+Space opens it; typing filters, the
+// its name in full. Ctrl+Space or the header's Worktrees button opens it; typing filters, the
 // arrow keys move between cards, Enter picks, Esc closes.
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import type { OtherConversation, RecentSession, SessionId, SessionInfo } from "./core";
@@ -20,6 +20,8 @@ export interface WorktreeSwitcherProps {
   recentIn: (path: string) => RecentSession[];
   loadRecent: (path: string) => void;
   onPick: (path: string) => void;
+  /** A Review Worktree's badge: its Code review, of PR `number`. */
+  onCodeReview: (number: number) => void;
   onShowSession: (id: SessionId) => void;
   /** Picks the Worktree and shows its Terminal panel (its shell badge). */
   onShowTerminal: (path: string) => void;
@@ -169,7 +171,7 @@ export function WorktreeSwitcher(props: WorktreeSwitcherProps) {
                   </button>
                   <div class="switcher-badges" onClick={(e) => (e.target as Element).closest(".shell-badge") && props.onShowTerminal(w.path)}>
                     <StatusBadge sessions={sessions()} settingUp={props.settingUp(w.path)} />
-                    <Show when={w.review}>{(n) => <ReviewBadge number={n()} />}</Show>
+                    <Show when={w.review}>{(n) => <ReviewBadge number={n()} onOpen={props.onCodeReview} />}</Show>
                     <ShellBadge path={w.path} />
                     <Show when={w.removed}>
                       <span class="switcher-gone">folder removed</span>

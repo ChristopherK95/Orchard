@@ -68,11 +68,11 @@ The live status wall of the user's own work in the Workspace, and the view a Wor
 _Avoid_: Home, Board (that's only the Agent sessions)
 
 **Columns view**:
-The wide-display alternative to the Tabs view (offered from 1,600 px): each pinned Worktree side by side as a column, each column showing one of its Agent sessions at a time. More columns than fit scroll sideways.
+The wide-display alternative to the Tabs view (offered from 1,600 px): each pinned Worktree side by side as a column, each column showing one of its Agent sessions at a time (picked from its session tabs, as in the Tabs view). More columns than fit scroll sideways.
 _Avoid_: Split view, panes
 
 **Pinned Worktree**:
-A Worktree that has a column in the Columns view (choosing it in the sidebar adds one, "Close column" in the column's menu closes it). Pins are kept per Workspace across restarts; the columns follow the sidebar's order.
+A Worktree that has a column in the Columns view ("Give it a column" on its Worktree switcher card, or picking the card, adds one; "Close column" there or in the column's menu closes it). Pins are kept per Workspace across restarts; the columns follow the Worktree switcher's order.
 
 **Focused column**:
 The one column of the Columns view that takes input: the next prompt, Y / N, the Files/Git drawer and Ctrl+P all go to its Worktree. Only its composer takes the keyboard.
@@ -82,7 +82,7 @@ Where the user views and hand-edits a file in a Worktree (or the settings file, 
 _Avoid_: Text editor window, code view
 
 **Terminal panel**:
-The user's own shell in a Worktree's folder: docked beside the chat in the Tabs view and under the column's transcript in the Columns view. Opening or closing it is per Worktree and holds in both views (Ctrl+` toggles the active Worktree's, which in the Columns view is the focused column's). Each Worktree has one shell, started the first time a panel shows that Worktree. It keeps running while out of sight (a dev server, say) and a panel comes back to its output. It stops when the user stops it, or when its Worktree is removed or the Workspace closes. It runs the repo's Windows shell setting on Windows, and `$SHELL` on Linux. The sidebar marks each Worktree whose shells are running (how many, and whether one is running something), so the ones out of sight aren't forgotten; clicking the mark shows that Worktree's panel.
+The user's own shell in a Worktree's folder: docked beside the chat in the Tabs view and under the column's transcript in the Columns view. Opening or closing it is per Worktree and holds in both views (Ctrl+` toggles the active Worktree's, which in the Columns view is the focused column's). Each Worktree has one shell, started the first time a panel shows that Worktree. It keeps running while out of sight (a dev server, say) and a panel comes back to its output. It stops when the user stops it, or when its Worktree is removed or the Workspace closes. It runs the repo's Windows shell setting on Windows, and `$SHELL` on Linux. The Worktree switcher marks each Worktree whose shells are running (how many, and whether one is running something), so the ones out of sight aren't forgotten; clicking the mark shows that Worktree's panel.
 _Avoid_: Console, integrated terminal
 
 **Action**:

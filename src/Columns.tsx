@@ -5,7 +5,7 @@
 // clicking into another focuses that column. Each column's tab list ends with Terminal: its
 // Worktree's shell, in place of the transcript. Dragging the gap between two columns moves width
 // from one to the other (ticket 36).
-import { createEffect, createSignal, For, lazy, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import { createEffect, createSignal, For, type JSX, lazy, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { Avatar } from "./Avatar";
 import { Banner, Composer, FindOtherConversations, RecentList } from "./Chat";
 import type { OtherConversation, PermissionRequest, RecentSession, SessionId, SessionInfo } from "./core";
@@ -15,7 +15,8 @@ import { PrButton } from "./PrOverlay";
 import { useSessionFacts } from "./sessionFacts";
 import { Setup, type SetupView } from "./Setup";
 import { shellRunning } from "./shells";
-import { StateBadge } from "./StateDot";
+import { StateBadge, StateDot } from "./StateDot";
+import { STATE_LABEL } from "./stateLabels";
 import { createTabView, type TabView } from "./TabView";
 import { Transcript } from "./Transcript";
 import { ReviewBadge, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
@@ -31,9 +32,9 @@ const COLUMN_MIN = 640;
 const EVEN = 1000;
 
 export interface ColumnsProps {
-  /** The pinned Worktrees, in sidebar order. */
+  /** The pinned Worktrees, in the Worktree switcher's order. */
   worktrees: WorktreeTab[];
-  /** Every Worktree that can have a column, in sidebar order (the column picker's list). */
+  /** Every Worktree that can have a column, in the Worktree switcher's order (the column picker's list). */
   available: WorktreeTab[];
   /** The Worktrees without a column (offered when none has one). */
   unpinned: WorktreeTab[];
@@ -176,7 +177,7 @@ function ColumnRow(props: ColumnsProps) {
           <div class="list-box">
             <div class="section-label">
               Worktrees
-              <span class="note">more later from the sidebar</span>
+              <span class="note">more later from the Worktree switcher (Ctrl+Space)</span>
             </div>
             <For each={props.unpinned}>
               {(w) => (
@@ -302,63 +303,47 @@ function Column(props: ColumnsProps & { worktree: WorktreeTab; isFocused: boolea
       onMouseDown={(e) => !props.isFocused && !isControl(e.target) && props.onFocus(path)}
     >
       <ColumnHeader {...props} session={session()} />
-      <nav class="column-tabs">
-        <div class="tabs-list">
-          <For each={sessions()}>
-            {(s) => (
-              <span class="trigger-wrap" classList={{ on: s.id === view.shown() && !terminal() }}>
-                <button class="trigger" onClick={() => showSession(s.id)} onAuxClick={(e) => e.button === 1 && props.onCloseTab(s.id)}>
-                  <Avatar name={s.name} colour={worktreeColour(path)} size={16} />
-                  {s.name}
-                  <Show when={s.state === "needsYou"}>
-                    <span class="needs-dot" title="Needs you" />
-                  </Show>
-                  <Show when={s.unread > 0 && (s.id !== view.shown() || terminal())}>
-                    <span class="unread">{s.unread}</span>
-                  </Show>
-                </button>
-                <button class="close-tab" aria-label={`Close ${s.name}`} title="Close (it stays in Recent sessions; Ctrl+Shift+T reopens)" onClick={() => props.onCloseTab(s.id)}>
-                  <X />
-                </button>
-              </span>
-            )}
-          </For>
-          <Show when={!props.worktree.removed}>
-            <Show when={sessions().length > 0}>
-              <span class="divider" />
-            </Show>
-            <span class="trigger-wrap" classList={{ on: terminal() }}>
-              <button
-                class="trigger"
-                onClick={() => !terminal() && props.onToggleTerminal(path)}
-                title="This Worktree's shell (Ctrl+` in the focused column)"
-              >
-                <SquareTerminal />
-                Terminal
-                <Show when={shellRunning(path)}>
-                  <span class="shell-dot" title="A shell is running" />
-                </Show>
-              </button>
-            </span>
+      <SessionTabs
+        path={path}
+        sessions={sessions()}
+        shown={terminal() ? null : view.shown()}
+        facts={terminal() ? undefined : session()}
+        onShow={showSession}
+        onClose={props.onCloseTab}
+        actions={
+          // (A Review Worktree has only its Code review's session.)
+          <Show when={props.worktree.review === null}>
+            <button
+              class="ghost icon"
+              onClick={() => props.onNewSession(path)}
+              title="New Agent session in this Worktree"
+              aria-label="New Agent session"
+              disabled={props.worktree.removed || !!setup()}
+            >
+              <Plus />
+            </button>
           </Show>
-        </div>
-        <span class="grow" />
-        <Show when={!terminal() && session()} keyed>
-          {(s) => <SessionFacts session={s} />}
+        }
+      >
+        <Show when={!props.worktree.removed}>
+          <Show when={sessions().length > 0}>
+            <span class="divider" />
+          </Show>
+          <span class="trigger-wrap" classList={{ on: terminal() }}>
+            <button
+              class="trigger"
+              onClick={() => !terminal() && props.onToggleTerminal(path)}
+              title="This Worktree's shell (Ctrl+` in the focused column)"
+            >
+              <SquareTerminal />
+              Terminal
+              <Show when={shellRunning(path)}>
+                <span class="shell-dot" title="A shell is running" />
+              </Show>
+            </button>
+          </span>
         </Show>
-        {/* (A Review Worktree has only its Code review's session.) */}
-        <Show when={props.worktree.review === null}>
-          <button
-            class="ghost icon"
-            onClick={() => props.onNewSession(path)}
-            title="New Agent session in this Worktree"
-            aria-label="New Agent session"
-            disabled={props.worktree.removed || !!setup()}
-          >
-            <Plus />
-          </button>
-        </Show>
-      </nav>
+      </SessionTabs>
       <Show when={sessions().length > 1 && !terminal()}>
         <Banner tone="warn">{sessions().length} Agent sessions share this Worktree, so they can edit the same files.</Banner>
       </Show>
@@ -560,6 +545,51 @@ function ColumnHeader(props: ColumnsProps & { worktree: WorktreeTab; isFocused: 
         )}
       </Show>
     </div>
+  );
+}
+
+/** A Worktree's session tabs: a column's, and the Tabs view's above the chat. A tab per session,
+ *  with its state, unread count and close ×; then `children` (a column's Terminal tab), the shown
+ *  session's facts, and `actions`. */
+export function SessionTabs(props: {
+  path: string;
+  sessions: SessionInfo[];
+  /** The session showing; null while something else (a column's Terminal) does. */
+  shown: SessionId | null | undefined;
+  facts: SessionInfo | undefined;
+  onShow: (id: SessionId) => void;
+  onClose: (id: SessionId) => void;
+  children?: JSX.Element;
+  actions?: JSX.Element;
+}) {
+  return (
+    <nav class="column-tabs" style={{ "--c": worktreeColour(props.path) }}>
+      <div class="tabs-list">
+        <For each={props.sessions}>
+          {(s) => (
+            <span class="trigger-wrap" classList={{ on: s.id === props.shown }}>
+              <button class="trigger" onClick={() => props.onShow(s.id)} onAuxClick={(e) => e.button === 1 && props.onClose(s.id)} title={`${s.name}: ${STATE_LABEL[s.state]}`}>
+                <Avatar name={s.name} colour={worktreeColour(props.path)} size={16} />
+                {s.name}
+                <StateDot state={s.state} />
+                <Show when={s.unread > 0 && s.id !== props.shown}>
+                  <span class="unread">{s.unread}</span>
+                </Show>
+              </button>
+              <button class="close-tab" aria-label={`Close ${s.name}`} title="Close (it stays in Recent sessions; Ctrl+Shift+T reopens)" onClick={() => props.onClose(s.id)}>
+                <X />
+              </button>
+            </span>
+          )}
+        </For>
+        {props.children}
+      </div>
+      <span class="grow" />
+      <Show when={props.facts} keyed>
+        {(s) => <SessionFacts session={s} />}
+      </Show>
+      {props.actions}
+    </nav>
   );
 }
 

@@ -585,7 +585,7 @@ export interface PullRequestDetails {
   commits: { shortId: string; subject: string; author: string; date: string }[];
 }
 
-/** One of the user's PRs, as the sidebar and the PR board show it. */
+/** One of the user's PRs, as the Dashboard and the PR board show it. */
 export interface MyPullRequest {
   number: number;
   title: string;
