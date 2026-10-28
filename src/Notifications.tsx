@@ -1,7 +1,7 @@
 // The sticky Notifications (ticket 50): a stack of cards at the bottom right for the sessions out of
 // sight, newest at the bottom. They stay until closed, until their session is opened, or until the
 // Worktree switcher is opened (App.tsx clears them); nothing clears them by time.
-import { createEffect, createSignal, For, onCleanup, onMount, untrack } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, untrack } from "solid-js";
 import { GitBranch, X } from "./icons";
 import type { Notification, NotificationEvent } from "./notifications";
 import { worktreeColour } from "./Worktrees";
@@ -23,6 +23,8 @@ interface Row {
 }
 
 const STACK_WIDTH = 340;
+/** A leaving card goes after this even if its fade's `animationend` never comes (it's 280 ms). */
+const LEAVE_FALLBACK_MS = 400;
 const EDGE = 16;
 const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -36,6 +38,18 @@ export function Notifications(props: {
 }) {
   // The rows lag the list by the closed ones' fade, each kept where it was meanwhile.
   const [rows, setRows] = createSignal<Row[]>([]);
+  const gone = (row: Row) => setRows((all) => all.filter((r) => r !== row));
+  const fallbacks = new Set<number>();
+  const leave = (n: Notification): Row => {
+    const row = { n, leaving: true };
+    const timer = window.setTimeout(() => {
+      fallbacks.delete(timer);
+      gone(row);
+    }, LEAVE_FALLBACK_MS);
+    fallbacks.add(timer);
+    return row;
+  };
+  onCleanup(() => fallbacks.forEach((timer) => clearTimeout(timer)));
   createEffect(() => {
     const list = props.notifications;
     const live = new Set(list.map((n) => n.key));
@@ -45,30 +59,34 @@ export function Notifications(props: {
     // A cleared one fades where it was (one replaced by a newer event just goes: the newer slides in).
     if (!reducedMotion())
       before.forEach((r, i) => {
-        if (r.leaving || !live.has(r.n.key)) next.splice(Math.min(i, next.length), 0, r.leaving ? r : { n: r.n, leaving: true });
+        if (r.leaving || !live.has(r.n.key)) next.splice(Math.min(i, next.length), 0, r.leaving ? r : leave(r.n));
       });
     setRows(next);
   });
-  const gone = (row: Row) => setRows((all) => all.filter((r) => r !== row));
 
-  // Kept clear of the composers under it, so their send buttons are never covered.
+  // Kept above whichever is higher under its strip, the composers or the Terminal panel at the
+  // bottom (one at the side runs the full height, so there is no above it), so their
+  // send buttons and prompts are never covered.
   const [bottom, setBottom] = createSignal(EDGE);
   const measure = () => {
-    if (rows().length === 0) return;
-    const left = window.innerWidth - STACK_WIDTH - EDGE;
+    const right = window.innerWidth - EDGE;
+    const left = right - STACK_WIDTH;
     let top = window.innerHeight;
-    for (const box of document.querySelectorAll(".composer-box")) {
+    for (const box of document.querySelectorAll(".composer-box, .terminal-panel:not(.side)")) {
       const r = box.getBoundingClientRect();
-      if (r.width > 0 && r.right > left && r.top < top) top = r.top;
+      if (r.width > 0 && r.right > left && r.left < right && r.top < top) top = r.top;
     }
     setBottom(Math.max(EDGE, window.innerHeight - top + 8));
   };
+  const showing = () => rows().length > 0;
   createEffect(() => {
     rows();
-    measure();
+    if (showing()) measure();
   });
-  onMount(() => {
-    // (A composer grows as it's typed in, and the views and panels around it change on clicks.)
+  // Listening only while there are cards. (A composer grows as it's typed in, and the views and
+  // panels around it change on clicks.)
+  createEffect(() => {
+    if (!showing()) return;
     const events = ["resize", "input", "click", "keyup", "transitionend"] as const;
     const again = () => requestAnimationFrame(measure);
     events.forEach((e) => window.addEventListener(e, again, true));
