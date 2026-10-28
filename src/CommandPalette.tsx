@@ -17,7 +17,7 @@ export type PaletteCommand =
 type Item = { kind: "command"; command: PaletteCommand; label: string } | { kind: "file"; file: FileMatch };
 
 const COMMANDS: { command: PaletteCommand; label: string }[] = [
-  { command: { kind: "newSessionInFreshWorktree" }, label: "New Agent session in a fresh worktree" },
+  { command: { kind: "newSessionInFreshWorktree" }, label: "New Agent session in a fresh worktree (Ctrl+N)" },
   { command: { kind: "newSessionHere" }, label: "New Agent session in this worktree" },
   { command: { kind: "review" }, label: "Review changes and create PR" },
   { command: { kind: "switchSession" }, label: "Go to Agent session… (Ctrl+K)" },

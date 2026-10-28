@@ -1078,6 +1078,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         if (!e.repeat) setDashboardOpen((open) => !open);
         return;
       }
+      // Ctrl+N: a new Worktree. (Not when the Manual editor took it, nor in the Terminal, where it's
+      // the shell's next history entry.)
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n" && !e.defaultPrevented && !inTerminal) {
+        e.preventDefault();
+        if (!e.repeat) setCreatingWorktree(true);
+        return;
+      }
       // (The Dashboard is a view, not an overlay: Escape doesn't close it.)
       if (dashboardOpen()) return; // (Y/N answer the Tab's card, which isn't showing)
       if (boardOpen()) {

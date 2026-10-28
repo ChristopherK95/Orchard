@@ -274,7 +274,7 @@ export function WorktreeSwitcher(props: WorktreeSwitcherProps) {
                   );
                 }}
               </For>
-              <button class="switcher-card switcher-new" classList={{ selected: selected() === shown().length }} onClick={() => props.onNewWorktree()} onMouseEnter={() => setSelected(shown().length)}>
+              <button class="switcher-card switcher-new" title="New Worktree with an Agent session (Ctrl+N)" classList={{ selected: selected() === shown().length }} onClick={() => props.onNewWorktree()} onMouseEnter={() => setSelected(shown().length)}>
                 <Plus />
                 New Worktree
               </button>
