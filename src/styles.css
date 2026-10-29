@@ -1723,3 +1723,10 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .diff-marker .lucide { width: 12px; height: 12px; }
 .modal.cr-submit { width: min(640px, 100%); }
 .cr-verdicts { align-self: flex-start; }
+.diff-search { display: inline-flex; align-items: center; gap: 4px; padding: 0 4px 0 8px; min-height: 28px; background: var(--bg-3); border-radius: var(--r-md); }
+.diff-search svg { width: 14px; height: 14px; flex: none; }
+.diff-search input { width: 140px; min-height: 24px; padding: 0 4px; background: transparent; border: 0; outline: 0; font-size: 12.5px; }
+.diff-search-count { min-width: 56px; font-size: 11.5px; text-align: right; }
+.diff-search button { min-height: 22px; padding: 0 4px; }
+::highlight(diff-search) { background-color: rgba(250, 204, 21, 0.35); }
+::highlight(diff-search-current) { background-color: rgba(251, 146, 60, 0.7); color: #fff; }
