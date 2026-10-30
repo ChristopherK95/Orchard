@@ -1312,10 +1312,11 @@ fn threads(stdout: &str) -> Result<Vec<CodeThread>, String> {
             replies.push(c);
             continue;
         }
+        let author = c.user.unwrap_or_else(|| "ghost".into());
         let comment = PullRequestComment {
             id: Some(c.id),
-            author: c.user.unwrap_or_else(|| "ghost".into()),
-            body: c.body,
+            body: code_body(&author, c.body),
+            author,
             created_at: c.created_at,
             url: Some(c.html_url.clone()),
             edited: false,
@@ -1345,10 +1346,11 @@ fn threads(stdout: &str) -> Result<Vec<CodeThread>, String> {
             .iter_mut()
             .find(|(id, _)| Some(*id) == c.in_reply_to_id)
         {
+            let author = c.user.unwrap_or_else(|| "ghost".into());
             thread.comments.push(PullRequestComment {
                 id: Some(c.id),
-                author: c.user.unwrap_or_else(|| "ghost".into()),
-                body: c.body,
+                body: code_body(&author, c.body),
+                author,
                 created_at: c.created_at,
                 url: Some(c.html_url),
                 edited: false,
@@ -1362,6 +1364,16 @@ fn threads(stdout: &str) -> Result<Vec<CodeThread>, String> {
     }
     threads.sort_by(|a, b| a.comments[0].created_at.cmp(&b.comments[0].created_at));
     Ok(threads)
+}
+
+/// A comment on the code as shown: CodeRabbit's without the scripts it ran and the HTML it lays
+/// them out with, which the Markdown shown doesn't render.
+fn code_body(author: &str, body: String) -> String {
+    if crate::code_rabbit::is_code_rabbit(author) {
+        crate::code_rabbit::readable(&body)
+    } else {
+        body
+    }
 }
 
 /// What `gh` printed, given `input` on stdin (`gh api --input -`). If it fails, what it printed
