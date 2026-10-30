@@ -1,7 +1,7 @@
 // The Worktree switcher (ticket 48): every Worktree as a card in a grid over the window, each with
 // its name in full, by status (Needs you first) and then the most recently changed first. Ctrl+Space or the header's Worktrees button opens it; typing filters, the
 // arrow keys move between cards, Enter picks, Esc closes.
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createComputed, createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import type { OtherConversation, RecentSession, SessionId, SessionInfo } from "./core";
 import { FindOtherConversations } from "./Chat";
 import { Columns2, GitBranch, History, LayoutGrid, Loader, Plus, Search, Sparkles, Trash2, X } from "./icons";
@@ -9,7 +9,14 @@ import { StateDot } from "./StateDot";
 import { STATE_LABEL } from "./stateLabels";
 import { ReviewBadge, ShellBadge, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 
+/** How long the switcher takes to close (its closing animation in styles.css); it stays mounted that long. */
+export const SWITCHER_CLOSE_MS = 160;
+/** How long a card takes to slide to its new place when the order changes. */
+const MOVE_MS = 260;
+
 export interface WorktreeSwitcherProps {
+  /** Closed, and playing its closing animation before it goes. */
+  closing: boolean;
   worktrees: WorktreeTab[];
   active: string;
   /** The session on screen (the Tabs view's Tab, or the focused column's), highlighted. */
@@ -107,6 +114,28 @@ export function WorktreeSwitcher(props: WorktreeSwitcherProps) {
   let grid!: HTMLDivElement;
 
   /** How many cards a row of the grid holds (it fits as many ~300 px columns as there is room for). */
+  // The cards slide to their new places when the order changes (a status changes, or the filter
+  // does) rather than jumping: where each card was is noted just before the grid is redrawn, and
+  // each one that moved is animated from there to where it is now.
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const cardsByPath = () => new Map([...grid.querySelectorAll<HTMLElement>(".switcher-card[data-path]")].map((el) => [el.dataset.path!, el]));
+  let before = new Map<string, DOMRect>();
+  createComputed(on(shown, () => {
+    before = grid && !reducedMotion.matches ? new Map([...cardsByPath()].map(([path, el]) => [path, el.getBoundingClientRect()])) : new Map();
+  }));
+  createEffect(on(shown, () => {
+    for (const [path, el] of cardsByPath()) {
+      const was = before.get(path);
+      if (!was) continue;
+      const now = el.getBoundingClientRect();
+      const dx = was.left - now.left;
+      const dy = was.top - now.top;
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+      el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }], { duration: MOVE_MS, easing: "cubic-bezier(0.2, 0, 0, 1)" });
+    }
+    before = new Map();
+  }, { defer: true }));
+
   const perRow = () => Math.max(1, getComputedStyle(grid).gridTemplateColumns.split(" ").filter(Boolean).length);
   const move = (by: number) => {
     const count = shown().length + 1;
@@ -127,7 +156,11 @@ export function WorktreeSwitcher(props: WorktreeSwitcherProps) {
     setRecentOf(path);
   };
 
+  /** Cards stagger in as the switcher opens; one that turns up later (a new Worktree) just fades in. */
+  let opening = true;
+  const newCardDelay = Math.min(shown().length, 12) * 18;
   onMount(() => {
+    setTimeout(() => (opening = false), 400);
     input.focus();
     grid.querySelectorAll(".switcher-card")[selected()]?.scrollIntoView({ block: "nearest" });
     const onKey = (e: KeyboardEvent) => {
@@ -142,7 +175,7 @@ export function WorktreeSwitcher(props: WorktreeSwitcherProps) {
 
   return (
     // The panel has no background of its own, so a click anywhere but a card or a control closes it.
-    <div class="modal-backdrop switcher-backdrop" onClick={(e) => !(e.target as Element).closest(".switcher-card, .switcher-search, button") && props.onClose()}>
+    <div class="modal-backdrop switcher-backdrop" classList={{ closing: props.closing }} inert={props.closing} onClick={(e) => !(e.target as Element).closest(".switcher-card, .switcher-search, button") && props.onClose()}>
       <div class="modal worktree-switcher" role="dialog" aria-label="Worktree switcher">
         <div class="switcher-scroll">
           {/* A square-ish grid (4 cards 2×2, 9 cards 3×3), as wide as the window allows, with the
@@ -189,6 +222,7 @@ export function WorktreeSwitcher(props: WorktreeSwitcherProps) {
                   const sessions = () => props.sessionsIn(w.path);
                   const hasColumn = () => !!props.pinned?.includes(w.path);
                   const canStart = () => !w.removed && w.review === null;
+                  const enterDelay = opening ? Math.min(i(), 12) * 18 : 0;
                   return (
                     <div
                       class={`switcher-card status-${statusOf(sessions(), props.settingUp(w.path))}`}
@@ -198,7 +232,8 @@ export function WorktreeSwitcher(props: WorktreeSwitcherProps) {
                         removed: !!w.removed,
                         "needs-you": sessions().some((s) => s.state === "needsYou"),
                       }}
-                      style={{ "--c": worktreeColour(w.path) }}
+                      style={{ "--c": worktreeColour(w.path), "animation-delay": `${enterDelay}ms` }}
+                      data-path={w.path}
                       onMouseEnter={() => setSelected(i())}
                     >
                       <button class="switcher-card-main" onClick={() => props.onPick(w.path)} title={w.path}>
@@ -306,7 +341,7 @@ export function WorktreeSwitcher(props: WorktreeSwitcherProps) {
                   );
                 }}
               </For>
-              <button class="switcher-card switcher-new" title="New Worktree with an Agent session (Ctrl+N)" classList={{ selected: selected() === shown().length }} onClick={() => props.onNewWorktree()} onMouseEnter={() => setSelected(shown().length)}>
+              <button class="switcher-card switcher-new" style={{ "animation-delay": `${newCardDelay}ms` }} data-path="" title="New Worktree with an Agent session (Ctrl+N)" classList={{ selected: selected() === shown().length }} onClick={() => props.onNewWorktree()} onMouseEnter={() => setSelected(shown().length)}>
                 <Plus />
                 New Worktree
               </button>

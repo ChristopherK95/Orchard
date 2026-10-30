@@ -25,7 +25,7 @@ import { answerByKey } from "./PermissionCard";
 import { NewWorktreeDialog } from "./NewWorktreeDialog";
 import { RemoveWorktreeDialog } from "./RemoveWorktreeDialog";
 import { WorktreesOverview } from "./WorktreesOverview";
-import { WorktreeSwitcher } from "./WorktreeSwitcher";
+import { SWITCHER_CLOSE_MS, WorktreeSwitcher } from "./WorktreeSwitcher";
 import { AgentPicker } from "./AgentPicker";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
 import { FilesDrawer } from "./FilesDrawer";
@@ -369,6 +369,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   createEffect(() => loadRecent(activeWorktree()));
   /** The Worktree switcher (Ctrl+Space). */
   const [switcherOpen, setSwitcherOpen] = createSignal(false);
+  /** The switcher stays on screen a moment after it closes, for its closing animation. */
+  const [switcherShown, setSwitcherShown] = createSignal(false);
+  createEffect(() => {
+    if (switcherOpen()) return setSwitcherShown(true);
+    const timer = setTimeout(() => setSwitcherShown(false), SWITCHER_CLOSE_MS);
+    onCleanup(() => clearTimeout(timer));
+  });
   /** The header's Worktrees button. */
   const openSwitcher = () => {
     setRecentOpen(false);
@@ -1580,8 +1587,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onClose={() => setAgentPickerOpen(false)}
         />
       </Show>
-      <Show when={switcherOpen()}>
+      <Show when={switcherShown()}>
         <WorktreeSwitcher
+          closing={!switcherOpen()}
           worktrees={rowWorktrees()}
           active={activeWorktree()}
           activeSession={mainView() === "columns" ? shownIn(activeWorktree()) ?? null : activeId()}
