@@ -14,6 +14,7 @@ fn exchange(text: &str) -> [TranscriptItem; 2] {
             text: text.into(),
             edit_notes: vec![],
             attachments: vec![],
+            images: vec![],
         },
         TranscriptItem::Agent {
             text: format!("Echo: {text}"),

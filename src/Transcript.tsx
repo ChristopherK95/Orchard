@@ -4,11 +4,11 @@
 // calls folds into one row that sums it up (ticket 37).
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { createVirtualizer } from "@tanstack/solid-virtual";
-import { createEffect, createMemo, createSignal, For, type JSX, on, Show } from "solid-js";
-import { Dynamic } from "solid-js/web";
+import { createEffect, createMemo, createResource, createSignal, For, type JSX, on, onCleanup, Show } from "solid-js";
+import { Dynamic, Portal } from "solid-js/web";
 import { answerInDraft } from "./Chat";
-import type { PermissionRequest, SessionId, TranscriptItem } from "./core";
-import { BookOpen, Brain, Check, ChevronRight, Copy, Globe, Loader, MoveRight, Paperclip, Pencil, Play, TextSearch, Trash2, Wrench } from "./icons";
+import { core, type PermissionRequest, type SentImage, type SessionId, type TranscriptItem } from "./core";
+import { BookOpen, Brain, Check, ChevronRight, Copy, Globe, ImageIcon, Loader, MoveRight, Paperclip, Pencil, Play, TextSearch, Trash2, Wrench } from "./icons";
 import { handleTranscriptClick, renderMarkdown, renderUserMarkdown } from "./markdown";
 import { PermissionCard } from "./PermissionCard";
 
@@ -270,8 +270,13 @@ function renderItem(
               </For>
             </div>
           </Show>
+          <Show when={item.images?.length}>
+            <div class="sent-images">
+              <For each={item.images}>{(image) => <SentImageThumb image={image} />}</For>
+            </div>
+          </Show>
           <Show when={item.attachments?.length}>
-            <div class="sent-notes" title="Files and images that went with this message">
+            <div class="sent-notes" title="Files that went with this message">
               <For each={item.attachments}>
                 {(name) => (
                   <span class="sent-note">
@@ -282,12 +287,53 @@ function renderItem(
               </For>
             </div>
           </Show>
-          <div class="msg user markdown" innerHTML={renderUserMarkdown(item.text)} />
+          {/* (A message of only images has no bubble.) */}
+          <Show when={item.text.trim()}>
+            <div class="msg user markdown" innerHTML={renderUserMarkdown(item.text)} />
+          </Show>
         </>
       );
     default:
       return <div class={`msg ${item.kind}`}>{item.text}</div>;
   }
+}
+
+/** An image sent with a message, as a thumbnail (read from its kept copy once shown) that opens
+ * full size; just its name if no copy was kept, or it's gone. */
+function SentImageThumb(props: { image: SentImage }) {
+  const [url] = createResource(
+    () => props.image.path,
+    (path) => core.sentImage(path).catch(() => null),
+  );
+  const [open, setOpen] = createSignal(false);
+  const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+  createEffect(() => {
+    if (!open()) return;
+    window.addEventListener("keydown", onKey);
+    onCleanup(() => window.removeEventListener("keydown", onKey));
+  });
+  const name = (
+    <span class="sent-note" title="An image that went with this message">
+      <ImageIcon />
+      {props.image.name}
+    </span>
+  );
+  return (
+    <Show when={props.image.path && url() !== null} fallback={name}>
+      <button class="sent-image" title={`${props.image.name} (click to see it full size)`} onClick={() => setOpen(true)}>
+        <Show when={url()}>{(src) => <img src={src()} alt={props.image.name} />}</Show>
+      </button>
+      <Show when={open() && url()}>
+        {(src) => (
+          <Portal>
+            <div class="modal-backdrop sent-image-full" onClick={() => setOpen(false)}>
+              <img src={src()} alt={props.image.name} />
+            </div>
+          </Portal>
+        )}
+      </Show>
+    </Show>
+  );
 }
 
 function ToolCallRow(props: { item: ToolCallItem }) {

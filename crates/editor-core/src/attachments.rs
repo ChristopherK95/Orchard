@@ -30,6 +30,10 @@ pub enum Attachment {
         mime_type: String,
         /// The image, base64-encoded.
         data: String,
+        /// Its copy among the sent images (`save_image`), which the transcript shows it from;
+        /// `None` if there's nowhere to keep one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        saved: Option<PathBuf>,
     },
     /// Sent as an embedded resource (the file's text).
     #[serde(rename_all = "camelCase")]
@@ -71,6 +75,7 @@ impl Attachment {
                 name: name.to_owned(),
                 mime_type,
                 data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                saved: None,
             });
         }
         let text = match String::from_utf8(bytes) {
@@ -120,6 +125,69 @@ impl Attachment {
             }
         }
     }
+}
+
+/// An image as a sent message shows it: its name, and its copy among the sent images (`None` if
+/// none was kept, when only its name is shown).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SentImage {
+    pub name: String,
+    pub path: Option<PathBuf>,
+}
+
+/// How long a sent image is kept after it was last sent.
+const KEEP_SENT_IMAGES: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
+/// Keeps a copy of an image sent in a prompt in `dir`, so the transcript can show it: named by its
+/// contents, so an image sent again is the same file. Its path, or `None` if it couldn't be written.
+pub(crate) fn save_image(dir: &Path, mime_type: &str, bytes: &[u8]) -> Option<PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::hash::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    let ext = match mime_type {
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => "png",
+    };
+    let path = dir.join(format!("{:016x}.{ext}", hasher.finish()));
+    std::fs::create_dir_all(dir).ok()?;
+    // (Written again even if it's there: that it was sent again keeps it from being pruned.)
+    std::fs::write(&path, bytes).ok()?;
+    Some(path)
+}
+
+/// Deletes the sent images in `dir` not sent for `KEEP_SENT_IMAGES`.
+pub(crate) fn prune_sent_images(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let old = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > KEEP_SENT_IMAGES);
+        if old {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// A sent image in `dir`, as a `data:` URL for the transcript to show; `None` if `path` isn't one
+/// of them (or is gone).
+pub(crate) fn sent_image_url(dir: &Path, path: &Path) -> Option<String> {
+    let dir = dir.canonicalize().ok()?;
+    let path = path.canonicalize().ok()?;
+    if path.parent() != Some(dir.as_path()) {
+        return None;
+    }
+    let mime_type = image_type(&path.file_name()?.to_string_lossy())?;
+    let bytes = std::fs::read(&path).ok()?;
+    let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Some(format!("data:{mime_type};base64,{data}"))
 }
 
 /// The image type a file name's extension says it is.

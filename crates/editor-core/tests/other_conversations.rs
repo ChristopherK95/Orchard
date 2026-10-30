@@ -90,6 +90,7 @@ async fn opening_one_loads_its_conversation_in_a_tab_named_after_it() {
                 text: "fix it".into(),
                 edit_notes: vec![],
                 attachments: vec![],
+                images: vec![],
             },
             TranscriptItem::Agent {
                 text: "Fixed.".into()

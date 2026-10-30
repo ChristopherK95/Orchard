@@ -4,7 +4,7 @@
 mod support;
 
 use editor_core::{
-    Attachment, CoreError, PermissionOutcome, QueuedPrompt, SessionState, TranscriptItem,
+    Attachment, CoreError, PermissionOutcome, QueuedPrompt, SentImage, SessionState, TranscriptItem,
 };
 use serde_json::json;
 use support::*;
@@ -225,10 +225,96 @@ async fn attachments_go_with_the_prompt_as_content_blocks() {
         .unwrap()
         .into_iter()
         .find_map(|item| match item {
-            TranscriptItem::User { attachments, .. } => Some(attachments),
+            TranscriptItem::User {
+                attachments,
+                images,
+                ..
+            } => Some((attachments, images)),
             _ => None,
         });
-    assert_eq!(attached, Some(vec!["shot.png".into(), "notes.txt".into()]));
+    // (This core keeps no copies of sent images, so only the image's name is shown.)
+    let shot = SentImage {
+        name: "shot.png".into(),
+        path: None,
+    };
+    assert_eq!(attached, Some((vec!["notes.txt".into()], vec![shot])));
+}
+
+/// The images of the first user message in the session's transcript.
+fn images_sent(core: &editor_core::Core, session: editor_core::SessionId) -> Vec<SentImage> {
+    core.transcript(session)
+        .unwrap()
+        .into_iter()
+        .find_map(|item| match item {
+            TranscriptItem::User { images, .. } => Some(images),
+            _ => None,
+        })
+        .expect("a user message")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sent_images_show_in_the_transcript_and_after_reopening() {
+    let repo = git_repo();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let kept = tempfile::tempdir().unwrap();
+    let core = editor_core::Core::new(editor_core::CoreConfig {
+        state_path: Some(fake.state_path()),
+        sent_images_path: Some(kept.path().join("sent-images")),
+        ..editor_core::CoreConfig::new(fake.command())
+    });
+    let root = core.open_workspace(repo.path()).await.unwrap().root;
+    let session = core.new_session().await.unwrap();
+    let mut events = core.subscribe();
+    let image = core
+        .attach_data(session, "shot.png", Some("image/png"), "AQID")
+        .await
+        .unwrap();
+    core.send_prompt_with(session, "", vec![image])
+        .await
+        .unwrap();
+    states_until(&mut events, session, SessionState::Idle).await;
+
+    let images = images_sent(&core, session);
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].name, "shot.png");
+    let path = images[0].path.clone().expect("a copy is kept");
+    assert_eq!(std::fs::read(&path).unwrap(), [1, 2, 3]);
+    assert_eq!(
+        core.sent_image(&path).await.unwrap(),
+        "data:image/png;base64,AQID"
+    );
+
+    // Reopened, the conversation is replayed with the image, which shows from the same copy.
+    core.close_tab(session).await.unwrap();
+    let recent = core.recent_sessions(&root);
+    let reopened = core.reopen_session(&recent[0].acp_id).await.unwrap();
+    let replayed = images_sent(&core, reopened);
+    assert_eq!(replayed.len(), 1);
+    assert_eq!(replayed[0].path.as_ref(), Some(&path));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_kept_copies_of_sent_images_can_be_read() {
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let base = tempfile::tempdir().unwrap();
+    let kept = base.path().join("sent-images");
+    std::fs::create_dir(&kept).unwrap();
+    let core = editor_core::Core::new(editor_core::CoreConfig {
+        sent_images_path: Some(kept.clone()),
+        ..editor_core::CoreConfig::new(fake.command())
+    });
+    std::fs::write(kept.join("shot.png"), [1, 2, 3]).unwrap();
+    std::fs::write(base.path().join("secret.png"), [1, 2, 3]).unwrap();
+    assert!(core.sent_image(&kept.join("shot.png")).await.is_ok());
+    assert!(core
+        .sent_image(&base.path().join("secret.png"))
+        .await
+        .is_err());
+    assert!(core
+        .sent_image(&kept.join("..").join("secret.png"))
+        .await
+        .is_err());
+    assert!(core.sent_image(&kept.join("gone.png")).await.is_err());
 }
 
 #[tokio::test(flavor = "multi_thread")]

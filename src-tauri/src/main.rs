@@ -503,6 +503,12 @@ async fn attach_data(
         .map_err(|e| e.to_string())
 }
 
+/// An image a sent message shows, as a `data:` URL.
+#[tauri::command]
+async fn sent_image(core: State<'_, Core>, path: PathBuf) -> CommandResult<String> {
+    core.sent_image(&path).await.map_err(|e| e.to_string())
+}
+
 /// The image on the clipboard, attached to the next prompt; `None` if there's no image. For a paste
 /// whose image the webview didn't hand the page (WebKitGTK doesn't, for one copied from another app).
 #[tauri::command]
@@ -1767,6 +1773,13 @@ fn main() {
                     .ok()
                     .filter(|_| !bench_mode())
                     .map(|dir| dir.join("sessions.jsonl")),
+                // And copies of the images sent in prompts, which the transcript shows.
+                sent_images_path: app
+                    .path()
+                    .app_data_dir()
+                    .ok()
+                    .filter(|_| !bench_mode())
+                    .map(|dir| dir.join("sent-images")),
                 ..CoreConfig::new(adapter_command(app.path().app_data_dir().ok().as_deref()))
             });
             let mut events = core.subscribe();
@@ -1840,6 +1853,7 @@ fn main() {
             cancel_turn,
             attach_file,
             attach_data,
+            sent_image,
             attach_clipboard_image,
             sessions,
             show_worktree,

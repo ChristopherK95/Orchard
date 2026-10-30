@@ -13,7 +13,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::acp::{AcpError, AdapterCommand, Connection, Incoming, Responder, PROTOCOL_VERSION};
 use crate::app_state::{self, AppState, SavedCodeReview, SavedSession, WorkspaceState};
-use crate::attachments::{self, Attachment};
+use crate::attachments::{self, Attachment, SentImage};
 use crate::auto_suspend::{
     self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, SystemClock, SystemProbe,
 };
@@ -297,6 +297,9 @@ pub struct CoreConfig {
     /// Where each Agent session's start and state changes are recorded (issue 47, for 46); `None`
     /// records nothing.
     pub session_log_path: Option<PathBuf>,
+    /// Where copies of the images sent in prompts are kept, so the transcript can show them;
+    /// `None` keeps none (only their names are shown).
+    pub sent_images_path: Option<PathBuf>,
 }
 
 impl CoreConfig {
@@ -311,6 +314,7 @@ impl CoreConfig {
             file_watch: FileWatchConfig::default(),
             gh: None,
             session_log_path: None,
+            sent_images_path: None,
         }
     }
 }
@@ -1020,6 +1024,9 @@ impl Core {
             }
             None => LoadedSettings::default(),
         };
+        if let Some(dir) = config.sent_images_path.clone() {
+            std::thread::spawn(move || attachments::prune_sent_images(&dir));
+        }
         let session_log = config
             .session_log_path
             .clone()
@@ -2825,11 +2832,14 @@ impl Core {
         let files = self.actor(&root).await?.file_list();
         let (text, symbol) = (text.to_owned(), symbol.to_owned());
         tokio::task::spawn_blocking(move || {
-            let relative = |rel: &str| rel.split('/').fold(root.clone(), |dir, part| dir.join(part));
+            let relative = |rel: &str| {
+                rel.split('/')
+                    .fold(root.clone(), |dir, part| dir.join(part))
+            };
             let read = |rel: &str| {
                 let path = relative(rel);
-                let small = std::fs::metadata(&path)
-                    .is_ok_and(|m| m.len() <= definition::MAX_FILE_BYTES);
+                let small =
+                    std::fs::metadata(&path).is_ok_and(|m| m.len() <= definition::MAX_FILE_BYTES);
                 small.then(|| std::fs::read_to_string(path).ok()).flatten()
             };
             let lookup = definition::Lookup {
@@ -5298,14 +5308,47 @@ impl Core {
             Some(connection) => connection,
             None => self.adapter().await?,
         };
-        Attachment::from_bytes(
+        let dir = self.inner.config.sent_images_path.clone();
+        let copy = dir.as_ref().map(|_| bytes.clone());
+        let mut attachment = Attachment::from_bytes(
             name,
             path,
             mime_type,
             bytes,
             &connection.prompt_capabilities(),
         )
-        .map_err(CoreError::Attachment)
+        .map_err(CoreError::Attachment)?;
+        if let (
+            Attachment::Image {
+                mime_type, saved, ..
+            },
+            Some(dir),
+            Some(bytes),
+        ) = (&mut attachment, dir, copy)
+        {
+            let mime_type = mime_type.clone();
+            *saved = tokio::task::spawn_blocking(move || {
+                attachments::save_image(&dir, &mime_type, &bytes)
+            })
+            .await
+            .ok()
+            .flatten();
+        }
+        Ok(attachment)
+    }
+
+    /// An image a sent message shows (a `SentImage`'s path), as a `data:` URL; only the kept
+    /// copies of sent images can be read this way.
+    pub async fn sent_image(&self, path: &Path) -> Result<String, CoreError> {
+        let dir = self.inner.config.sent_images_path.clone();
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            dir.and_then(|dir| attachments::sent_image_url(&dir, &path))
+        })
+        .await
+        .ok()
+        .flatten()
+        .ok_or_else(|| CoreError::Attachment("the image is no longer kept".to_owned()))
     }
 
     /// The oldest permission card waiting for an answer in the session, if it's Needs you (for the
@@ -6881,6 +6924,26 @@ impl Inner {
                         let message_id = update["messageId"].as_str().map(str::to_owned);
                         session.record(|t| t.append_user_text(text, message_id));
                     }
+                    // An image sent with a message: kept again, so it shows after a restart too.
+                    Some("user_message_chunk")
+                        if update["content"]["type"] == "image"
+                            && session.replaying.load(Ordering::SeqCst) =>
+                    {
+                        let content = &update["content"];
+                        let mime_type = content["mimeType"].as_str().unwrap_or("image/png");
+                        let path = self.config.sent_images_path.as_ref().and_then(|dir| {
+                            let bytes = base64::engine::general_purpose::STANDARD
+                                .decode(content["data"].as_str()?)
+                                .ok()?;
+                            attachments::save_image(dir, mime_type, &bytes)
+                        });
+                        let image = SentImage {
+                            name: "image".to_owned(),
+                            path,
+                        };
+                        let message_id = update["messageId"].as_str().map(str::to_owned);
+                        session.record(|t| t.append_user_image(image, message_id));
+                    }
                     Some("agent_message_chunk") if update["content"]["type"] == "text" => {
                         let text = update["content"]["text"].as_str().unwrap_or_default();
                         let message_id = update["messageId"].as_str().map(str::to_owned);
@@ -7250,7 +7313,10 @@ impl Session {
             return;
         };
         let TranscriptItem::User {
-            text, attachments, ..
+            text,
+            attachments,
+            images,
+            ..
         } = transcript.items()[index].clone()
         else {
             return;
@@ -7263,6 +7329,7 @@ impl Session {
                     text,
                     edit_notes: tags,
                     attachments,
+                    images,
                 },
             )
         });
@@ -7291,10 +7358,23 @@ impl Session {
         control.stopping = false;
         control.prompt_sent = false;
         self.record(|t| {
+            let (images, files): (Vec<_>, Vec<_>) = attachments
+                .iter()
+                .partition(|a| matches!(a, Attachment::Image { .. }));
             t.push(TranscriptItem::User {
                 text: text.to_owned(),
                 edit_notes: vec![],
-                attachments: attachments.iter().map(|a| a.name().to_owned()).collect(),
+                attachments: files.iter().map(|a| a.name().to_owned()).collect(),
+                images: images
+                    .iter()
+                    .map(|a| SentImage {
+                        name: a.name().to_owned(),
+                        path: match a {
+                            Attachment::Image { saved, .. } => saved.clone(),
+                            _ => None,
+                        },
+                    })
+                    .collect(),
             })
         });
         control.in_turn = true;
