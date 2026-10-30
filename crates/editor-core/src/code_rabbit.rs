@@ -113,8 +113,8 @@ pub struct CodeRabbitComment {
     pub tags: Vec<String>,
     /// What it's about in a line: its bold title, else its first line.
     pub headline: String,
-    /// The rest, in Markdown: without CodeRabbit's hidden HTML comments, its analysis chains (the
-    /// scripts it ran to check the comment), the learnings it used and its prompt for AI agents,
+    /// The rest, in Markdown: without CodeRabbit's hidden HTML comments, its analysis chains and
+    /// static analysis (the scripts it ran to check the comment), the learnings it used and its prompt for AI agents,
     /// its other collapsed sections opened out and its HTML (icons, mostly) gone, as the HTML
     /// isn't rendered.
     pub body: String,
@@ -266,7 +266,10 @@ const SEVERITIES: &[&str] = &["Critical", "Major", "Minor", "Trivial", "Info"];
 fn read_comment(raw: &str) -> ReadComment {
     let (rest, prompts) = split_details(raw, |summary| summary.contains("Prompt for AI Agents"));
     let (rest, _) = split_details(&rest, |summary| {
-        summary.contains("Analysis chain") || summary.contains("Learnings used")
+        // (What it ran to check the comment: before its title in comments since October 2026.)
+        summary.contains("Analysis chain")
+            || summary.contains("Supported by static analysis")
+            || summary.contains("Learnings used")
     });
     let agent_prompt = prompts
         .first()
@@ -650,6 +653,24 @@ mod tests {
         assert_eq!(
             read.agent_prompt.as_deref(),
             Some("Review comment at get-component-name.ts at\nline 23:\nCheck the ancestors for a <div> fiber.")
+        );
+    }
+
+    /// With the scripts CodeRabbit ran to check it, collapsed between its labels and its title.
+    const WITH_STATIC_ANALYSIS: &str = "<!-- coderabbit-ai-generated:v1 -->\n\n**<picture><img src=\"major-16.svg\" alt=\"\"></picture> Major** · **Maintainability & Code Quality** · **Heavy lift**\n\n<details>\n<summary><picture><img src=\"review-details.svg\" alt=\"\"></picture> Supported by static analysis</summary>\n<dl>\n<dd>\n\nScript executed:\n\n```bash\nrg -n 'logAction\\(' server/src\n```\n\nRepository: o/r\n\nLength of output: 4792\n\n---\n\n</dd>\n</dl>\n</details>\n\n**Use `securedMutation` for this changed endpoint.**\n\nThe handler still uses `endpoint`.\n\n<details>\n<summary>Suggested fix</summary>\n<dl>\n<dd>\n\n```diff\n-export default endpoint(\n+export default securedMutation(\n```\n\n</dd>\n</dl>\n</details>\n\n<!-- This is an auto-generated comment by CodeRabbit -->";
+
+    #[test]
+    fn a_comment_supported_by_static_analysis_is_read_without_its_scripts() {
+        let read = read_comment(WITH_STATIC_ANALYSIS);
+        assert_eq!(read.severity.as_deref(), Some("Major"));
+        assert_eq!(read.tags, ["Maintainability & Code Quality", "Heavy lift"]);
+        assert_eq!(
+            read.headline,
+            "Use `securedMutation` for this changed endpoint."
+        );
+        assert_eq!(
+            read.body,
+            "The handler still uses `endpoint`.\n\n**Suggested fix**\n\n```diff\n-export default endpoint(\n+export default securedMutation(\n```"
         );
     }
 
