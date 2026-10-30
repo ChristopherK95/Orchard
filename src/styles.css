@@ -196,7 +196,7 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .state-dot.exited { color: var(--exited); }
 @keyframes breathe { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.12; } }
 @media (prefers-reduced-motion: reduce) {
-  .state-dot.working .pulse, .state-badge.working .dot, .composer-box.working { animation: none; }
+  .state-dot.working .pulse, .state-badge.working .dot, .composer-box.working, .switcher-card.status-working .switcher-status { animation: none; }
   .spin { animation-timing-function: steps(8); }
 }
 .session-glyph { color: var(--fg-dim); }
@@ -467,11 +467,20 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .switcher-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; padding: 20px 18px; }
 .switcher-body { margin: auto; width: 100%; max-width: calc(var(--cols) * 300px + (var(--cols) - 1) * 12px); min-width: min(100%, 520px); display: flex; flex-direction: column; gap: 12px; }
 .switcher-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); align-content: start; gap: 12px; }
-.switcher-card { --fill: color-mix(in srgb, var(--card) 72%, transparent); display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--fill); min-width: 0; }
-.switcher-card.selected { --fill: color-mix(in srgb, var(--card-focus) 96%, transparent); border-color: var(--line-strong); }
-.switcher-card.on { --fill: color-mix(in srgb, var(--card-focus) 96%, transparent); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.switcher-card.needs-you { background: linear-gradient(var(--needs-tint), var(--needs-tint)), var(--fill); border-color: var(--needs-border); }
-.switcher-card.needs-you.on { border-color: var(--accent); }
+/* Borderless cards, told apart by their fill: a step lighter when selected, and lighter again for
+   the current Worktree. Each card's status (--s) is the dot beside its name. */
+.switcher-card { --fill: color-mix(in srgb, var(--card) 72%, transparent); --s: transparent; display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 0; border-radius: var(--r-lg); background: var(--fill); min-width: 0; }
+.switcher-card.status-needsYou { --s: var(--needs-you); }
+.switcher-card.status-settingUp { --s: var(--suspended); }
+.switcher-card.status-working { --s: var(--working); }
+.switcher-card.status-idle { --s: var(--idle); }
+.switcher-card.status-exited { --s: var(--exited); }
+.switcher-card.selected { --fill: color-mix(in srgb, var(--bg-2) 96%, transparent); }
+.switcher-card.on { --fill: color-mix(in srgb, var(--bg-3) 96%, transparent); }
+.switcher-card.on.selected { --fill: color-mix(in srgb, var(--bg-4) 90%, transparent); }
+.switcher-card.needs-you { background: linear-gradient(var(--needs-tint), var(--needs-tint)), var(--fill); }
+.switcher-status { flex: none; width: 8px; height: 8px; margin: 6px 0 0 auto; border-radius: 50%; background: var(--s); box-shadow: 0 0 6px color-mix(in srgb, var(--s) 60%, transparent); }
+.switcher-card.status-working .switcher-status { animation: breathe-dot 1.6s ease-in-out infinite; }
 .switcher-card.removed { opacity: 0.6; }
 .switcher-card.removed.selected { opacity: 0.85; }
 .switcher-card-main { display: flex; align-items: flex-start; gap: 8px; width: 100%; min-height: 0; padding: 0; border: 0; background: transparent; text-align: left; justify-content: flex-start; color: var(--fg-1); }
@@ -501,7 +510,8 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .switcher-recent .note { color: var(--fg-3); font-size: 12px; padding: 2px 6px; }
 .switcher-recent-row { display: flex; align-items: center; justify-content: flex-start; gap: 8px; min-height: 26px; padding: 0 6px; border: 0; background: transparent; font-size: 12.5px; font-weight: 400; text-align: left; }
 .switcher-recent-row:hover:not(:disabled) { background: var(--bg-3); }
-.switcher-new { align-items: center; justify-content: center; flex-direction: row; min-height: 96px; border-style: dashed; color: var(--fg-2); font-size: 13px; cursor: pointer; }
+.switcher-new { align-items: center; justify-content: center; flex-direction: row; min-height: 96px; border: 1px dashed var(--line); color: var(--fg-2); font-size: 13px; cursor: pointer; }
+.switcher-new.selected { border-color: var(--line-strong); }
 .switcher-new:hover:not(:disabled) { background: color-mix(in srgb, var(--card-focus) 96%, transparent); }
 
 /* Notifications (ticket 50): a stack at the bottom right, over the Terminal panel and the Board but
