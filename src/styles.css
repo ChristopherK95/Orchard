@@ -607,6 +607,14 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .msg.user .sent-notes { margin: 8px 0 0; justify-content: flex-start; }
 .sent-note { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; font-size: 11.5px; color: var(--fg-2); background: var(--bg-1); border: 1px solid var(--line); border-radius: 999px; }
 .sent-note .lucide { width: 11px; height: 11px; color: var(--fg-3); }
+/* Images sent with a message: thumbnails of one height (so the transcript's rows don't jump as
+   they load), each opening full size. */
+.sent-images { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-bottom: 6px; align-self: flex-end; max-width: min(520px, 85%); }
+.sent-image { height: 140px; min-width: 60px; max-width: 100%; padding: 0; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--bg-1); overflow: hidden; cursor: zoom-in; }
+.sent-image:hover:not(:disabled) { background: var(--bg-1); border-color: var(--line-strong); }
+.sent-image img { display: block; height: 100%; width: auto; max-width: 100%; object-fit: cover; }
+.sent-image-full { display: grid; place-items: center; cursor: zoom-out; }
+.sent-image-full img { max-width: 92vw; max-height: 92vh; border-radius: var(--r-lg); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5); }
 /* A notice between turns: a quiet line with the text centred on it. */
 .msg.notice { display: flex; align-items: center; gap: 12px; color: var(--fg-3); font-size: 12px; white-space: pre-wrap; text-align: center; }
 .msg.notice::before, .msg.notice::after { content: ""; flex: 1; min-width: 24px; height: 1px; background: var(--line); }

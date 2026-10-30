@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
+use crate::attachments::SentImage;
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, serde::Deserialize,
 )]
@@ -105,9 +107,12 @@ pub enum TranscriptItem {
         /// The Edit notes that went with it ("a.rs (+1 −1)"), shown under it.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         edit_notes: Vec<String>,
-        /// The names of the files and images attached to it.
+        /// The names of the files attached to it.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<String>,
+        /// The images attached to it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<SentImage>,
     },
     Agent {
         text: String,
@@ -378,6 +383,36 @@ impl Transcript {
             text,
             edit_notes,
             attachments: vec![],
+            images: vec![],
+        });
+        self.open_user_message = Some(OpenAgentMessage { message_id });
+        delta
+    }
+
+    /// An image of a user message, as `session/load` replays them: it goes with the message being
+    /// replayed, or starts one.
+    pub(crate) fn append_user_image(
+        &mut self,
+        image: SentImage,
+        message_id: Option<String>,
+    ) -> TranscriptDelta {
+        if self
+            .open_user_message
+            .as_ref()
+            .is_some_and(|open| open.continued_by(&message_id))
+        {
+            let index = self.items.len() - 1;
+            if let TranscriptItem::User { images, .. } = &mut self.items[index] {
+                images.push(image);
+                let item = self.items[index].clone();
+                return TranscriptDelta::ItemUpdated { index, item };
+            }
+        }
+        let delta = self.push(TranscriptItem::User {
+            text: String::new(),
+            edit_notes: vec![],
+            attachments: vec![],
+            images: vec![image],
         });
         self.open_user_message = Some(OpenAgentMessage { message_id });
         delta

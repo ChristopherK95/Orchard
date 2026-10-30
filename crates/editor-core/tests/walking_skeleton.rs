@@ -10,6 +10,7 @@ fn user(text: &str) -> TranscriptItem {
         text: text.into(),
         edit_notes: vec![],
         attachments: vec![],
+        images: vec![],
     }
 }
 fn agent(text: &str) -> TranscriptItem {

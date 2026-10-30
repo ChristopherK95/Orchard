@@ -31,6 +31,7 @@ async fn tool_calls_appear_in_the_transcript_and_follow_their_updates() {
             text: "run the tests".into(),
             edit_notes: vec![],
             attachments: vec![],
+            images: vec![],
         },
         TranscriptItem::ToolCall {
             tool_call_id: "call-1".into(),

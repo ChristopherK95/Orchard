@@ -35,7 +35,7 @@ mod terminal;
 mod worktrees;
 
 pub use crate::acp::{AcpError, AdapterCommand, PROTOCOL_VERSION};
-pub use crate::attachments::Attachment;
+pub use crate::attachments::{Attachment, SentImage};
 pub use crate::auto_suspend::{AutoSuspendReason, Clock, MemoryProbe, MemorySample};
 pub use crate::code_rabbit::{
     code_rabbit_prompt, CodeRabbitComment, CodeRabbitFeedback, CodeRabbitReply,

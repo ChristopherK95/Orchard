@@ -321,6 +321,12 @@ impl Agent {
                             &json!(session_id),
                             json!({ "sessionUpdate": kind, "content": { "type": "text", "text": entry["text"] } }),
                         );
+                        for image in entry["images"].as_array().into_iter().flatten() {
+                            notify_update(
+                                &json!(session_id),
+                                json!({ "sessionUpdate": kind, "content": image }),
+                            );
+                        }
                     }
                     self.modes()
                 }
@@ -491,7 +497,14 @@ impl Agent {
             *entries = json!([]);
         }
         let entries = entries.as_array_mut().expect("array");
-        entries.push(json!({ "role": "user", "text": prompt }));
+        let images: Vec<_> = params["prompt"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|block| block["type"] == "image")
+            .cloned()
+            .collect();
+        entries.push(json!({ "role": "user", "text": prompt, "images": images }));
         entries.push(json!({ "role": "agent", "text": reply }));
         if let Ok(path) = std::env::var("FAKE_ACP_HISTORY") {
             std::fs::write(path, history.to_string()).expect("write FAKE_ACP_HISTORY");

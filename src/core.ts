@@ -909,8 +909,14 @@ export interface OpenDocument {
 
 /** A file or image going with the next prompt (made by `attachFile` / `attachData`). */
 export type Attachment =
-  | { kind: "image"; name: string; mimeType: string; /** base64 */ data: string }
+  | { kind: "image"; name: string; mimeType: string; /** base64 */ data: string; /** Its kept copy, which the transcript shows it from. */ saved?: string }
   | { kind: "text"; name: string; path: string | null; text: string };
+
+/** An image a sent message shows: `path` is its kept copy (for `sentImage`), null if none was kept. */
+export interface SentImage {
+  name: string;
+  path: string | null;
+}
 
 /** A message written while the Agent worked, sent when the turn ends Idle. */
 export interface QueuedPrompt {
@@ -921,8 +927,8 @@ export interface QueuedPrompt {
 export type PermissionOutcome = { kind: "selected"; optionId: string } | { kind: "cancelled" };
 
 export type TranscriptItem =
-  /** `editNotes`: the Edit notes sent with it ("a.rs (+1 −1)"); `attachments`: the names of the files sent with it. */
-  | { kind: "user"; text: string; editNotes?: string[]; attachments?: string[] }
+  /** `editNotes`: the Edit notes sent with it ("a.rs (+1 −1)"); `attachments`: the names of the files sent with it; `images`: its images. */
+  | { kind: "user"; text: string; editNotes?: string[]; attachments?: string[]; images?: SentImage[] }
   | { kind: "agent"; text: string }
   | { kind: "notice"; text: string }
   | { kind: "permission"; request: PermissionRequest; outcome: PermissionOutcome | null }
@@ -1143,6 +1149,8 @@ export const core = {
   /** Something pasted (base64), to attach to the next prompt. */
   attachData: (sessionId: SessionId, name: string, mimeType: string | null, data: string) =>
     invoke<Attachment>("attach_data", { sessionId, name, mimeType, data }),
+  /** A sent image's kept copy (a `SentImage`'s path), as a `data:` URL. */
+  sentImage: (path: string) => invoke<string>("sent_image", { path }),
   /** The image on the clipboard, to attach to the next prompt (`null` if there's none): for a paste the webview didn't hand the page. */
   attachClipboardImage: (sessionId: SessionId) => invoke<Attachment | null>("attach_clipboard_image", { sessionId }),
   /** Stops an Idle session's Agent process to free memory; the conversation stays. */
