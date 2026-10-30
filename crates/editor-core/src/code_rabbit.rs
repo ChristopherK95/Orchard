@@ -349,6 +349,19 @@ fn read_comment(raw: &str) -> ReadComment {
     }
 }
 
+/// A comment of CodeRabbit's as Markdown to show on the code it's about: without its hidden HTML
+/// comments, the scripts it ran, the learnings it used, its prompt for AI agents and its HTML,
+/// its other collapsed sections opened out.
+pub(crate) fn readable(raw: &str) -> String {
+    let (rest, _) = split_details(raw, |summary| {
+        summary.contains("Analysis chain")
+            || summary.contains("Supported by static analysis")
+            || summary.contains("Learnings used")
+            || summary.contains("Prompt for AI Agents")
+    });
+    without_html(&without_hidden(&rest))
+}
+
 /// What's in a block's first fenced code block, else all its text.
 fn fenced_or_text(block: &str) -> String {
     let mut lines = block.lines();
@@ -672,6 +685,17 @@ mod tests {
             read.body,
             "The handler still uses `endpoint`.\n\n**Suggested fix**\n\n```diff\n-export default endpoint(\n+export default securedMutation(\n```"
         );
+    }
+
+    #[test]
+    fn a_comment_shown_on_its_code_has_no_scripts_prompt_or_html() {
+        assert_eq!(
+            readable(WITH_STATIC_ANALYSIS),
+            "**Major** · **Maintainability & Code Quality** · **Heavy lift**\n\n**Use `securedMutation` for this changed endpoint.**\n\nThe handler still uses `endpoint`.\n\n**Suggested fix**\n\n```diff\n-export default endpoint(\n+export default securedMutation(\n```"
+        );
+        let shown = readable(NOW);
+        assert!(shown.starts_with("**Minor** · **Functional Correctness** · **Quick win**"));
+        assert!(!shown.contains("Prompt for AI Agents") && !shown.contains("<picture>"));
     }
 
     #[test]
