@@ -37,7 +37,7 @@ Every Worktree of the Workspace but the main checkout (which can't be removed) i
 _Avoid_: Clean-up, prune
 
 **Worktree switcher**:
-The overlay (Ctrl+Space) showing every Worktree of the Workspace as a card in a grid, each with its name in full, where its sessions stand and its sessions to go to. Picking a card goes to that Worktree (its last-used Tab, or its column in the Columns view). A Worktree whose folder is gone but whose sessions still run has a dimmed card, with "Close all and forget".
+The overlay (Ctrl+Space) showing every Worktree of the Workspace as a card in a grid, each with its name in full, where its sessions stand and its sessions to go to. Cards go by where their sessions stand (Needs you first, then Setting up, Working, Idle, Exited, and none), then the most recently changed first: the last time one of its sessions started or finished a turn. Picking a card goes to that Worktree (its last-used Tab, or its column in the Columns view). A Worktree whose folder is gone but whose sessions still run has a dimmed card, with "Close all and forget".
 _Avoid_: Worktree grid, launcher
 
 **Notification**:

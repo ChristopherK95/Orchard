@@ -1,7 +1,7 @@
 // The Worktree switcher (ticket 48): every Worktree as a card in a grid over the window, each with
-// its name in full. Ctrl+Space or the header's Worktrees button opens it; typing filters, the
+// its name in full, by status (Needs you first) and then the most recently changed first. Ctrl+Space or the header's Worktrees button opens it; typing filters, the
 // arrow keys move between cards, Enter picks, Esc closes.
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import type { OtherConversation, RecentSession, SessionId, SessionInfo } from "./core";
 import { FindOtherConversations } from "./Chat";
 import { Columns2, GitBranch, History, LayoutGrid, Loader, Plus, Search, Sparkles, Trash2, X } from "./icons";
@@ -43,6 +43,23 @@ export interface WorktreeSwitcherProps {
 const folder = (path: string) => path.split(/[\\/]/).pop() ?? path;
 const nameOf = (w: WorktreeTab) => (w.removed ? folder(w.path) : worktreeLabel(w));
 
+/** A Worktree's status (as its badge says), in the order its card goes: most urgent first, none last. */
+const STATUSES = ["needsYou", "settingUp", "working", "idle", "exited", "none"] as const;
+type Status = (typeof STATUSES)[number];
+
+function statusOf(sessions: SessionInfo[], settingUp: boolean): Status {
+  const has = (state: SessionInfo["state"]) => sessions.some((s) => s.state === state);
+  if (has("needsYou")) return "needsYou";
+  if (settingUp) return "settingUp";
+  if (has("working")) return "working";
+  if (has("idle") || has("suspended")) return "idle";
+  if (has("exited")) return "exited";
+  return "none";
+}
+
+/** When the Worktree's status last changed: the last time one of its sessions started or finished a turn. */
+const changedAt = (sessions: SessionInfo[]) => Math.max(0, ...sessions.map((s) => s.lastActive ?? 0));
+
 /** Where a Worktree's sessions stand, most urgent first. */
 function StatusBadge(props: { sessions: SessionInfo[]; settingUp: boolean }) {
   const has = (state: SessionInfo["state"]) => props.sessions.some((s) => s.state === state);
@@ -66,11 +83,23 @@ function StatusBadge(props: { sessions: SessionInfo[]; settingUp: boolean }) {
 
 export function WorktreeSwitcher(props: WorktreeSwitcherProps) {
   const [query, setQuery] = createSignal("");
-  /** The cards shown: the Worktrees matching the filter, then "+ New Worktree" (index `shown().length`). */
-  const shown = () => {
+  /** The cards shown: the Worktrees matching the filter, by status and then the most recently
+   * changed first, then "+ New Worktree" (index `shown().length`). */
+  const shown = createMemo(() => {
     const words = query().trim().toLowerCase();
-    return words ? props.worktrees.filter((w) => nameOf(w).toLowerCase().includes(words) || folder(w.path).toLowerCase().includes(words)) : props.worktrees;
-  };
+    const matching = words ? props.worktrees.filter((w) => nameOf(w).toLowerCase().includes(words) || folder(w.path).toLowerCase().includes(words)) : props.worktrees;
+    const order = new Map(
+      matching.map((w) => {
+        const sessions = props.sessionsIn(w.path);
+        return [w.path, { rank: STATUSES.indexOf(statusOf(sessions, props.settingUp(w.path))), at: changedAt(sessions) }];
+      }),
+    );
+    return [...matching].sort((a, b) => {
+      const x = order.get(a.path)!;
+      const y = order.get(b.path)!;
+      return x.rank - y.rank || y.at - x.at;
+    });
+  });
   const startAt = () => Math.max(0, shown().findIndex((w) => w.path === props.active));
   const [selected, setSelected] = createSignal(startAt());
   const [recentOf, setRecentOf] = createSignal<string | null>(null);
@@ -162,7 +191,7 @@ export function WorktreeSwitcher(props: WorktreeSwitcherProps) {
                   const canStart = () => !w.removed && w.review === null;
                   return (
                     <div
-                      class="switcher-card"
+                      class={`switcher-card status-${statusOf(sessions(), props.settingUp(w.path))}`}
                       classList={{
                         on: w.path === props.active,
                         selected: i() === selected(),
@@ -175,6 +204,9 @@ export function WorktreeSwitcher(props: WorktreeSwitcherProps) {
                       <button class="switcher-card-main" onClick={() => props.onPick(w.path)} title={w.path}>
                         <GitBranch class="wt-glyph" />
                         <span class="switcher-name">{nameOf(w)}</span>
+                        <Show when={statusOf(sessions(), props.settingUp(w.path)) !== "none"}>
+                          <span class="switcher-status" aria-hidden="true" />
+                        </Show>
                       </button>
                       <div class="switcher-badges" onClick={(e) => (e.target as Element).closest(".shell-badge") && props.onShowTerminal(w.path)}>
                         <StatusBadge sessions={sessions()} settingUp={props.settingUp(w.path)} />
