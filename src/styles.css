@@ -482,6 +482,18 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .switcher-status { flex: none; width: 8px; height: 8px; margin: 6px 0 0 auto; border-radius: 50%; background: var(--s); box-shadow: 0 0 6px color-mix(in srgb, var(--s) 60%, transparent); }
 .switcher-card.status-working .switcher-status { animation: breathe-dot 1.6s ease-in-out infinite; }
 .switcher-card.removed { opacity: 0.6; }
+/* Opening, the cards rise into place one after another (each card's delay is set inline); closing,
+   they and the scrim fade out together (SWITCHER_CLOSE_MS in WorktreeSwitcher.tsx waits for it). */
+.switcher-card, .switcher-head { animation: switcher-card-in 220ms cubic-bezier(0.2, 0, 0, 1) backwards; }
+@keyframes switcher-card-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } }
+.switcher-backdrop.closing { animation: scrim-out 160ms ease-in forwards; }
+.switcher-backdrop.closing .worktree-switcher { animation: switcher-out 160ms ease-in forwards; }
+@keyframes scrim-out { to { background-color: rgba(0, 0, 0, 0); } }
+@keyframes switcher-out { to { opacity: 0; transform: scale(0.98); } }
+@media (prefers-reduced-motion: reduce) {
+  @keyframes switcher-card-in { from { opacity: 0; } }
+  @keyframes switcher-out { to { opacity: 0; } }
+}
 .switcher-card.removed.selected { opacity: 0.85; }
 .switcher-card-main { display: flex; align-items: flex-start; gap: 8px; width: 100%; min-height: 0; padding: 0; border: 0; background: transparent; text-align: left; justify-content: flex-start; color: var(--fg-1); }
 .switcher-card-main:hover:not(:disabled) { background: transparent; text-decoration: underline; text-decoration-color: var(--fg-dim); }
