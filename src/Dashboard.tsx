@@ -1,10 +1,10 @@
 // The Dashboard (ticket 43): the live status wall of the user's own work in the Workspace, and the
-// view a Workspace opens on. Statistics of the user's work over a chosen period (Statistics.tsx) in
-// a column on the left; on the right, fixed sections in this order: the Agent sessions that need the
-// user, reviews requested from them, their open PRs by stage, Worktrees that need attention,
-// Worktrees ready to clean up, how many sessions are Working and Idle. The layout follows the
-// window's width: one column when narrow (statistics last), and on a very wide one the right side
-// splits in two, the sessions, reviews and PRs beside the Worktrees. Each item leads to where it lives (the Workspace view
+// view a Workspace opens on. Fixed sections in this order: the Agent sessions that need the user,
+// reviews requested from them, their open PRs by stage, Worktrees that need attention, Worktrees
+// ready to clean up, how many sessions are Working and Idle. The layout follows the window's width:
+// one column when narrow, and on a wide one the sessions, reviews and PRs beside the Worktrees. (The
+// statistics of the user's work are a page of their own, Statistics.tsx, so opening the Dashboard
+// doesn't ask GitHub for them.) Each item leads to where it lives (the Workspace view
 // decides how); a PR with failing checks or review feedback can start an Agent session on it, and
 // one CodeRabbit still asks changes of shows how many, and opens them to start one on; one that
 // conflicts with the branch it goes into opens where, to start one resolving it. The
@@ -14,13 +14,12 @@ import { createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js"
 import { ago } from "./Chat";
 import { CodeRabbitComments } from "./CodeRabbitComments";
 import { MergeConflicts as MergeConflictsDialog } from "./MergeConflicts";
-import type { AttentionReason, Check, CodeRabbitFeedback, MergeConflicts, MergeState, MyPullRequest, PullRequestStage, ReviewRequest, SessionInfo, StatisticsDays, WorktreeAttention, WorktreeMerge } from "./core";
-import { attention, cleanUp, reviewRequests, statistics } from "./dashboardData";
+import type { AttentionReason, Check, CodeRabbitFeedback, MergeConflicts, MergeState, MyPullRequest, PullRequestStage, ReviewRequest, SessionInfo, WorktreeAttention, WorktreeMerge } from "./core";
+import { attention, cleanUp, reviewRequests } from "./dashboardData";
 import {
   Bell,
   Bot,
   ChevronRight,
-  ChartLine,
   CircleCheck,
   CircleX,
   Clock,
@@ -38,7 +37,6 @@ import {
 } from "./icons";
 import { myPrs } from "./PrBoard";
 import { StateDot } from "./StateDot";
-import { StatisticsCards } from "./Statistics";
 import { worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 
 /** The core's `gh` hint for the PR list speaks of creating a PR; the Dashboard's sections say this instead. */
@@ -53,9 +51,6 @@ const STAGES: { title: string; stage: PullRequestStage; icon: () => JSX.Element 
   { title: "Waiting for review", stage: "waitingForReview", icon: () => <Clock /> },
   { title: "Draft", stage: "draft", icon: () => <GitPullRequestDraft /> },
 ];
-
-/** The periods the statistics can cover. */
-const PERIODS: StatisticsDays[] = [7, 30, 90];
 
 const plural = (n: number, thing: string) => `${n} ${thing}${n === 1 ? "" : "s"}`;
 
@@ -151,38 +146,6 @@ export function Dashboard(props: {
         <span class="hint">Ctrl+D for the view you were in</span>
       </div>
       <div class="dashboard-sections">
-        <div class="dashboard-column dashboard-stats-column">
-          <Section
-            icon={<ChartLine />}
-            title="Statistics"
-            github={{ refreshed: since(statistics.refreshedAt()), loading: statistics.loading(), error: statistics.error().replace(PR_HINT, GH_HINT), onRefresh: statistics.refresh }}
-            action={
-              <div class="segmented dashboard-period">
-                <For each={PERIODS}>
-                  {(d) => (
-                    <button classList={{ on: statistics.days() === d }} aria-pressed={statistics.days() === d} onClick={() => statistics.setDays(d)} title={`The last ${d} days`}>
-                      {d}d
-                    </button>
-                  )}
-                </For>
-              </div>
-            }
-          >
-            <Show
-              when={statistics.figures()}
-              fallback={
-                <Show when={!statistics.error()}>
-                  <p class="dashboard-line muted">
-                    <Loader class="spin" />
-                    Asking GitHub…
-                  </p>
-                </Show>
-              }
-            >
-              {(figures) => <StatisticsCards figures={figures()} now={now()} />}
-            </Show>
-          </Section>
-        </div>
         <div class="dashboard-column dashboard-now-column">
           <Section icon={<Bell />} title="Needs you" count={needYou().length} needs empty="No sessions need you">
             <For each={needYou()}>
