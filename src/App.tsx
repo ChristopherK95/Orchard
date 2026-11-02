@@ -32,7 +32,7 @@ import { FilesDrawer } from "./FilesDrawer";
 import { type BranchPopover, BranchSwitcher, popoverUnder } from "./BranchPicker";
 import { GitDrawer } from "./GitDrawer";
 import { myPrs, PrBoard, watchMyPrs } from "./PrBoard";
-import { reviewRequests, statistics, watchAttention, watchCleanUp, watchReviewRequests, watchStatistics } from "./dashboardData";
+import { reviewRequests, watchAttention, watchCleanUp, watchReviewRequests, watchStatistics } from "./dashboardData";
 import { PrButton, PrOverlay } from "./PrOverlay";
 import { ReviewOverlay } from "./ReviewOverlay";
 import { CodeReviewView, openCodeReview } from "./CodeReviewView";
@@ -45,6 +45,7 @@ const ManualEditor = lazy(() => import("./ManualEditor").then((m) => ({ default:
 const TerminalPanel = lazy(() => import("./TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 import { Board } from "./Board";
 import { Dashboard, type PrStart } from "./Dashboard";
+import { StatisticsPage } from "./Statistics";
 import { Transcript } from "./Transcript";
 import { ContextStrip, removedWorktree, ReviewBadge, worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 import { notify, onNotificationClicked } from "./notify";
@@ -235,10 +236,10 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
    *  all three (they stay as they are underneath, so leaving it lands back in the one before). */
   const [mainView, setMainView] = createSignal<"tabs" | "columns">("tabs");
   const [boardOpen, setBoardOpen] = createSignal(false);
-  /** Which board: every session by state, or the user's PRs by where each stands. */
-  const [boardOf, setBoardOf] = createSignal<"sessions" | "prs">("sessions");
+  /** Which board: every session by state, the user's PRs by where each stands, or the statistics of their work. */
+  const [boardOf, setBoardOf] = createSignal<"sessions" | "prs" | "statistics">("sessions");
   const [dashboardOpen, setDashboardOpen] = createSignal(false);
-  const openBoard = (of: "sessions" | "prs") => {
+  const openBoard = (of: "sessions" | "prs" | "statistics") => {
     setBoardOf(of);
     setBoardOpen(true);
     setDashboardOpen(false);
@@ -631,13 +632,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   };
   watchMyPrs(mainWorktree);
   // (What the Dashboard shows besides the sessions: the review requests kept current whether or not
-  // it's showing; its Worktree lists and statistics only while it is.)
+  // it's showing; its Worktree lists only while it is. The statistics only while their page is.)
   watchReviewRequests(mainWorktree);
   watchReviews(() => worktrees().flatMap((w) => (w.review === null ? [] : [w.review])));
   const dashboardShown = () => view() === "dashboard";
   watchAttention(dashboardShown);
   watchCleanUp(dashboardShown);
-  watchStatistics(mainWorktree, dashboardShown);
+  watchStatistics(mainWorktree, () => view() === "board" && boardOf() === "statistics");
   /** The Dashboard entry's badge: what waits on the user (not Worktree hygiene). */
   const dashboardBadge = () =>
     needYou() +
@@ -648,16 +649,13 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   // The view has changed since the Workspace opened (the user's choice, the open-on-start one stands down).
   let viewChosen = false;
   // Showing the Dashboard asks GitHub again, unless it was asked under a minute ago (its Worktree
-  // lists are read again by their watchers). The statistics are read only when there are none, or
-  // they're an hour old: even when the Workspace opened on it, as the watchers don't ask for them
-  // unless the Dashboard is up.
+  // lists are read again by their watchers).
   createEffect(
     on(
       view,
       (now) => {
         viewChosen = true;
         if (now !== "dashboard") return;
-        statistics.shown();
         if (openedOnDashboard) {
           openedOnDashboard = false;
           return;
@@ -1324,6 +1322,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           <button classList={{ on: view() === "board" && boardOf() === "sessions" }} onClick={() => openBoard("sessions")} title="Every session by state (Ctrl+B)">
             Board
           </button>
+          <button classList={{ on: view() === "board" && boardOf() === "statistics" }} onClick={() => openBoard("statistics")} title="Your work in this repository over the last days, from GitHub">
+            Statistics
+          </button>
         </div>
         <Show when={needYouUnseen() > 0}>
           <button class="outline needs-you-button" onClick={() => openBoard("sessions")} title="See them on the Board">
@@ -1420,6 +1421,9 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
       </Show>
       <Show when={view() === "board" && boardOf() === "prs"}>
         <PrBoard worktrees={rowWorktrees()} top={titlebar.offsetHeight} banners={banners()} onOpen={openMyPr} />
+      </Show>
+      <Show when={view() === "board" && boardOf() === "statistics"}>
+        <StatisticsPage top={titlebar.offsetHeight} banners={banners()} />
       </Show>
       <Show when={creatingWorktree()}>
         <NewWorktreeDialog

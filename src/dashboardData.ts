@@ -4,8 +4,8 @@
 // up (the Worktrees overview's merged ones). Module-level, like `myPrs`, so they're read once per
 // Workspace. The review requests are kept current whether or not the Dashboard is showing (they make
 // its badge); the Worktree lists, which run git in every Worktree, only while it shows. The
-// statistics of the user's work are asked of GitHub only while the Dashboard is shown, and an answer
-// is kept an hour (one per period), so coming back to the Dashboard doesn't ask again.
+// statistics of the user's work (their own page now) are asked of GitHub only while that page is
+// shown, and an answer is kept an hour (one per period), so coming back to it doesn't ask again.
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { core, type ReviewRequest, type Statistics, type StatisticsDays, type WorktreeAttention, type WorktreeInfo, type WorktreeMerge } from "./core";
 
@@ -228,7 +228,7 @@ export const statistics = {
   loading: statisticsLoading,
   refreshedAt: statisticsRefreshedAt,
   days,
-  /** The Dashboard is shown: reads them if there are none for the period, or they're over an hour old. */
+  /** Their page is shown: reads them if there are none for the period, or they're over an hour old. */
   shown: () => {
     if (!statisticsFrom || !daysRead || statisticsLoading()) return;
     const k = kept.get(days());
@@ -272,7 +272,7 @@ async function loadStatistics() {
 }
 
 /** Keeps `statistics` for the Worktree `worktree` names (the main one): on a change, forgets what was
- *  read and reads the Workspace's period, then reads the figures if `visible` (the Dashboard is shown). */
+ *  read and reads the Workspace's period, then reads the figures if `visible` (their page is shown). */
 export function watchStatistics(worktree: () => string, visible: () => boolean) {
   const where = createMemo(worktree);
   createEffect(

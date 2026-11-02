@@ -1,11 +1,84 @@
-// The Dashboard's statistics (ticket 47): six read-only cards on the user's own work in the
+// The Statistics page (ticket 47): six read-only cards on the user's own work in the
 // Workspace's repo over the chosen period (7, 30 or 90 days), in this order: their PRs merged, the
 // median time to merge, the median time to a first review (and how many of their PRs still wait
 // for one), the reviews they gave, their oldest open PR, and the review request waiting longest on
 // them. The first four say how they compare with the period before, without judging better or
 // worse. A median of only one or two PRs says so; a figure with nothing to count shows "—".
-import { type JSX, Show } from "solid-js";
-import type { Compared, Median, Statistics, Waiting } from "./core";
+// It's a page of its own, over the Tabs or Columns as the Boards are, so GitHub is asked for them only
+// when it's opened (and they're over an hour old), not each time the Dashboard is.
+import { createSignal, For, type JSX, onCleanup, Show } from "solid-js";
+import { ago } from "./Chat";
+import type { Compared, Median, Statistics, StatisticsDays, Waiting } from "./core";
+import { statistics } from "./dashboardData";
+import { Loader, RefreshCw } from "./icons";
+
+/** The periods the statistics can cover. */
+const PERIODS: StatisticsDays[] = [7, 30, 90];
+
+/** The core's `gh` hint speaks of creating a PR; the page says this instead. */
+const PR_HINT = "Creating a PR takes the GitHub CLI: install `gh`, run `gh auth login` in a terminal once, then try again.";
+const GH_HINT = "This takes the GitHub CLI: install `gh`, run `gh auth login` in a terminal once, then refresh.";
+
+export function StatisticsPage(props: {
+  /** Where the page sits: under the title bar. */
+  top: number;
+  /** The Workspace's error and notice banners, shown here too. */
+  banners?: JSX.Element;
+}) {
+  // (Opening the page reads them, unless they're kept from within the hour.)
+  statistics.shown();
+  // "Refreshed 2 min ago" and the waiting times move on while the page is showing.
+  const [now, setNow] = createSignal(Date.now());
+  const tick = setInterval(() => setNow(Date.now()), 30_000);
+  onCleanup(() => clearInterval(tick));
+  const refreshed = () => {
+    now();
+    const at = statistics.refreshedAt();
+    return at === null ? "" : ago(new Date(at).toISOString());
+  };
+  return (
+    <section class="board statistics-page" style={{ top: `${props.top}px` }}>
+      {props.banners}
+      <div class="board-head">
+        <span class="pr-board-title">Statistics</span>
+        <div class="segmented dashboard-period">
+          <For each={PERIODS}>
+            {(d) => (
+              <button classList={{ on: statistics.days() === d }} aria-pressed={statistics.days() === d} onClick={() => statistics.setDays(d)} title={`The last ${d} days`}>
+                {d}d
+              </button>
+            )}
+          </For>
+        </div>
+        <Show when={refreshed()}>
+          <span class="dashboard-refreshed">refreshed {refreshed()}</span>
+        </Show>
+        <button class="ghost icon" onClick={() => statistics.refresh()} disabled={statistics.loading()} title="Ask GitHub again" aria-label="Refresh statistics">
+          <RefreshCw classList={{ spin: statistics.loading() }} />
+        </button>
+        <span class="hint">Esc for the Tabs</span>
+      </div>
+      <div class="statistics-body">
+        <Show when={statistics.error()}>
+          <p class="error small dashboard-error">{statistics.error().replace(PR_HINT, GH_HINT)}</p>
+        </Show>
+        <Show
+          when={statistics.figures()}
+          fallback={
+            <Show when={!statistics.error()}>
+              <p class="dashboard-line muted">
+                <Loader class="spin" />
+                Asking GitHub…
+              </p>
+            </Show>
+          }
+        >
+          {(figures) => <StatisticsCards figures={figures()} now={now()} />}
+        </Show>
+      </div>
+    </section>
+  );
+}
 
 /** A length of time as the cards say it: "45 min", "3 h", "2 d". */
 export function duration(seconds: number): string {
