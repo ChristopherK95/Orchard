@@ -36,6 +36,7 @@ use crate::git_status::{
     BaseChange, BaseChanges, ChangeKind, CommitOutcome, CommitRequest, GitStatus, PullOutcome,
     PushOutcome,
 };
+use crate::merge_conflicts::MergeConflicts;
 use crate::merged::{self, MergeState, ReviewRow, WorktreeMerge};
 use crate::names;
 use crate::permissions;
@@ -4287,6 +4288,53 @@ impl Core {
             .await
             .and_then(|out| crate::code_rabbit::open_comments(number, &out))
             .map_err(|e| CoreError::Git(not_about_creating(e)))
+    }
+
+    /// Where PR `number` conflicts with the branch it goes into: both branches fetched from origin
+    /// and merged with `git merge-tree` (no Worktree touched), each conflicted file with git's
+    /// messages about it.
+    pub async fn merge_conflicts(
+        &self,
+        worktree: &Path,
+        number: u64,
+    ) -> Result<MergeConflicts, CoreError> {
+        use crate::pull_request::{gh_text, not_about_creating};
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Viewed {
+            title: String,
+            head_ref_name: String,
+            base_ref_name: String,
+        }
+        let worktree = self.known_worktree(worktree)?;
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let pr = number.to_string();
+        let fields = ["pr", "view", &pr, "--json", "title,headRefName,baseRefName"];
+        let viewed: Viewed = gh_text(&gh, &worktree, &fields)
+            .await
+            .and_then(|out| {
+                serde_json::from_str(out.trim())
+                    .map_err(|e| format!("gh said something unexpected: {e}"))
+            })
+            .map_err(|e| CoreError::Git(not_about_creating(e)))?;
+        let (head, base) = (viewed.head_ref_name, viewed.base_ref_name);
+        git::fetch_branches(&worktree, &[&head, &base])
+            .await
+            .map_err(CoreError::Git)?;
+        let merged = git::merge_tree(
+            &worktree,
+            &format!("origin/{head}"),
+            &format!("origin/{base}"),
+        )
+        .await
+        .map_err(CoreError::Git)?;
+        Ok(MergeConflicts {
+            number,
+            title: viewed.title,
+            head,
+            base,
+            files: crate::merge_conflicts::conflicted_files(&merged),
+        })
     }
 
     /// "Push", for a branch whose PR is already open: commits whatever isn't committed yet with

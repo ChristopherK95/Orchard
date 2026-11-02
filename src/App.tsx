@@ -1414,6 +1414,7 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onAllPrs={() => openBoard("prs")}
           onStartSession={(pr, prompt) => void startOnPr(pr, prompt)}
           codeRabbitComments={(pr) => core.codeRabbitComments(mainWorktree(), pr.number)}
+          mergeConflicts={(pr) => core.mergeConflicts(mainWorktree(), pr.number)}
           starts={prStarts}
         />
       </Show>
