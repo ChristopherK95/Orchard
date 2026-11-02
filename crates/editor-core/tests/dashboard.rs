@@ -352,3 +352,46 @@ esac"#,
     assert_eq!(prs.len(), 1);
     assert_eq!(prs[0].code_rabbit_comments, 0);
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_prs_merge_conflicts_are_worked_out_from_origins_branches() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    // Pushed after the Workspace's clone was made: only a fetch brings them.
+    let seed = setup.root().join("seed");
+    commit_file(&seed, "x.txt", "start\n");
+    git(&seed, &["push", "--quiet", "origin", "main"]);
+    git(&seed, &["checkout", "--quiet", "-b", "fix"]);
+    commit_file(&seed, "x.txt", "fixed\n");
+    git(&seed, &["push", "--quiet", "origin", "fix"]);
+    git(&seed, &["checkout", "--quiet", "-b", "clean", "main"]);
+    commit_file(&seed, "y.txt", "new\n");
+    git(&seed, &["push", "--quiet", "origin", "clean"]);
+    git(&seed, &["checkout", "--quiet", "main"]);
+    commit_file(&seed, "x.txt", "changed on main\n");
+    git(&seed, &["push", "--quiet", "origin", "main"]);
+    let gh = FakeGh::new(
+        r#"case "$*" in
+"pr view 12"*) echo '{"title":"Fix the parser","headRefName":"fix","baseRefName":"main"}' ;;
+"pr view 13"*) echo '{"title":"Add y","headRefName":"clean","baseRefName":"main"}' ;;
+esac"#,
+    );
+    let core = core_with_gh(&fake, &gh);
+    let root = core.open_workspace(&setup.repo()).await.unwrap().root;
+
+    let conflicts = core.merge_conflicts(&root, 12).await.unwrap();
+    assert_eq!(
+        (conflicts.head.as_str(), conflicts.base.as_str()),
+        ("fix", "main")
+    );
+    assert_eq!(conflicts.files.len(), 1, "{conflicts:?}");
+    assert_eq!(conflicts.files[0].path, "x.txt");
+    assert_eq!(conflicts.files[0].kind.as_deref(), Some("content"));
+    let prompt = editor_core::merge_conflict_prompt(&conflicts);
+    assert!(prompt.contains("git merge origin/main"), "{prompt}");
+    assert!(prompt.contains("## x.txt"), "{prompt}");
+
+    let clean = core.merge_conflicts(&root, 13).await.unwrap();
+    assert_eq!(clean.files, []);
+}

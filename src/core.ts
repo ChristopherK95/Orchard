@@ -616,6 +616,27 @@ export interface CodeRabbitFeedback {
   comments: CodeRabbitComment[];
 }
 
+/** Where one PR conflicts with the branch it goes into. */
+export interface MergeConflicts {
+  number: number;
+  title: string;
+  /** The PR's branch. */
+  head: string;
+  /** The branch it goes into. */
+  base: string;
+  /** Empty when the two merge cleanly now (GitHub's answer may lag behind a push). */
+  files: ConflictedFile[];
+}
+
+/** One file that merging the base branch in would leave conflicted. */
+export interface ConflictedFile {
+  path: string;
+  /** git's kind of conflict ("content", "modify/delete", …), if it named one. */
+  kind: string | null;
+  /** What git said about it. */
+  messages: string[];
+}
+
 /** One review thread CodeRabbit started that isn't resolved. */
 export interface CodeRabbitComment {
   /** The thread's first comment's id (what a reply on GitHub goes to). */
@@ -1226,6 +1247,10 @@ export const core = {
   codeRabbitComments: (worktree: string, number: number) => invoke<CodeRabbitFeedback>("code_rabbit_comments", { worktree, number }),
   /** The prompt that starts an Agent session on the CodeRabbit comments chosen (by id). */
   codeRabbitPrompt: (feedback: CodeRabbitFeedback, chosen: number[]) => invoke<string>("code_rabbit_prompt", { feedback, chosen }),
+  /** Where PR `number` conflicts with the branch it goes into (both fetched from origin and merged without touching a Worktree). */
+  mergeConflicts: (worktree: string, number: number) => invoke<MergeConflicts>("merge_conflicts", { worktree, number }),
+  /** The prompt that starts an Agent session to merge a PR's base branch in and resolve its conflicts. */
+  mergeConflictPrompt: (conflicts: MergeConflicts) => invoke<string>("merge_conflict_prompt", { conflicts }),
   /** Opens PR `number`'s Code review, making its Review Worktree the first time. */
   openCodeReview: (number: number) => invoke<CodeReview>("open_code_review", { number }),
   /** One file's diff in the Code review: the PR's, or only what changed since the last review. */

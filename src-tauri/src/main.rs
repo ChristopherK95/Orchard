@@ -1214,6 +1214,24 @@ async fn code_rabbit_comments(
         .map_err(|e| e.to_string())
 }
 
+/// Where PR `number` conflicts with the branch it goes into.
+#[tauri::command]
+async fn merge_conflicts(
+    core: State<'_, Core>,
+    worktree: String,
+    number: u64,
+) -> CommandResult<editor_core::MergeConflicts> {
+    core.merge_conflicts(worktree.as_ref(), number)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The prompt that starts an Agent session to resolve a PR's merge conflicts.
+#[tauri::command]
+fn merge_conflict_prompt(conflicts: editor_core::MergeConflicts) -> String {
+    editor_core::merge_conflict_prompt(&conflicts)
+}
+
 /// The prompt that starts an Agent session on the CodeRabbit comments chosen.
 #[tauri::command]
 fn code_rabbit_prompt(feedback: editor_core::CodeRabbitFeedback, chosen: Vec<u64>) -> String {
@@ -1908,6 +1926,8 @@ fn main() {
             review_feedback_prompt,
             code_rabbit_comments,
             code_rabbit_prompt,
+            merge_conflicts,
+            merge_conflict_prompt,
             rerun_checks,
             push_to_pull_request,
             open_code_review,

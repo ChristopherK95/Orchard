@@ -1273,6 +1273,40 @@ pub(crate) async fn fetch(worktree: &Path) -> Result<(), String> {
         .map(drop)
 }
 
+/// Fetches `branches` from `origin` into their remote-tracking branches (`origin/<branch>`).
+pub(crate) async fn fetch_branches(repo: &Path, branches: &[&str]) -> Result<(), String> {
+    let refspecs: Vec<String> = branches
+        .iter()
+        .map(|b| format!("+refs/heads/{b}:refs/remotes/origin/{b}"))
+        .collect();
+    let mut args = vec!["fetch", "--quiet", "origin"];
+    args.extend(refspecs.iter().map(String::as_str));
+    run_remote(repo, &args, None).await.map(drop)
+}
+
+/// Merges `theirs` into `ours` without touching any Worktree or ref (`git merge-tree`), returning
+/// its `-z --name-only` output: the tree, the conflicted paths and git's messages. git exits 1 when
+/// there are conflicts, which isn't a failure here.
+pub(crate) async fn merge_tree(repo: &Path, ours: &str, theirs: &str) -> Result<String, String> {
+    let args = [
+        "merge-tree",
+        "--write-tree",
+        "-z",
+        "--name-only",
+        ours,
+        theirs,
+    ];
+    let out = git(repo)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| format!("could not run git: {e}"))?;
+    match out.status.code() {
+        Some(0 | 1) => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
+        _ => Err(failure(&out)),
+    }
+}
+
 /// The checked-out branch, if HEAD isn't detached.
 pub(crate) async fn current_branch(worktree: &Path) -> Option<String> {
     let out = output(worktree, &["symbolic-ref", "--quiet", "--short", "HEAD"]).await?;

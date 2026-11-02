@@ -18,6 +18,7 @@ mod files;
 mod fonts;
 mod git;
 mod git_status;
+mod merge_conflicts;
 mod merged;
 mod names;
 mod node;
@@ -60,6 +61,7 @@ pub use crate::git_status::{
     BaseChange, BaseChanges, ChangeKind, CommitOutcome, CommitRequest, GitFile, GitOperation,
     GitStatus, LastCommit, PullOutcome, PushOutcome,
 };
+pub use crate::merge_conflicts::{merge_conflict_prompt, ConflictedFile, MergeConflicts};
 pub use crate::merged::{MergeState, ReviewRow, WorktreeMerge};
 pub use crate::node::NodeInstall;
 pub use crate::prerequisites::{check_prerequisites, MissingPrerequisite, ToolCommand, Tools};

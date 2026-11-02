@@ -6,13 +6,15 @@
 // window's width: one column when narrow (statistics last), and on a very wide one the right side
 // splits in two, the sessions, reviews and PRs beside the Worktrees. Each item leads to where it lives (the Workspace view
 // decides how); a PR with failing checks or review feedback can start an Agent session on it, and
-// one CodeRabbit still asks changes of shows how many, and opens them to start one on. The
+// one CodeRabbit still asks changes of shows how many, and opens them to start one on; one that
+// conflicts with the branch it goes into opens where, to start one resolving it. The
 // GitHub sections say when they were last read, and say so inline when `gh` can't be used, while
 // the local ones work as ever.
 import { createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
 import { ago } from "./Chat";
 import { CodeRabbitComments } from "./CodeRabbitComments";
-import type { AttentionReason, Check, CodeRabbitFeedback, MergeState, MyPullRequest, PullRequestStage, ReviewRequest, SessionInfo, StatisticsDays, WorktreeAttention, WorktreeMerge } from "./core";
+import { MergeConflicts as MergeConflictsDialog } from "./MergeConflicts";
+import type { AttentionReason, Check, CodeRabbitFeedback, MergeConflicts, MergeState, MyPullRequest, PullRequestStage, ReviewRequest, SessionInfo, StatisticsDays, WorktreeAttention, WorktreeMerge } from "./core";
 import { attention, cleanUp, reviewRequests, statistics } from "./dashboardData";
 import {
   Bell,
@@ -24,6 +26,7 @@ import {
   Clock,
   Eraser,
   GitBranch,
+  GitMerge,
   GitPullRequestArrow,
   GitPullRequestDraft,
   Loader,
@@ -110,6 +113,8 @@ export function Dashboard(props: {
   onStartSession: (pr: MyPullRequest, prompt?: Promise<string>) => void;
   /** CodeRabbit's open review comments on the PR. */
   codeRabbitComments: (pr: MyPullRequest) => Promise<CodeRabbitFeedback>;
+  /** Where the PR conflicts with the branch it goes into. */
+  mergeConflicts: (pr: MyPullRequest) => Promise<MergeConflicts>;
   /** Where each PR's start stands, by number (kept outside the rows, which each refresh makes anew). */
   starts: Record<number, PrStart | undefined>;
 }) {
@@ -131,6 +136,8 @@ export function Dashboard(props: {
 
   /** The PR whose CodeRabbit comments are shown. */
   const [codeRabbitOf, setCodeRabbitOf] = createSignal<MyPullRequest | null>(null);
+  /** The PR whose merge conflicts are shown. */
+  const [conflictsOf, setConflictsOf] = createSignal<MyPullRequest | null>(null);
 
   // Typing goes here once it's shown, not to the composer hidden under it.
   let root!: HTMLElement;
@@ -244,7 +251,7 @@ export function Dashboard(props: {
                       {group.title}
                       <span class="badge">{here().length}</span>
                     </div>
-                    <For each={here()}>{(pr) => <PrRow pr={pr} worktree={worktreeOn(pr.head)} start={props.starts[pr.number]} onOpen={() => props.onPr(pr)} onStartSession={() => props.onStartSession(pr)} onCodeRabbit={() => setCodeRabbitOf(pr)} />}</For>
+                    <For each={here()}>{(pr) => <PrRow pr={pr} worktree={worktreeOn(pr.head)} start={props.starts[pr.number]} onOpen={() => props.onPr(pr)} onStartSession={() => props.onStartSession(pr)} onCodeRabbit={() => setCodeRabbitOf(pr)} onConflicts={() => setConflictsOf(pr)} />}</For>
                   </Show>
                 );
               }}
@@ -295,6 +302,9 @@ export function Dashboard(props: {
         {(pr) => (
           <CodeRabbitComments pr={pr()} load={() => props.codeRabbitComments(pr())} onStart={(prompt) => props.onStartSession(pr(), prompt)} onClose={() => setCodeRabbitOf(null)} />
         )}
+      </Show>
+      <Show when={conflictsOf()}>
+        {(pr) => <MergeConflictsDialog pr={pr()} load={() => props.mergeConflicts(pr())} onStart={(prompt) => props.onStartSession(pr(), prompt)} onClose={() => setConflictsOf(null)} />}
       </Show>
     </section>
   );
@@ -390,8 +400,8 @@ function Row(props: { colour?: string; title: string; onOpen: () => void; childr
 }
 
 /** One of the user's PRs; one with failing checks or changes requested can start an Agent session on
- *  it, and one CodeRabbit still asks changes of opens its comments. */
-function PrRow(props: { pr: MyPullRequest; worktree?: WorktreeTab; start?: PrStart; onOpen: () => void; onStartSession: () => void; onCodeRabbit: () => void }) {
+ *  it, one CodeRabbit still asks changes of opens its comments, and one that conflicts opens where. */
+function PrRow(props: { pr: MyPullRequest; worktree?: WorktreeTab; start?: PrStart; onOpen: () => void; onStartSession: () => void; onCodeRabbit: () => void; onConflicts: () => void }) {
   const p = () => props.pr;
   const starting = () => !!props.start?.starting;
   const failed = () => props.start?.error ?? "";
@@ -402,12 +412,18 @@ function PrRow(props: { pr: MyPullRequest; worktree?: WorktreeTab; start?: PrSta
       onOpen={props.onOpen}
       title={`#${p().number} ${p().title}`}
       below={
-        <Show when={canStart() || p().codeRabbitComments || failed()}>
+        <Show when={canStart() || p().codeRabbitComments || p().conflicts || failed()}>
           <div class="dashboard-row-actions" onClick={(e) => e.stopPropagation()}>
             <Show when={p().codeRabbitComments}>
               <button onClick={() => props.onCodeRabbit()} disabled={starting()} title="What CodeRabbit still asks to change, to start an Agent session on">
                 <Bot />
                 CodeRabbit comments ({p().codeRabbitComments})
+              </button>
+            </Show>
+            <Show when={p().conflicts}>
+              <button onClick={() => props.onConflicts()} disabled={starting()} title="Which files conflict with the branch it goes into, to start an Agent session resolving them">
+                <GitMerge />
+                Merge conflicts
               </button>
             </Show>
             <Show when={canStart()}>
