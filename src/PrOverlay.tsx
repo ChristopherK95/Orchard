@@ -6,7 +6,7 @@
 // of the user's PRs (any of the repo's, by number). Comments can be narrowed to the people in some
 // of the organisation's teams (a sub-team counts as its top team).
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { createContext, createEffect, createMemo, createSignal, For, type JSX, Match, on, onCleanup, onMount, Show, Switch, useContext } from "solid-js";
+import { children, createContext, createEffect, createMemo, createSignal, For, type JSX, Match, on, onCleanup, onMount, Show, Switch, useContext } from "solid-js";
 import { createStore } from "solid-js/store";
 import { ago } from "./Chat";
 import { core, type Check, type CodeThread, type PullRequestComment, type PullRequestDetails, type Reviewer, type ReviewerState } from "./core";
@@ -455,12 +455,12 @@ const reviewEntries = (pr: PullRequestDetails) => pr.reviews.filter((r) => r.sta
 function Conversation(props: { pr: PullRequestDetails; onOpen: (url: string) => void }) {
   type Entry =
     | { kind: "comment"; at: string; comment: PullRequestComment }
-    | { kind: "review"; at: string; author: string; state: string; body: string };
+    | { kind: "review"; at: string; author: string; state: string; body: string; id: number | null };
   const teams = useContext(TeamsContext);
   const entries = createMemo(() => {
     const all: Entry[] = [
       ...props.pr.comments.map((comment): Entry => ({ kind: "comment", at: comment.createdAt, comment })),
-      ...reviewEntries(props.pr).map((r): Entry => ({ kind: "review", at: r.submittedAt, author: r.author, state: r.state, body: r.body })),
+      ...reviewEntries(props.pr).map((r): Entry => ({ kind: "review", at: r.submittedAt, author: r.author, state: r.state, body: r.body, id: r.id })),
     ];
     return all.filter((e) => teams.shown(e.kind === "comment" ? e.comment.author : e.author)).sort((a, b) => a.at.localeCompare(b.at));
   });
@@ -499,6 +499,7 @@ function Conversation(props: { pr: PullRequestDetails; onOpen: (url: string) => 
                     <Show when={review.body.trim()}>
                       <div class="markdown" innerHTML={markdown(review.body)} />
                     </Show>
+                    <ReviewThreads pr={props.pr} review={review.id} onOpen={props.onOpen} />
                   </Post>
                 );
               }}
@@ -515,6 +516,8 @@ function Conversation(props: { pr: PullRequestDetails; onOpen: (url: string) => 
 
 /** One entry in the conversation: who, what they did and when, then what they said. */
 function Post(props: { author: string; what: string; at: string; url?: string | null; kind?: string; onOpen?: (url: string) => void; children?: JSX.Element }) {
+  // (Resolved, so a review that said nothing has no empty body.)
+  const body = children(() => props.children);
   return (
     <article class={`pr-post ${props.kind ?? ""}`}>
       <header>
@@ -531,8 +534,8 @@ function Post(props: { author: string; what: string; at: string; url?: string | 
           </button>
         </Show>
       </header>
-      <Show when={props.children}>
-        <div class="pr-post-body">{props.children}</div>
+      <Show when={body.toArray().some(Boolean)}>
+        <div class="pr-post-body">{body()}</div>
       </Show>
     </article>
   );
@@ -551,6 +554,44 @@ function ReviewMark(props: { kind?: string }) {
         <GitPullRequestArrow class="pr-post-mark" />
       </Match>
     </Switch>
+  );
+}
+
+/** A review's comments on the code, as GitHub shows them under it: each under the lines it's about. */
+function ReviewThreads(props: { pr: PullRequestDetails; review: number | null; onOpen: (url: string) => void }) {
+  const threads = createMemo(() =>
+    props.review === null
+      ? []
+      : props.pr.threads
+          .map((t) => ({ thread: t, comments: t.comments.filter((c) => c.reviewId === props.review) }))
+          .filter((t) => t.comments.length),
+  );
+  return (
+    <For each={threads()}>
+      {({ thread, comments }) => (
+        <div class="pr-thread" classList={{ outdated: thread.line === null }}>
+          <div class="pr-thread-head">
+            <span class="mono ellipsis">{thread.path}</span>
+            <span class="mono muted">line {thread.line ?? thread.originalLine ?? "?"}</span>
+            <Show when={thread.line === null}>
+              <span class="pr-outdated">Outdated</span>
+            </Show>
+            <span class="grow" />
+            <button class="ghost icon" onClick={() => props.onOpen(thread.url)} title="Open the thread on GitHub" aria-label="Open on GitHub">
+              <ExternalLink />
+            </button>
+          </div>
+          <Hunk text={thread.diffHunk} />
+          <For each={comments}>
+            {(c) => (
+              <div class="pr-thread-comment">
+                <div class="markdown" innerHTML={markdown(c.body)} />
+              </div>
+            )}
+          </For>
+        </div>
+      )}
+    </For>
   );
 }
 

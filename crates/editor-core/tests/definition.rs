@@ -28,8 +28,16 @@ async fn an_imported_name_leads_to_its_line_in_the_file_it_comes_from() {
     let repo = git_repo();
     let app = "import { parseConfig } from \"./config\";\nparseConfig();\n";
     write(repo.path(), "src/app.ts", app);
-    write(repo.path(), "src/config.ts", "// config\nexport function parseConfig() {}\n");
-    write(repo.path(), "src/other.ts", "export function parseConfig() {}\n");
+    write(
+        repo.path(),
+        "src/config.ts",
+        "// config\nexport function parseConfig() {}\n",
+    );
+    write(
+        repo.path(),
+        "src/other.ts",
+        "export function parseConfig() {}\n",
+    );
     let (_fake, core, root) = workspace(repo.path()).await;
 
     let found = core

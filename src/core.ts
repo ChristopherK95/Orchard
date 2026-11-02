@@ -761,9 +761,13 @@ export interface PullRequestComment {
   url: string | null;
   edited: boolean;
   minimized: boolean;
+  /** The review it was made in (its `SubmittedReview.id`), for a comment on code. */
+  reviewId: number | null;
 }
 
 export interface SubmittedReview {
+  /** Its id on GitHub (what its comments on code name); null when it couldn't be read. */
+  id: number | null;
   author: string;
   state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
   body: string;

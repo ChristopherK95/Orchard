@@ -395,6 +395,8 @@ pub(crate) fn titled_reviews(stdout: &str) -> Result<(String, Vec<SubmittedRevie
         .reviews
         .into_iter()
         .map(|r| SubmittedReview {
+            id: None,
+            node_id: String::new(),
             author: r
                 .author
                 .and_then(|a| a.login)
@@ -623,6 +625,8 @@ mod tests {
     #[test]
     fn feedback_prompt_has_change_requests_and_unresolved_threads_only() {
         let review = |author: &str, state: &str, body: &str, at: &str| SubmittedReview {
+            id: None,
+            node_id: String::new(),
             author: author.into(),
             state: state.into(),
             body: body.into(),

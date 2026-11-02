@@ -221,6 +221,7 @@ pub(crate) fn posted_reply(printed: &str) -> Result<PullRequestComment, String> 
         url: posted.html_url,
         edited: false,
         minimized: false,
+        review_id: None,
     })
 }
 
