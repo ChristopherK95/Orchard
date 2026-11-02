@@ -649,11 +649,18 @@ pub struct PullRequestComment {
     pub edited: bool,
     /// Hidden on GitHub (as off-topic, outdated, …).
     pub minimized: bool,
+    /// The review it was made in (its `SubmittedReview::id`), for a comment on code.
+    pub review_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmittedReview {
+    /// Its id on GitHub (what its comments on code name); None when it couldn't be read.
+    pub id: Option<u64>,
+    /// Its node id, which `gh pr view` gives in its place.
+    #[serde(skip)]
+    pub(crate) node_id: String,
     pub author: String,
     /// `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED` or `DISMISSED`.
     pub state: String,
@@ -713,7 +720,11 @@ pub struct PullRequestCommit {
 const DETAIL_FIELDS: &str = "id,headRefOid,baseRefOid,number,title,url,state,isDraft,body,author,createdAt,updatedAt,mergedAt,mergedBy,closedAt,headRefName,baseRefName,additions,deletions,changedFiles,reviewDecision,mergeable,mergeStateStatus,labels,milestone,assignees,reviewRequests,latestReviews,reviews,statusCheckRollup,comments,commits";
 
 /// The comments on the PR's code, one JSON object a line (`gh api --paginate` with this `--jq`).
-const THREAD_JQ: &str = ".[] | {id, in_reply_to_id, path, line, original_line, start_line, side, position, html_url, diff_hunk, body, created_at, user: .user.login}";
+const THREAD_JQ: &str = ".[] | {id, in_reply_to_id, pull_request_review_id, path, line, original_line, start_line, side, position, html_url, diff_hunk, body, created_at, user: .user.login}";
+
+/// The PR's reviews, `<node id>\t<id>` a line: `gh pr view` only gives the node id, the comments
+/// on its code only the other.
+const REVIEW_IDS_JQ: &str = r#".[] | "\(.node_id)\t\(.id)""#;
 
 /// The PR `which` names (`gh pr view`: a number, or a branch's open PR, else its latest), if there
 /// is one, with the comments on its code (`gh api`).
@@ -741,11 +752,18 @@ pub(crate) async fn details_for(
     let comments_of = format!("repos/{{owner}}/{{repo}}/pulls/{}/comments", details.number);
     let args = ["api", &comments_of, "--paginate", "--jq", THREAD_JQ];
     let viewer_args = ["api", "user", "--jq", ".login"];
-    let (threads_read, teams_read, viewer) = tokio::join!(
+    let reviews_of = format!("repos/{{owner}}/{{repo}}/pulls/{}/reviews", details.number);
+    let review_args = ["api", &reviews_of, "--paginate", "--jq", REVIEW_IDS_JQ];
+    let (threads_read, teams_read, viewer, review_ids) = tokio::join!(
         gh_text(gh, worktree, &args),
         teams_for(gh, worktree),
-        gh_text(gh, worktree, &viewer_args)
+        gh_text(gh, worktree, &viewer_args),
+        gh_text(gh, worktree, &review_args)
     );
+    // (Without them, a review only lacks its comments on the code in the conversation.)
+    if let Ok(ids) = review_ids {
+        apply_review_ids(&mut details.reviews, &ids);
+    }
     // (Not knowing who the user is only means no Code review is offered.)
     if let Ok(viewer) = viewer {
         reviewers.apply_to(&mut details, viewer.trim());
@@ -905,6 +923,9 @@ impl Actor {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GhReview {
+    /// Its node id.
+    #[serde(default)]
+    id: String,
     #[serde(default)]
     author: Actor,
     state: String,
@@ -1245,11 +1266,14 @@ pub(crate) fn viewed(stdout: &str) -> Result<(PullRequestDetails, ViewerReviewer
                 url: c.url,
                 edited: c.includes_created_edit,
                 minimized: c.is_minimized,
+                review_id: None,
             })
             .collect(),
         reviews: reviews
             .into_iter()
             .map(|r| SubmittedReview {
+                id: None,
+                node_id: r.id,
                 author: r.author.login(),
                 state: r.state,
                 body: r.body,
@@ -1279,6 +1303,20 @@ pub(crate) fn viewed(stdout: &str) -> Result<(PullRequestDetails, ViewerReviewer
     Ok((details, viewer))
 }
 
+/// Gives each review its id, from `REVIEW_IDS_JQ`'s lines.
+fn apply_review_ids(reviews: &mut [SubmittedReview], lines: &str) {
+    let ids: std::collections::HashMap<&str, u64> = lines
+        .lines()
+        .filter_map(|line| {
+            let (node, id) = line.split_once('\t')?;
+            Some((node, id.trim().parse().ok()?))
+        })
+        .collect();
+    for r in reviews {
+        r.id = ids.get(r.node_id.as_str()).copied();
+    }
+}
+
 /// Reads the comments on the PR's code (`THREAD_JQ`'s lines) into threads: each first comment
 /// with its replies, oldest first.
 fn threads(stdout: &str) -> Result<Vec<CodeThread>, String> {
@@ -1286,6 +1324,8 @@ fn threads(stdout: &str) -> Result<Vec<CodeThread>, String> {
     struct Line {
         id: u64,
         in_reply_to_id: Option<u64>,
+        #[serde(default)]
+        pull_request_review_id: Option<u64>,
         path: String,
         line: Option<u64>,
         original_line: Option<u64>,
@@ -1321,6 +1361,7 @@ fn threads(stdout: &str) -> Result<Vec<CodeThread>, String> {
             url: Some(c.html_url.clone()),
             edited: false,
             minimized: false,
+            review_id: c.pull_request_review_id,
         };
         threads.push((
             c.id,
@@ -1355,6 +1396,7 @@ fn threads(stdout: &str) -> Result<Vec<CodeThread>, String> {
                 url: Some(c.html_url),
                 edited: false,
                 minimized: false,
+                review_id: c.pull_request_review_id,
             });
         }
     }

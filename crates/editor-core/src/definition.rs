@@ -137,7 +137,11 @@ impl Ctx<'_> {
             onward.push((import.module, import.name));
         }
         if self.lang == Lang::Ts {
-            onward.extend(star_exports(&text).into_iter().map(|m| (m, symbol.to_owned())));
+            onward.extend(
+                star_exports(&text)
+                    .into_iter()
+                    .map(|m| (m, symbol.to_owned())),
+            );
         }
         let mut found = Vec::new();
         for (module, name) in onward {
@@ -215,7 +219,13 @@ impl Ctx<'_> {
         }
         wanted
             .iter()
-            .map(|w| if dir.is_empty() { w.clone() } else { format!("{dir}/{w}") })
+            .map(|w| {
+                if dir.is_empty() {
+                    w.clone()
+                } else {
+                    format!("{dir}/{w}")
+                }
+            })
             .filter(|c| self.existing.contains(c.as_str()))
             .collect()
     }
@@ -266,8 +276,12 @@ fn is_ident(c: char) -> bool {
 fn is_keyword(lang: Lang, word: &str) -> bool {
     let common = ["if", "else", "for", "while", "return", "match", "in", "as"];
     let own: &[&str] = match lang {
-        Lang::Ts => &["function", "class", "const", "let", "var", "switch", "catch", "new"],
-        Lang::Rust => &["fn", "let", "mut", "struct", "enum", "impl", "use", "pub", "loop"],
+        Lang::Ts => &[
+            "function", "class", "const", "let", "var", "switch", "catch", "new",
+        ],
+        Lang::Rust => &[
+            "fn", "let", "mut", "struct", "enum", "impl", "use", "pub", "loop",
+        ],
         Lang::Python => &["def", "class", "import", "from", "lambda", "with", "try"],
     };
     common.contains(&word) || own.contains(&word)
@@ -533,7 +547,17 @@ fn defines(lang: Lang, line: &str, symbol: &str) -> bool {
             // A method: `async name(` / `private static name<T>(`, its signature ending in `{`.
             let s = strip_words(
                 s,
-                &["public", "private", "protected", "static", "readonly", "override", "get", "set", "async"],
+                &[
+                    "public",
+                    "private",
+                    "protected",
+                    "static",
+                    "readonly",
+                    "override",
+                    "get",
+                    "set",
+                    "async",
+                ],
             );
             let name = ident_at(s);
             indent > 0
@@ -550,11 +574,16 @@ fn defines(lang: Lang, line: &str, symbol: &str) -> bool {
                     None => rest.trim_start(),
                 };
             }
-            let s = strip_words(s, &["default", "async", "unsafe", "const", "extern", "safe"]);
+            let s = strip_words(
+                s,
+                &["default", "async", "unsafe", "const", "extern", "safe"],
+            );
             if let Some(rest) = s.strip_prefix("macro_rules!") {
                 return ident_at(rest.trim_start()) == symbol;
             }
-            let keywords = ["fn", "struct", "enum", "trait", "type", "const", "static", "mod", "union"];
+            let keywords = [
+                "fn", "struct", "enum", "trait", "type", "const", "static", "mod", "union",
+            ];
             keywords.iter().any(|kw| {
                 s.strip_prefix(kw)
                     .and_then(|r| r.strip_prefix(' '))
@@ -607,11 +636,20 @@ mod tests {
     #[test]
     fn a_typescript_import_leads_to_its_file_and_line() {
         let files = [
-            ("src/app.ts", "import { parseConfig as parse } from \"./config\";\nparse();"),
-            ("src/config.ts", "// config\nexport function parseConfig() {}\n"),
+            (
+                "src/app.ts",
+                "import { parseConfig as parse } from \"./config\";\nparse();",
+            ),
+            (
+                "src/config.ts",
+                "// config\nexport function parseConfig() {}\n",
+            ),
             ("src/other.ts", "export function parseConfig() {}\n"),
         ];
-        assert_eq!(lookup_in(&files, "src/app.ts", "parse"), at("src/config.ts", 2));
+        assert_eq!(
+            lookup_in(&files, "src/app.ts", "parse"),
+            at("src/config.ts", 2)
+        );
     }
 
     #[test]
@@ -621,28 +659,46 @@ mod tests {
             ("a/lib/index.ts", "export * from \"./widget\";\n"),
             ("a/lib/widget.ts", "\nexport const widget = 1;\n"),
         ];
-        assert_eq!(lookup_in(&files, "a/main.ts", "widget"), at("a/lib/widget.ts", 2));
+        assert_eq!(
+            lookup_in(&files, "a/main.ts", "widget"),
+            at("a/lib/widget.ts", 2)
+        );
     }
 
     #[test]
     fn rust_use_paths_lead_to_module_files() {
         let files = [
-            ("src/main.rs", "use crate::config::{load, Other};\nfn main() { load() }"),
+            (
+                "src/main.rs",
+                "use crate::config::{load, Other};\nfn main() { load() }",
+            ),
             ("src/config.rs", "pub fn load() {}\n"),
             ("src/other/mod.rs", "pub fn load() {}\n"),
         ];
-        assert_eq!(lookup_in(&files, "src/main.rs", "load"), at("src/config.rs", 1));
+        assert_eq!(
+            lookup_in(&files, "src/main.rs", "load"),
+            at("src/config.rs", 1)
+        );
     }
 
     #[test]
     fn python_relative_and_package_imports() {
         let files = [
-            ("pkg/app.py", "from .config import (\n    parse_config,\n)\n"),
+            (
+                "pkg/app.py",
+                "from .config import (\n    parse_config,\n)\n",
+            ),
             ("pkg/config.py", "X = 1\n\ndef parse_config():\n    pass\n"),
             ("main.py", "from pkg.config import parse_config\n"),
         ];
-        assert_eq!(lookup_in(&files, "pkg/app.py", "parse_config"), at("pkg/config.py", 3));
-        assert_eq!(lookup_in(&files, "main.py", "parse_config"), at("pkg/config.py", 3));
+        assert_eq!(
+            lookup_in(&files, "pkg/app.py", "parse_config"),
+            at("pkg/config.py", 3)
+        );
+        assert_eq!(
+            lookup_in(&files, "main.py", "parse_config"),
+            at("pkg/config.py", 3)
+        );
     }
 
     #[test]
@@ -655,7 +711,10 @@ mod tests {
     fn a_method_falls_back_to_a_search_of_the_worktree() {
         let files = [
             ("src/a.rs", "fn main() { thing.run(); }"),
-            ("src/b.rs", "impl Thing {\n    pub async fn run(&self) {}\n}\n"),
+            (
+                "src/b.rs",
+                "impl Thing {\n    pub async fn run(&self) {}\n}\n",
+            ),
             ("src/c.ts", "function run() {}"),
         ];
         assert_eq!(lookup_in(&files, "src/a.rs", "run"), at("src/b.rs", 2));

@@ -1642,6 +1642,10 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .pr-file h4 { margin: 0 0 8px; font-size: 12.5px; color: var(--fg-1); }
 .pr-thread { margin-bottom: 10px; border-radius: var(--r-lg); background: var(--card); overflow: hidden; }
 .pr-thread.outdated { opacity: 0.8; }
+/* A review's own comments on the code, inside its post: edged, as they share its card colour. */
+.pr-post-body .pr-thread { margin: 12px 0 0; border: 1px solid var(--line); }
+.pr-post-body .pr-thread:first-child { margin-top: 0; }
+.pr-post-body .pr-thread-head { font-size: 12.5px; }
 .pr-thread-head { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 6px 0 12px; background: color-mix(in srgb, var(--fg-1) 4%, var(--card)); }
 .pr-thread-head .icon { min-height: 24px; width: 24px; }
 .pr-outdated { padding: 1px 7px; border-radius: 999px; background: var(--bg-4); font-size: 11px; color: var(--fg-2); }
