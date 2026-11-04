@@ -36,6 +36,7 @@ import {
   TriangleAlert,
 } from "./icons";
 import { myPrs } from "./PrBoard";
+import { withCountdown } from "./rateLimit";
 import { StateDot } from "./StateDot";
 import { worktreeColour, worktreeLabel, type WorktreeTab } from "./Worktrees";
 
@@ -289,7 +290,7 @@ function Section(props: {
   action?: JSX.Element;
   children: JSX.Element;
 }) {
-  const error = () => props.github?.error || props.error || "";
+  const error = () => (props.github?.error ? withCountdown(props.github.error) : props.error) || "";
   const asking = () => !!props.github?.loading && !props.github.refreshed;
   return (
     <div class="dashboard-section">

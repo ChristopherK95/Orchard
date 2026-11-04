@@ -283,35 +283,28 @@ pub enum PullRequestStage {
 /// The `gh pr list` fields `MyPullRequest` is read from.
 const MINE_FIELDS: &str = "number,title,url,state,isDraft,headRefName,baseRefName,reviewDecision,latestReviews,reviewRequests,statusCheckRollup,mergeable,updatedAt,mergedAt,closedAt";
 
+/// The fields of the merged or closed ones: a done PR's card shows neither checks nor reviews, and
+/// those are what make `gh pr list` costly against GitHub's rate limit.
+const DONE_FIELDS: &str =
+    "number,title,url,state,isDraft,headRefName,baseRefName,updatedAt,mergedAt,closedAt";
+
 /// How many of the user's merged or closed PRs are listed (the latest).
 const MINE_DONE: &str = "20";
 
-/// The PRs whoever `gh` is logged in as opened in the repo (`gh pr list --author @me`): every open
-/// one, then the latest merged or closed ones; each lot most recently updated first.
+/// `gh pr list --author @me` (whoever `gh` is logged in as) in `state`, asking for `fields`.
+fn mine_args<'a>(state: &'a str, fields: &'a str, limit: &'a str) -> [&'a str; 10] {
+    [
+        "pr", "list", "--author", "@me", "--state", state, "--json", fields, "--limit", limit,
+    ]
+}
+
+/// The open PRs whoever `gh` is logged in as opened in the repo, most recently updated first.
 pub(crate) async fn mine(gh: &Path, worktree: &Path) -> Result<Vec<MyPullRequest>, String> {
-    let list = |state, limit| {
-        [
-            "pr",
-            "list",
-            "--author",
-            "@me",
-            "--state",
-            state,
-            "--json",
-            MINE_FIELDS,
-            "--limit",
-            limit,
-        ]
-    };
-    let (open, done) = (list("open", "100"), list("closed", MINE_DONE));
+    let open = mine_args("open", MINE_FIELDS, "100");
     let search = format!("q={}", crate::code_rabbit::OPEN_SEARCH);
     let query = format!("query={}", crate::code_rabbit::COUNT_QUERY);
     let rabbit = ["api", "graphql", "-F", &search, "-f", &query];
-    let (open, done, rabbit) = tokio::join!(
-        gh_text(gh, worktree, &open),
-        gh_text(gh, worktree, &done),
-        gh_text(gh, worktree, &rabbit)
-    );
+    let (open, rabbit) = tokio::join!(gh_text(gh, worktree, &open), gh_text(gh, worktree, &rabbit));
     let mut prs = mine_listed(&open?)?;
     // CodeRabbit's comments are extra: the PRs are shown without them when they can't be read.
     let rabbit = rabbit.and_then(|out| crate::code_rabbit::open_counts(&out));
@@ -322,8 +315,14 @@ pub(crate) async fn mine(gh: &Path, worktree: &Path) -> Result<Vec<MyPullRequest
             .and_then(|counts| counts.get(&pr.number).copied())
             .unwrap_or(0);
     }
-    prs.extend(mine_listed(&done?)?);
     Ok(prs)
+}
+
+/// The latest merged or closed PRs whoever `gh` is logged in as opened in the repo, most recently
+/// updated first.
+pub(crate) async fn mine_done(gh: &Path, worktree: &Path) -> Result<Vec<MyPullRequest>, String> {
+    let args = mine_args("closed", DONE_FIELDS, MINE_DONE);
+    mine_listed(&gh_text(gh, worktree, &args).await?)
 }
 
 /// Reads `gh pr list --json MINE_FIELDS`, most recently updated first.
@@ -1449,8 +1448,132 @@ async fn run_gh(
     run_gh_with(gh, worktree, args, sink, None).await
 }
 
-/// `run_gh`, with `input` written to its stdin if given.
+/// `run_gh`, with `input` written to its stdin if given. While GitHub's rate limit for what it asks
+/// of is known to be used up, `gh` isn't run at all: every call would fail, and keep the limit used
+/// up for everything else using `gh` as the user (their Agent sessions too).
 async fn run_gh_with(
+    gh: &Path,
+    worktree: &Path,
+    args: &[&str],
+    sink: Option<crate::process::Sink<'_>>,
+    input: Option<&str>,
+) -> Result<std::process::Output, String> {
+    let api = GitHubApi::of(args);
+    if let Some(until) = api.and_then(|api| limited_until(gh, api)) {
+        return Err(rate_limited(until));
+    }
+    let out = spawn_gh(gh, worktree, args, sink, input).await?;
+    if let (Some(api), false) = (api, out.status.success()) {
+        let stderr = String::from_utf8_lossy(&out.stderr).to_lowercase();
+        let until = if stderr.contains("secondary rate limit") {
+            Some(std::time::SystemTime::now() + SECONDARY_WAIT)
+        } else if stderr.contains("api rate limit") && stderr.contains("exceeded") {
+            Some(reset_of(gh, worktree, api).await)
+        } else {
+            None
+        };
+        if let Some(until) = until {
+            rate_limits()
+                .lock()
+                .unwrap()
+                .insert((gh.to_owned(), api), until);
+            return Err(rate_limited(until));
+        }
+    }
+    Ok(out)
+}
+
+/// Which of GitHub's APIs a `gh` call asks of: each has a rate limit of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum GitHubApi {
+    GraphQl,
+    Rest,
+}
+
+impl GitHubApi {
+    /// `gh api <path>` and `gh run` ask the REST API; `gh api graphql`, `gh pr` and the rest the
+    /// GraphQL one. None for `gh api rate_limit`, which doesn't count against either.
+    fn of(args: &[&str]) -> Option<Self> {
+        match args {
+            ["api", "rate_limit", ..] => None,
+            ["api", "graphql", ..] => Some(Self::GraphQl),
+            ["api", ..] | ["run", ..] => Some(Self::Rest),
+            _ => Some(Self::GraphQl),
+        }
+    }
+
+    /// Its name in `gh api rate_limit`.
+    fn resource(self) -> &'static str {
+        match self {
+            Self::GraphQl => "graphql",
+            Self::Rest => "core",
+        }
+    }
+}
+
+/// How long to wait after a secondary rate limit (too many requests at once), or when the
+/// hourly limit resets can't be read.
+const SECONDARY_WAIT: Duration = Duration::from_secs(60);
+
+/// Until when each `gh` (its program) has used up a rate limit.
+type RateLimits =
+    std::sync::Mutex<std::collections::HashMap<(PathBuf, GitHubApi), std::time::SystemTime>>;
+
+fn rate_limits() -> &'static RateLimits {
+    static LIMITS: std::sync::OnceLock<RateLimits> = std::sync::OnceLock::new();
+    LIMITS.get_or_init(Default::default)
+}
+
+/// Until when `api`'s rate limit is known to be used up, if it is now.
+fn limited_until(gh: &Path, api: GitHubApi) -> Option<std::time::SystemTime> {
+    let limits = rate_limits().lock().unwrap();
+    let until = *limits.get(&(gh.to_owned(), api))?;
+    (until > std::time::SystemTime::now()).then_some(until)
+}
+
+/// When `api`'s hourly rate limit resets, as `gh api rate_limit` (which is free) says; in a
+/// minute if that can't be read (or has passed).
+async fn reset_of(gh: &Path, worktree: &Path, api: GitHubApi) -> std::time::SystemTime {
+    let jq = format!(".resources.{}.reset", api.resource());
+    let args = ["api", "rate_limit", "--jq", &jq];
+    let now = std::time::SystemTime::now();
+    spawn_gh(gh, worktree, &args, None, None)
+        .await
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .parse::<u64>()
+                .ok()
+        })
+        .map(|secs| std::time::UNIX_EPOCH + Duration::from_secs(secs))
+        .filter(|at| *at > now)
+        .unwrap_or(now + SECONDARY_WAIT)
+}
+
+/// Until when one of GitHub's rate limits is known to be used up for `gh`, if one is now (the
+/// later one, if both are).
+pub(crate) fn rate_limited_until(gh: &Path) -> Option<std::time::SystemTime> {
+    [GitHubApi::GraphQl, GitHubApi::Rest]
+        .into_iter()
+        .filter_map(|api| limited_until(gh, api))
+        .max()
+}
+
+/// What to tell the user while a rate limit is used up until `until`.
+fn rate_limited(until: std::time::SystemTime) -> String {
+    let wait = until
+        .duration_since(std::time::SystemTime::now())
+        .unwrap_or_default();
+    let minutes = wait.as_secs().div_ceil(60).max(1);
+    format!(
+        "GitHub's API rate limit is used up (it's shared by everything using gh as you, Agent sessions too); try again in {minutes} min."
+    )
+}
+
+/// Runs `gh` with `args` in `worktree`, with `input` written to its stdin if given.
+async fn spawn_gh(
     gh: &Path,
     worktree: &Path,
     args: &[&str],
