@@ -395,3 +395,104 @@ esac"#,
     let clean = core.merge_conflicts(&root, 13).await.unwrap();
     assert_eq!(clean.files, []);
 }
+
+/// A `gh` listing the user's open PRs from the file `open` in its folder (a JSON list, changed
+/// between reads), and one merged PR.
+#[cfg(unix)]
+fn listing_gh() -> (FakeGh, PathBuf) {
+    let gh = FakeGh::new(
+        r#"case "$*" in
+"pr list"*"--state open"*) cat "$(dirname "$0")/open" ;;
+"pr list"*) echo '[{"number":3,"title":"Old","url":"u3","state":"MERGED","headRefName":"old","baseRefName":"main","updatedAt":"2026-10-01T12:00:00Z","mergedAt":"2026-10-01T12:00:00Z","closedAt":"2026-10-01T12:00:00Z"}]' ;;
+"api graphql"*) echo '{"data":{"search":{"nodes":[]}}}' ;;
+esac"#,
+    );
+    let open = gh.path().with_file_name("open");
+    (gh, open)
+}
+
+#[cfg(unix)]
+fn open_pr(number: u64) -> String {
+    format!(
+        r#"{{"number":{number},"title":"T","url":"u","state":"OPEN","isDraft":false,"headRefName":"b{number}","baseRefName":"main",
+  "reviewDecision":"","latestReviews":[],"reviewRequests":[],"statusCheckRollup":[],"mergeable":"MERGEABLE",
+  "updatedAt":"2026-10-08T12:00:00Z","mergedAt":null,"closedAt":null}}"#
+    )
+}
+
+#[cfg(unix)]
+fn closed_reads(gh: &FakeGh) -> Vec<Vec<String>> {
+    gh.calls()
+        .into_iter()
+        .filter(|call| {
+            call.starts_with(&["pr".into(), "list".into()]) && call.contains(&"closed".into())
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn merged_and_closed_prs_are_read_only_when_asked_for() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let (gh, open) = listing_gh();
+    std::fs::write(&open, format!("[{},{}]", open_pr(1), open_pr(2))).unwrap();
+    let core = core_with_gh(&fake, &gh);
+    let root = core.open_workspace(&setup.repo()).await.unwrap().root;
+
+    let numbers =
+        |prs: Vec<editor_core::MyPullRequest>| prs.iter().map(|p| p.number).collect::<Vec<_>>();
+    assert_eq!(numbers(core.my_pull_requests(&root).await.unwrap()), [1, 2]);
+    assert!(closed_reads(&gh).is_empty());
+
+    assert_eq!(
+        numbers(core.my_done_pull_requests(&root).await.unwrap()),
+        [3]
+    );
+    // (Done PRs show neither checks nor reviews: they aren't asked for.)
+    let reads = closed_reads(&gh);
+    assert_eq!(reads.len(), 1);
+    assert!(
+        !reads[0].iter().any(|a| a.contains("statusCheckRollup")),
+        "{reads:?}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn gh_is_not_run_again_until_githubs_rate_limit_resets() {
+    let setup = RepoWithOrigin::new();
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let reset = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 600;
+    let gh = FakeGh::new(&format!(
+        r#"case "$*" in
+"api rate_limit"*) echo {reset} ;;
+*) echo 'GraphQL: API rate limit already exceeded for user ID 1.' >&2; exit 1 ;;
+esac"#
+    ));
+    let core = core_with_gh(&fake, &gh);
+    let root = core.open_workspace(&setup.repo()).await.unwrap().root;
+
+    let error = core.review_requests(&root).await.unwrap_err().to_string();
+    assert!(
+        error.contains("rate limit") && error.contains("10 min"),
+        "{error}"
+    );
+    let ran = gh.calls().len();
+
+    let error = core.my_pull_requests(&root).await.unwrap_err().to_string();
+    assert!(error.contains("rate limit"), "{error}");
+    assert_eq!(
+        gh.calls().len(),
+        ran,
+        "gh wasn't run while the limit is used up"
+    );
+
+    // (Milliseconds since the epoch, for the countdown.)
+    let until = core.github_rate_limited_until().unwrap();
+    assert_eq!(until / 1000, reset);
+}

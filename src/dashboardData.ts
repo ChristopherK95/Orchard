@@ -8,6 +8,7 @@
 // shown, and an answer is kept an hour (one per period), so coming back to it doesn't ask again.
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { core, type ReviewRequest, type Statistics, type StatisticsDays, type WorktreeAttention, type WorktreeInfo, type WorktreeMerge } from "./core";
+import { afterGitHubFailed } from "./rateLimit";
 
 /** How often the review requests are asked for again while the Workspace is open (as the user's PRs). */
 const EVERY_MS = 5 * 60_000;
@@ -47,7 +48,9 @@ async function loadRequests() {
     setRequestsError("");
     setRequestsRefreshedAt(Date.now());
   } catch (err) {
-    if (n === requestsAsked) setRequestsError(String(err));
+    if (n !== requestsAsked) return;
+    setRequestsError(String(err));
+    void afterGitHubFailed(loadRequests);
   } finally {
     if (n === requestsAsked) setRequestsLoading(false);
   }
@@ -65,7 +68,8 @@ export function watchReviewRequests(worktree: () => string) {
       void loadRequests();
     }),
   );
-  const timer = setInterval(() => void loadRequests(), EVERY_MS);
+  // (Not while the window is in the background, as the user's PRs.)
+  const timer = setInterval(() => document.hasFocus() && void loadRequests(), EVERY_MS);
   onCleanup(() => {
     clearInterval(timer);
     requestsFrom = "";

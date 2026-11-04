@@ -4185,6 +4185,31 @@ impl Core {
             .map_err(CoreError::Git)
     }
 
+    /// Until when (milliseconds since the epoch) GitHub's rate limit is known to be used up for the
+    /// GitHub CLI, if it is now: until then `gh` isn't run, and what asks GitHub fails at once.
+    pub fn github_rate_limited_until(&self) -> Option<u64> {
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let until = crate::pull_request::rate_limited_until(&gh)?;
+        let since = until.duration_since(std::time::UNIX_EPOCH).ok()?;
+        u64::try_from(since.as_millis()).ok()
+    }
+
+    /// The latest merged or closed PRs the user opened in the Worktree's repo, most recently updated
+    /// first (the PR board's Done column, read only while it's shown).
+    pub async fn my_done_pull_requests(
+        &self,
+        worktree: &Path,
+    ) -> Result<Vec<MyPullRequest>, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        if !git::has_remote(&worktree).await {
+            return Ok(vec![]);
+        }
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        crate::pull_request::mine_done(&gh, &worktree)
+            .await
+            .map_err(CoreError::Git)
+    }
+
     /// The Dashboard's review requests: the open, non-draft PRs of the Worktree's repo that ask the
     /// user (whoever the GitHub CLI is logged in as) for a review directly, not through a team, the
     /// most recently asked first.

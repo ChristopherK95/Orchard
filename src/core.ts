@@ -1235,8 +1235,12 @@ export const core = {
    *  name) alone, or else every failed job of run `run`. */
   rerunChecks: (worktree: string, run: number, job?: { id: number; name: string }) =>
     invoke<void>("rerun_checks", { worktree, run, job: job?.id ?? null, name: job?.name ?? null }),
-  /** The user's PRs in the Worktree's repo: every open one, then the latest merged or closed. */
+  /** The user's open PRs in the Worktree's repo, most recently updated first. */
   myPullRequests: (worktree: string) => invoke<MyPullRequest[]>("my_pull_requests", { worktree }),
+  /** The user's latest merged or closed PRs in the Worktree's repo (the PR board's Done column). */
+  myDonePullRequests: (worktree: string) => invoke<MyPullRequest[]>("my_done_pull_requests", { worktree }),
+  /** Until when (ms since the epoch) GitHub's rate limit is used up for `gh`, if it is now: asking GitHub fails at once till then. */
+  githubRateLimitedUntil: () => invoke<number | null>("github_rate_limited_until"),
   /** The Dashboard's Worktrees that need attention, main checkout first, each with every reason. */
   worktreeAttention: () => invoke<WorktreeAttention[]>("worktree_attention"),
   /** The open, non-draft PRs in the Worktree's repo asking the user for a review, most recently asked first. */

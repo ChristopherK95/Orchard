@@ -1123,7 +1123,24 @@ async fn rerun_checks(
         .map_err(|e| e.to_string())
 }
 
-/// The user's PRs in the Worktree's repo.
+/// Until when (ms since the epoch) GitHub's rate limit is used up for `gh`, if it is now.
+#[tauri::command]
+fn github_rate_limited_until(core: State<'_, Core>) -> Option<u64> {
+    core.github_rate_limited_until()
+}
+
+/// The user's latest merged or closed PRs in the Worktree's repo.
+#[tauri::command]
+async fn my_done_pull_requests(
+    core: State<'_, Core>,
+    worktree: String,
+) -> CommandResult<Vec<editor_core::MyPullRequest>> {
+    core.my_done_pull_requests(worktree.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The user's open PRs in the Worktree's repo.
 #[tauri::command]
 async fn my_pull_requests(
     core: State<'_, Core>,
@@ -1942,6 +1959,8 @@ fn main() {
             open_pull_request,
             pull_request_details,
             my_pull_requests,
+            my_done_pull_requests,
+            github_rate_limited_until,
             worktree_attention,
             review_requests,
             statistics,

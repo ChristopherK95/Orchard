@@ -7,6 +7,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { createEffect, createMemo, createSignal, For, type JSX, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { ago } from "./Chat";
 import { core, type MyPullRequest, type PullRequestStage, type Reviewer } from "./core";
+import { afterGitHubFailed, withCountdown } from "./rateLimit";
 import {
   Check as CheckIcon,
   CircleCheck,
@@ -25,7 +26,7 @@ import {
 } from "./icons";
 import { worktreeColour, type WorktreeTab } from "./Worktrees";
 
-/** How often the user's PRs are asked for again while the Workspace is open. */
+/** How often the user's PRs are asked for again while the Workspace is open and the window focused. */
 const EVERY_MS = 5 * 60_000;
 
 const [prs, setPrs] = createSignal<MyPullRequest[]>([]);
@@ -36,7 +37,7 @@ const [refreshedAt, setRefreshedAt] = createSignal<number | null>(null);
 let from = "";
 let asked = 0;
 
-/** The user's PRs as last read (every open one, then the latest merged or closed), and how that went. */
+/** The user's open PRs as last read, and how that went. */
 export const myPrs = { prs, error, loading, refreshedAt, refresh: () => void load() };
 
 async function load() {
@@ -50,7 +51,9 @@ async function load() {
     setError("");
     setRefreshedAt(Date.now());
   } catch (err) {
-    if (n === asked) setError(String(err));
+    if (n !== asked) return;
+    setError(String(err));
+    void afterGitHubFailed(load);
   } finally {
     if (n === asked) setLoading(false);
   }
@@ -68,7 +71,9 @@ export function watchMyPrs(worktree: () => string) {
       void load();
     }),
   );
-  const timer = setInterval(() => void load(), EVERY_MS);
+  // (Not while the window is in the background: GitHub's rate limit is shared with everything using
+  //  gh as the user, and focusing the window asks again.)
+  const timer = setInterval(() => document.hasFocus() && void load(), EVERY_MS);
   onCleanup(() => {
     clearInterval(timer);
     from = "";
@@ -93,27 +98,54 @@ export function PrBoard(props: {
   banners?: JSX.Element;
   onOpen: (pr: MyPullRequest) => void;
 }) {
+  // The latest merged or closed PRs, read only while the board is shown (nothing else shows them).
+  const [done, setDone] = createSignal<MyPullRequest[]>([]);
+  const [doneError, setDoneError] = createSignal("");
+  const [doneLoading, setDoneLoading] = createSignal(false);
+  let shown = true;
+  onCleanup(() => (shown = false));
+  const loadDone = async () => {
+    if (!shown || !from) return;
+    setDoneLoading(true);
+    try {
+      const next = await core.myDonePullRequests(from);
+      setDone(next);
+      setDoneError("");
+    } catch (err) {
+      setDoneError(String(err));
+      void afterGitHubFailed(loadDone);
+    } finally {
+      setDoneLoading(false);
+    }
+  };
+  const refresh = () => {
+    myPrs.refresh();
+    void loadDone();
+  };
   // (Opening the board asks again: it's for seeing where things stand now.)
-  myPrs.refresh();
-  const open = () => prs().filter((p) => p.state === "open").length;
+  refresh();
+  const all = () => [...prs(), ...done()];
+  const busy = () => loading() || doneLoading();
+  const failed = () => error() || doneError();
+  const open = () => prs().length;
   return (
     <section class="board pr-board" style={{ top: `${props.top}px` }}>
       {props.banners}
       <div class="board-head">
         <span class="pr-board-title">Your pull requests</span>
         <span class="badge">{open()} open</span>
-        <button class="ghost icon" onClick={() => myPrs.refresh()} disabled={loading()} title="Ask GitHub again" aria-label="Refresh pull requests">
-          <RefreshCw classList={{ spin: loading() }} />
+        <button class="ghost icon" onClick={refresh} disabled={busy()} title="Ask GitHub again" aria-label="Refresh pull requests">
+          <RefreshCw classList={{ spin: busy() }} />
         </button>
         <span class="hint">Esc for the Tabs</span>
       </div>
-      <Show when={error()}>
-        <p class="error small pr-board-error">Couldn't list your PRs: {error()}</p>
+      <Show when={failed()}>
+        <p class="error small pr-board-error">Couldn't list your PRs: {withCountdown(failed())}</p>
       </Show>
       <div class="board-columns pr-board-columns">
         <For each={COLUMNS}>
           {(column) => {
-            const cards = () => prs().filter((p) => column.stages.includes(p.stage));
+            const cards = () => all().filter((p) => column.stages.includes(p.stage));
             return (
               <div class="board-column">
                 <div class={`board-column-head pr-stage-${column.stages[0]}`}>
@@ -121,7 +153,7 @@ export function PrBoard(props: {
                   {column.title}
                   <span class="badge">{cards().length}</span>
                 </div>
-                <For each={cards()} fallback={<p class="board-empty">{loading() && !prs().length ? "Asking GitHub…" : "None"}</p>}>
+                <For each={cards()} fallback={<p class="board-empty">{busy() && !all().length ? "Asking GitHub…" : "None"}</p>}>
                   {(pr) => <Card pr={pr} worktree={props.worktrees.find((w) => !w.removed && w.branch === pr.head)} onOpen={() => props.onOpen(pr)} />}
                 </For>
               </div>
