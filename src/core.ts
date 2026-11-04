@@ -803,6 +803,8 @@ export interface CodeReview {
   base: string;
   mergeBase: string;
   files: CodeReviewFile[];
+  /** The PR's commits since it split from its base branch, oldest first. */
+  commits: ReviewCommit[];
   /** What changed since the user's last review, when they've reviewed it before. */
   sinceLastReview: SinceLastReview | null;
   pending: PendingReview;
@@ -829,6 +831,8 @@ export interface SinceLastReview {
   /** The commit their last review was on. */
   commit: string;
   files: CodeReviewFile[];
+  /** The ids of the PR's commits that weren't in it (all of them after a force-push). */
+  commits: string[];
 }
 
 /** The comments not submitted yet, and the lines Claude was asked about. */
@@ -1260,6 +1264,11 @@ export const core = {
   /** One file's diff in the Code review: the PR's, or only what changed since the last review. */
   codeReviewDiff: (number: number, path: string, sinceLastReview: boolean) =>
     invoke<DiffLine[]>("code_review_diff", { number, path, sinceLastReview }),
+  /** What one of the PR's commits changed on its own, file by file. */
+  codeReviewCommit: (number: number, commit: string) => invoke<CodeReviewFile[]>("code_review_commit", { number, commit }),
+  /** One file's diff in one of the PR's commits. */
+  codeReviewCommitDiff: (number: number, commit: string, path: string) =>
+    invoke<DiffLine[]>("code_review_commit_diff", { number, commit, path }),
   /** Adds a comment to the Pending review; rejects if its lines aren't in the diff. */
   addReviewComment: (number: number, comment: NewReviewComment) =>
     invoke<PendingComment>("add_review_comment", { number, comment }),

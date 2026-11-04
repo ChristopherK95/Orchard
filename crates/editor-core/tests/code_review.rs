@@ -293,6 +293,58 @@ async fn the_diff_is_the_prs_and_can_narrow_to_since_the_last_review() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn each_of_the_prs_commits_can_be_shown_on_its_own() {
+    let setup = RepoWithOrigin::new();
+    let main = rev_parse(&setup.root().join("seed"), "main");
+    let a = push_pr(&setup, &[("a", "first\n"), ("b", "one\n")], "A");
+    let head = push_pr(&setup, &[("b", "one\ntwo\n")], "B");
+    let fake = FakeAgent::new(r#"{"turns":[]}"#);
+    let reviews = format!(
+        r#"[{{"author":{{"login":"me"}},"state":"COMMENTED","submittedAt":"2026-01-02T00:00:00Z","commit":{{"oid":"{a}"}}}}]"#
+    );
+    let gh = review_gh(&pr_view(&head, true, &reviews), "");
+    let core = core_with_gh(&fake, &gh);
+    open(&core, &setup.repo()).await;
+
+    let review = core.open_code_review(7).await.unwrap();
+    let commits: Vec<(&str, &str)> = review
+        .commits
+        .iter()
+        .map(|c| (c.id.as_str(), c.subject.as_str()))
+        .collect();
+    assert_eq!(commits, [(a.as_str(), "A"), (head.as_str(), "B")]);
+    // Only the second came after the last review.
+    assert_eq!(review.since_last_review.unwrap().commits, std::slice::from_ref(&head));
+
+    let first = core.code_review_commit(7, &a).await.unwrap();
+    let paths: Vec<(&str, u32)> = first
+        .iter()
+        .map(|f| (f.path.as_str(), f.additions))
+        .collect();
+    assert_eq!(paths, [("a", 1), ("b", 1)]);
+    let second = core.code_review_commit(7, &head).await.unwrap();
+    let paths: Vec<(&str, u32)> = second
+        .iter()
+        .map(|f| (f.path.as_str(), f.additions))
+        .collect();
+    assert_eq!(paths, [("b", 1)]);
+
+    let diff = core.code_review_commit_diff(7, &a, "b").await.unwrap();
+    assert_eq!(added(&diff), ["one"]);
+    let diff = core.code_review_commit_diff(7, &head, "b").await.unwrap();
+    assert_eq!(added(&diff), ["two"]);
+    assert!(core
+        .code_review_commit_diff(7, &head, "a")
+        .await
+        .unwrap()
+        .is_empty());
+
+    // A commit that isn't one of the PR's isn't shown.
+    assert!(core.code_review_commit(7, &main).await.is_err());
+    assert!(core.code_review_commit_diff(7, &main, "a").await.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_first_review_has_no_since_last_review() {
     let setup = RepoWithOrigin::new();
     let head = push_pr(&setup, &[("a", "first\n")], "A");

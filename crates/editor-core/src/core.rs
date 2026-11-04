@@ -218,6 +218,47 @@ fn name_from_title(title: &str) -> Option<String> {
     Some(format!("{}…", cut.trim_end()))
 }
 
+/// A Code review's commits from `from` to `head`, oldest first.
+async fn review_commits(root: &Path, from: &str, head: &str) -> Vec<ReviewCommit> {
+    git::commits_between(root, from, head)
+        .await
+        .into_iter()
+        .map(|(id, short_id, subject, merge)| ReviewCommit {
+            id,
+            short_id,
+            subject,
+            merge,
+        })
+        .collect()
+}
+
+/// `path`'s change from `from` to `to` in a Code review, `changes` being what changed between
+/// them; empty if `path` isn't among them.
+async fn review_file_diff(
+    root: &Path,
+    from: &str,
+    to: &str,
+    changes: Vec<(char, String, Option<String>)>,
+    path: &str,
+) -> Result<Vec<crate::session::DiffLine>, CoreError> {
+    let Some((_, _, renamed_from)) = changes.into_iter().find(|(_, p, _)| p == path) else {
+        return Ok(vec![]);
+    };
+    // Git's own diff, not one of ours: GitHub takes comments only on the lines its hunks show.
+    let mut paths = vec![path];
+    paths.extend(renamed_from.as_deref());
+    let out = git::diff_between(root, from, to, &paths)
+        .await
+        .map_err(CoreError::Git)?;
+    let lines = crate::diff::parse_git_diff(&out, MAX_VIEW_DIFF_LINES);
+    if lines.is_empty() && out.contains("Binary files") {
+        return Err(CoreError::File(format!(
+            "{path} isn't text, so there's no diff to show"
+        )));
+    }
+    Ok(lines)
+}
+
 /// The review Agent session's Tab name: "Review #N" and the PR's title, cut as a title is.
 fn review_session_name(number: u64, title: &str) -> String {
     let name = format!("Review #{number} {title}");
@@ -3543,6 +3584,7 @@ impl Core {
                 .await
                 .map_err(CoreError::Git)?,
         );
+        let commits = review_commits(&root, &merge_base, &head).await;
         let since_last_review = match last_review {
             Some(commit) => Some(SinceLastReview {
                 files: ticked(
@@ -3550,6 +3592,11 @@ impl Core {
                         .await
                         .map_err(CoreError::Git)?,
                 ),
+                commits: review_commits(&root, &commit, &head)
+                    .await
+                    .into_iter()
+                    .map(|c| c.id)
+                    .collect(),
                 commit,
             }),
             None => None,
@@ -3575,6 +3622,7 @@ impl Core {
             base: details.base,
             merge_base,
             files,
+            commits,
         })
     }
 
@@ -3805,22 +3853,56 @@ impl Core {
         let changes = git::changes_between(&root, &from, &saved.head)
             .await
             .map_err(CoreError::Git)?;
-        let Some((_, _, renamed_from)) = changes.into_iter().find(|(_, p, _)| p == path) else {
-            return Ok(vec![]);
-        };
-        // Git's own diff, not one of ours: GitHub takes comments only on the lines its hunks show.
-        let mut paths = vec![path];
-        paths.extend(renamed_from.as_deref());
-        let out = git::diff_between(&root, &from, &saved.head, &paths)
+        review_file_diff(&root, &from, &saved.head, changes, path).await
+    }
+
+    /// What one of PR `number`'s commits (since it split from its base branch, up to the fetched
+    /// head) changed on its own, file by file.
+    pub async fn code_review_commit(
+        &self,
+        number: u64,
+        commit: &str,
+    ) -> Result<Vec<code_review::CodeReviewFile>, CoreError> {
+        let root = self.workspace()?.root;
+        let commit = self.review_commit(&root, number, commit).await?;
+        let (_, files) = code_review::commit_files(&root, &commit)
             .await
             .map_err(CoreError::Git)?;
-        let lines = crate::diff::parse_git_diff(&out, MAX_VIEW_DIFF_LINES);
-        if lines.is_empty() && out.contains("Binary files") {
-            return Err(CoreError::File(format!(
-                "{path} isn't text, so there's no diff to show"
-            )));
-        }
-        Ok(lines)
+        Ok(files)
+    }
+
+    /// One file's change in one of PR `number`'s commits, as `code_review_commit` lists it. Empty
+    /// if the commit didn't change it.
+    pub async fn code_review_commit_diff(
+        &self,
+        number: u64,
+        commit: &str,
+        path: &str,
+    ) -> Result<Vec<crate::session::DiffLine>, CoreError> {
+        let root = self.workspace()?.root;
+        let commit = self.review_commit(&root, number, commit).await?;
+        let (parent, changes) = git::commit_changes(&root, &commit)
+            .await
+            .map_err(CoreError::Git)?;
+        review_file_diff(&root, &parent, &commit, changes, path).await
+    }
+
+    /// `commit` if it's one of PR `number`'s commits in its Code review.
+    async fn review_commit(
+        &self,
+        root: &Path,
+        number: u64,
+        commit: &str,
+    ) -> Result<String, CoreError> {
+        let saved = self.saved_review(number)?;
+        review_commits(root, &saved.merge_base, &saved.head)
+            .await
+            .into_iter()
+            .find(|c| c.id == commit)
+            .map(|c| c.id)
+            .ok_or_else(|| {
+                CoreError::Git(format!("`{commit}` isn't one of PR #{number}'s commits."))
+            })
     }
 
     /// How many commits were pushed to PR `number` since its Review Worktree's head (one

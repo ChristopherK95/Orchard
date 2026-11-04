@@ -1497,6 +1497,7 @@ button.review-badge:hover:not(:disabled) { background: color-mix(in srgb, var(--
 button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-1); }
 .review-commit.on { background: var(--bg-4); border-color: var(--bg-4); color: var(--fg-1); }
 .review-commit .mono { flex: none; font-size: 11px; color: var(--fg-3); }
+.review-commit.reviewed:not(.on) { color: var(--fg-3); }
 .review-commit-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .review-scope { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; padding: 6px 8px; border: 1px solid var(--bg-1); border-left: 3px solid var(--c); border-radius: var(--r-md); background: var(--bg-1); font-size: 12px; }
 .review-scope .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

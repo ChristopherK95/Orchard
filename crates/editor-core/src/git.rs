@@ -1582,7 +1582,16 @@ pub(crate) async fn commits_since(
     worktree: &Path,
     split: &str,
 ) -> Vec<(String, String, String, bool)> {
-    let range = format!("{split}..HEAD");
+    commits_between(worktree, split, "HEAD").await
+}
+
+/// The commits `to` has that `from` hasn't, oldest first, as `commits_since` gives them.
+pub(crate) async fn commits_between(
+    worktree: &Path,
+    from: &str,
+    to: &str,
+) -> Vec<(String, String, String, bool)> {
+    let range = format!("{from}..{to}");
     output(
         worktree,
         &["log", "--reverse", "--format=%H%x00%h%x00%P%x00%s", &range],
