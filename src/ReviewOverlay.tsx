@@ -5,15 +5,18 @@
 // opens the PR assigned to the user. A branch whose PR is already open gets Push instead: a step of
 // its own that commits what's left and pushes, with git's output live. A commit in the list narrows the files and diffs to what that
 // commit changed on its own (Viewed ticks belong to the whole review, so they're not shown then).
+// The PR step can also hand the PR to an Agent session instead, running a PR skill of the repo's
+// (or asking in plain words), so the PR is written the way that skill says.
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { core, type OpenPullRequest, type PushToPullRequestOutcome, type PullRequestProgress, type SessionId, type SessionInfo, type CommitChanges, type DiffLine, type PullRequestOutcome, type Review, type ReviewCommit, type ReviewFile } from "./core";
+import { core, type OpenPullRequest, type PushToPullRequestOutcome, type PullRequestProgress, type SessionId, type SessionInfo, type CommitChanges, type DiffLine, type PullRequestOutcome, type Review, type SlashCommand, type ReviewCommit, type ReviewFile } from "./core";
 import { DiffSearch } from "./DiffSearch";
 import { DiffView } from "./DiffView";
 import { LETTER, ReviewFiles, useReviewKeys } from "./ReviewFiles";
+import { SkillPicker } from "./SkillPicker";
 import { languageOfPath } from "./highlight";
-import { ArrowUp, Send, Check, ChevronLeft, ChevronRight, CircleCheck, Copy, ExternalLink, GitBranch, GitPullRequest, Loader, RefreshCw, TriangleAlert, X } from "./icons";
+import { ArrowUp, Bot, Send, Check, ChevronLeft, ChevronRight, CircleCheck, Copy, ExternalLink, GitBranch, GitPullRequest, Loader, RefreshCw, TriangleAlert, X } from "./icons";
 
 const plural = (n: number, thing: string) => `${n} ${thing}${n === 1 ? "" : "s"}`;
 
@@ -88,6 +91,26 @@ function fixPrompt(error: string, tried: string) {
     "",
     "Please fix what it reports (often the repo's commit or pre-push hooks: lint, type checks, tests) and commit the fixes. I'll try again afterwards.",
   ].join("\n");
+}
+
+/** The skill last used to create a PR with an Agent, offered first next time. */
+const PR_SKILL_KEY = "orchard.prSkill";
+
+/** A skill that looks like it opens PRs ("pr", "create-pr", "plugin:pull-request", …). */
+const looksLikePrSkill = (c: SlashCommand) => /(^|[-_:])pr($|[-_:])|pull[-_ ]?request/i.test(c.name);
+
+/** What an Agent session is asked to open a PR with: `/skill` first when one is chosen. */
+function createPrPrompt(pr: { skill: string; branch: string; target: string; draft: boolean; title: string; body: string }) {
+  const ask = [
+    `Open ${pr.draft ? "a draft pull request" : "a pull request"} from \`${pr.branch}\` into \`${pr.target}\`, assigned to me.`,
+    "Commit anything that isn't committed yet first, then push the branch.",
+  ];
+  if (pr.title || pr.body) {
+    ask.push("", "What I have so far (use it or improve on it):", `Title: ${pr.title}`);
+    if (pr.body) ask.push("Description:", "", pr.body);
+  }
+  const skill = pr.skill.replace(/^\//, "").trim();
+  return skill ? `/${skill} ${ask.join("\n")}` : ask.join("\n");
 }
 
 export function ReviewOverlay(props: {
@@ -361,6 +384,7 @@ export function ReviewOverlay(props: {
     previous: () => go(at() - 1),
     toggleViewed: () => current() && !scope() && setViewed(current()!, !isViewed(current()!)),
     close: () => {
+      if (pickingSkill()) return setPickingSkill(false);
       if (creating()) return;
       if (step() === "pr" || step() === "push") setStep("review");
       else props.onClose();
@@ -384,6 +408,36 @@ export function ReviewOverlay(props: {
       </button>
     </div>
   );
+
+  // Create with an Agent: a session is asked to open the PR, with a skill of the Worktree's
+  // sessions if one is chosen (or typed: a new session's skills aren't known before it starts).
+  const [skills, setSkills] = createSignal<SlashCommand[]>([]);
+  const [skill, setSkill] = createSignal(localStorage.getItem(PR_SKILL_KEY) ?? "");
+  const [pickingSkill, setPickingSkill] = createSignal(false);
+  const [agentTo, setAgentTo] = createSignal(props.sessions[0] ? String(props.sessions[0].id) : "");
+  onMount(async () => {
+    const lists = await Promise.all(props.sessions.map((s) => core.availableCommands(s.id).catch(() => [] as SlashCommand[])));
+    const byName = new Map(lists.flat().map((c) => [c.name, c]));
+    const known = [...byName.values()];
+    setSkills(known);
+    const remembered = skill();
+    if (!remembered || (known.length && !byName.has(remembered))) setSkill(known.find(looksLikePrSkill)?.name ?? remembered);
+  });
+  const createWithAgent = async () => {
+    const r = review();
+    if (!r?.branch || blocker() || !target().trim()) return;
+    setSending(true);
+    setPrError("");
+    localStorage.setItem(PR_SKILL_KEY, skill().replace(/^\//, "").trim());
+    try {
+      const text = createPrPrompt({ skill: skill(), branch: r.branch, target: target().trim(), draft: draft(), title: title().trim(), body: body().trim() });
+      await props.onSendToSession(agentTo() === "" ? null : (Number(agentTo()) as SessionId), text);
+    } catch (err) {
+      setPrError(`Couldn't send it to the session: ${err}`);
+    } finally {
+      setSending(false);
+    }
+  };
 
   const lineCount = createMemo(() => {
     let added = 0;
@@ -666,6 +720,33 @@ export function ReviewOverlay(props: {
               <Show when={blocker()}>
                 <p class="error small">{blocker()}</p>
               </Show>
+              <div class="review-agent">
+                <span class="review-agent-label">Or have an Agent create it</span>
+                <div class="review-agent-row">
+                  <SkillPicker
+                    value={skill()}
+                    skills={skills()}
+                    open={pickingSkill()}
+                    disabled={sending() || creating()}
+                    onOpen={setPickingSkill}
+                    onChange={setSkill}
+                  />
+                  <select value={agentTo()} onChange={(e) => setAgentTo(e.currentTarget.value)} disabled={sending() || creating()}>
+                    <For each={props.sessions}>{(s) => <option value={String(s.id)}>{s.name}</option>}</For>
+                    <option value="">New session</option>
+                  </select>
+                  <button
+                    onClick={() => void createWithAgent()}
+                    disabled={sending() || creating() || !!blocker() || !target().trim()}
+                    title="Sends the session a request to commit, push and open the PR (running the skill, if one is chosen), and shows the session"
+                  >
+                    <Show when={sending()} fallback={<Bot />}>
+                      <Loader class="spin" />
+                    </Show>
+                    Create with Agent
+                  </button>
+                </div>
+              </div>
               <div ref={logAnchor}>
                 <Show when={log.length > 0}>
                   <ProgressLog steps={log} running={creating()} failed={!creating() && (!!prError() || outcome()?.kind === "pushRejected")} />
