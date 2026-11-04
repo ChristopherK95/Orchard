@@ -1262,6 +1262,31 @@ async fn code_review_diff(
         .map_err(|e| e.to_string())
 }
 
+/// What one of the PR's commits changed on its own, file by file.
+#[tauri::command]
+async fn code_review_commit(
+    core: State<'_, Core>,
+    number: u64,
+    commit: String,
+) -> CommandResult<Vec<editor_core::CodeReviewFile>> {
+    core.code_review_commit(number, &commit)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// One file's diff in one of the PR's commits.
+#[tauri::command]
+async fn code_review_commit_diff(
+    core: State<'_, Core>,
+    number: u64,
+    commit: String,
+    path: String,
+) -> CommandResult<Vec<editor_core::DiffLine>> {
+    core.code_review_commit_diff(number, &commit, &path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Adds a comment on a line or range to the Pending review.
 #[tauri::command]
 async fn add_review_comment(
@@ -1932,6 +1957,8 @@ fn main() {
             push_to_pull_request,
             open_code_review,
             code_review_diff,
+            code_review_commit,
+            code_review_commit_diff,
             add_review_comment,
             edit_review_comment,
             remove_review_comment,

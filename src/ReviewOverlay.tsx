@@ -520,7 +520,7 @@ export function ReviewOverlay(props: {
                   scope() && (
                     <>
                       <div class="review-scope">
-                        <span class="grow">
+                        <span class="grow" title={scope()!.subject}>
                           <span class="mono muted">{scope()!.shortId}</span> {scope()!.subject}
                           <Show when={scope()!.merge}>
                             <span class="pill" title="Only how its conflicts were resolved, against git's own merge with the conflict markers left in">
@@ -550,7 +550,7 @@ export function ReviewOverlay(props: {
                           class="review-commit"
                           classList={{ on: scope()?.id === c.id }}
                           onClick={() => pickCommit(c)}
-                          title={scope()?.id === c.id ? "Show all the changes again" : c.merge ? `Only how ${c.shortId}'s conflicts were resolved` : `Only what ${c.shortId} changed`}
+                          title={`${c.subject}\n\n${scope()?.id === c.id ? "Show all the changes again" : c.merge ? `Only how ${c.shortId}'s conflicts were resolved` : `Only what ${c.shortId} changed`}`}
                         >
                           <span class="mono">{c.shortId}</span>
                           <span class="review-commit-subject">{c.subject}</span>

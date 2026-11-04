@@ -1,6 +1,6 @@
 // Code review (issue 44): going through a PR the user was asked to review, in its Review Worktree.
 // It is the review Agent session's Tab: the PR's files with GitHub's Viewed ticks, each file's diff
-// (all of it, or only what changed since the user's last review), the PR's threads under their lines
+// (all of it, only what changed since the user's last review, or one commit's), the PR's threads under their lines
 // with Reply, and the Pending review's comments, added by picking lines, with Claude in a column on
 // the right. Submit sends them in one go with Approve, Request changes or Comment. New commits pushed
 // meanwhile are offered with Refresh.
@@ -19,6 +19,7 @@ import {
   type DiffSide,
   type PendingComment,
   type Question,
+  type ReviewCommit,
   type SessionId,
   type SessionInfo,
   type SubmitError,
@@ -64,6 +65,8 @@ interface Kept {
   review: CodeReview;
   threads: CodeThread[];
   since: boolean;
+  /** The commit the files and diffs are narrowed to, if one is. */
+  commit: ReviewCommit | null;
   at: number;
   sideBySide: boolean;
   /** How far the diff was scrolled. */
@@ -83,7 +86,7 @@ export function openCodeReview(number: number): Promise<CodeReview> {
     .openCodeReview(number)
     .then((r) => {
       const before = kept.get(number);
-      kept.set(number, before ? { ...before, review: r } : { review: r, threads: [], since: !!r.sinceLastReview, at: 0, sideBySide: false, scrollTop: 0, dockOpen: dockPrefs().open });
+      kept.set(number, before ? { ...before, review: r } : { review: r, threads: [], since: !!r.sinceLastReview, commit: null, at: 0, sideBySide: false, scrollTop: 0, dockOpen: dockPrefs().open });
       return r;
     })
     .finally(() => opening.delete(number));
@@ -139,6 +142,10 @@ export function CodeReviewView(props: {
   const fail = (what: string) => (err: unknown) => setNotice({ text: `${what}: ${err}`, error: true });
   /** Only the changes since the user's last review (a re-requested review), or the PR's whole diff. */
   const [since, setSince] = createSignal(before?.since ?? false);
+  /** One of the PR's commits, to see only what it changed (null: the scope above). */
+  const [commit, setCommit] = createSignal<ReviewCommit | null>(before?.commit ?? null);
+  /** Each commit's files once read, by id. */
+  const [commitFiles, setCommitFiles] = createStore<Record<string, { files: CodeReviewFile[] } | { error: string }>>({});
   const [at, setAt] = createSignal(before?.at ?? 0);
   const [sideBySide, setSideBySide] = createSignal(before?.sideBySide ?? false);
   const [diffs, setDiffs] = createStore<Record<string, Loaded>>({});
@@ -162,6 +169,11 @@ export function CodeReviewView(props: {
       setPending(reconcile({ comments: r.pending.comments, questions: r.pending.questions }));
       setDiffs(reconcile({}));
       setViewedNow(reconcile({}));
+      setCommitFiles(reconcile({}));
+      // (A commit gone from the PR, after a force-push, isn't shown any more.)
+      const c = commit();
+      if (c && !r.commits.some((x) => x.id === c.id)) setCommit(null);
+      else if (c) fetchCommit(c);
       setAt((i) => Math.min(i, Math.max(0, files().length - 1)));
     });
   onMount(async () => {
@@ -173,6 +185,7 @@ export function CodeReviewView(props: {
         setThreads(before.threads);
       });
       if (!before.threads.length) loadThreads(before.review);
+      if (before.commit) fetchCommit(before.commit);
       return;
     }
     try {
@@ -194,7 +207,7 @@ export function CodeReviewView(props: {
       sinceLastReview: r.sinceLastReview && { ...r.sinceLastReview, files: ticked(r.sinceLastReview.files) },
       pending: structuredClone(unwrap(pending)),
     };
-    kept.set(props.number, { review: saved, threads: threads(), since: since(), at: at(), sideBySide: sideBySide(), scrollTop, dockOpen: dockOpen() });
+    kept.set(props.number, { review: saved, threads: threads(), since: since(), commit: commit(), at: at(), sideBySide: sideBySide(), scrollTop, dockOpen: dockOpen() });
   });
 
   // (New commits pushed to the PR are asked about in reviewWatch, Tab shown or not.)
@@ -214,26 +227,67 @@ export function CodeReviewView(props: {
     }
   };
 
+  const fetchCommit = (c: ReviewCommit) => {
+    if (commitFiles[c.id]) return;
+    core
+      .codeReviewCommit(props.number, c.id)
+      .then((files) => setCommitFiles(c.id, { files }))
+      .catch((err) => setCommitFiles(c.id, { error: String(err) }));
+  };
+  const commitLoaded = () => {
+    const c = commit();
+    return c ? commitFiles[c.id] : undefined;
+  };
+  const commitError = () => {
+    const loaded = commitLoaded();
+    return loaded && "error" in loaded ? loaded.error : "";
+  };
   const files = (): CodeReviewFile[] => {
     const r = review();
+    if (commit()) {
+      const loaded = commitLoaded();
+      return loaded && "files" in loaded ? loaded.files : [];
+    }
     return (since() && r?.sinceLastReview?.files) || r?.files || [];
   };
   const current = () => files()[at()] as CodeReviewFile | undefined;
-  const setScope = (onlySince: boolean) => {
-    if (onlySince === since()) return;
-    const path = current()?.path;
-    leaveLines();
-    setSince(onlySince);
+  /** The file shown before a commit was picked (it goes back there). */
+  let scopePath: string | undefined;
+  /** Shows file `path` of the list, else its first. */
+  const showPath = (path: string | undefined) => {
     const i = files().findIndex((f) => f.path === path);
     setAt(i < 0 ? 0 : i);
   };
-  const keyOf = (file: CodeReviewFile) => `${since() ? "since" : "all"}\n${file.path}`;
+  const setScope = (onlySince: boolean) => {
+    if (onlySince === since() && !commit()) return;
+    const path = commit() ? scopePath : current()?.path;
+    leaveLines();
+    batch(() => {
+      setCommit(null);
+      setSince(onlySince);
+      showPath(path);
+    });
+  };
+  const pickCommit = (c: ReviewCommit | null) => {
+    if (c?.id === commit()?.id) c = null; // (picking it again shows the scope's files again)
+    leaveLines();
+    if (!commit()) scopePath = current()?.path;
+    batch(() => {
+      setCommit(c);
+      if (c) setAt(0);
+      else showPath(scopePath);
+    });
+    if (c) fetchCommit(c);
+  };
+  /** The commits the user's last review didn't have, when the list is narrowed to them. */
+  const isNew = (c: ReviewCommit) => !since() || !review()?.sinceLastReview || review()!.sinceLastReview!.commits.includes(c.id);
+  const keyOf = (file: CodeReviewFile) => `${commit()?.id ?? (since() ? "since" : "all")}\n${file.path}`;
   const diffOf = (file: CodeReviewFile) => diffs[keyOf(file)];
   const fetchDiff = (file: CodeReviewFile | undefined) => {
     if (!file || !review() || diffOf(file)) return;
     const key = keyOf(file);
-    core
-      .codeReviewDiff(props.number, file.path, since())
+    const c = commit();
+    (c ? core.codeReviewCommitDiff(props.number, c.id, file.path) : core.codeReviewDiff(props.number, file.path, since()))
       .then((lines) => setDiffs(key, { lines }))
       .catch((err) => setDiffs(key, { error: String(err) }));
   };
@@ -300,8 +354,13 @@ export function CodeReviewView(props: {
 
   // What goes under the diff's lines: the PR's threads and the Pending review's comments, by
   // `side:line`. The since-last-review diff's old side is the last review's, not the merge base's
-  // the comments were made on, so only its new side has them.
-  const shows = (side: DiffSide) => !since() || side === "right";
+  // the comments were made on, so only its new side has them. A commit's lines are its own: only
+  // the PR's last commit has the head's on its new side.
+  const shows = (side: DiffSide) => {
+    const c = commit();
+    if (c) return side === "right" && c.id === review()?.head;
+    return !since() || side === "right";
+  };
   const fileThreads = createMemo(() => threads().filter((t) => t.path === current()?.path));
   const fileComments = createMemo(() => pending.comments.filter((c) => c.path === current()?.path));
   const placed = createMemo(() => {
@@ -335,7 +394,7 @@ export function CodeReviewView(props: {
   const onPicked = (sel: DiffSelection & { rect: DOMRect }) => {
     const picked = { side: sel.side, startLine: sel.startLine, line: sel.line };
     if (!shows(sel.side)) {
-      setNotice({ text: "Here the old side is your last review's: comment on the old side in the full diff." });
+      setNotice({ text: commit() ? "These are the commit's own lines: comment on them in the full diff." : "Here the old side is your last review's: comment on the old side in the full diff." });
       return setSelection(null);
     }
     const m = moving();
@@ -501,7 +560,7 @@ export function CodeReviewView(props: {
   useReviewKeys({
     next: () => go(at() + 1),
     previous: () => go(at() - 1),
-    toggleViewed: () => current() && toggleViewed(current()!),
+    toggleViewed: () => current() && !commit() && toggleViewed(current()!),
     active: () => props.active && !submitOpen(),
     scope: () => reviewPane,
   });
@@ -683,10 +742,10 @@ export function CodeReviewView(props: {
           <Show when={review()?.sinceLastReview}>
             {(s) => (
               <div class="segmented" title={`Your last review was on ${s().commit.slice(0, 7)}`}>
-                <button classList={{ on: since() }} onClick={() => setScope(true)}>
+                <button classList={{ on: since() && !commit() }} onClick={() => setScope(true)}>
                   Since last review
                 </button>
-                <button classList={{ on: !since() }} onClick={() => setScope(false)}>
+                <button classList={{ on: !since() && !commit() }} onClick={() => setScope(false)}>
                   Full diff
                 </button>
               </div>
@@ -786,7 +845,9 @@ export function CodeReviewView(props: {
                     onSelect={go}
                     onToggleViewed={toggleViewed}
                     progress={{ viewed: viewedCount(), total: files().length }}
-                    empty={since() ? "Nothing changed since your last review." : `No changes against ${r().base}.`}
+                    hideViewed={!!commit()}
+                    loading={!!commit() && !commitLoaded()}
+                    empty={commitError() ? "" : commit()?.merge ? "Merged without conflicts: nothing was resolved by hand." : commit() ? "This commit changed no files." : since() ? "Nothing changed since your last review." : `No changes against ${r().base}.`}
                     extra={(file) => (
                       <>
                         <Show when={failedPaths().includes(file.path)}>
@@ -799,13 +860,56 @@ export function CodeReviewView(props: {
                         </Show>
                       </>
                     )}
-                  />
+                    head={
+                      commit() && (
+                        <>
+                          <div class="review-scope">
+                            <span class="grow" title={commit()!.subject}>
+                              <span class="mono muted">{commit()!.shortId}</span> {commit()!.subject}
+                              <Show when={commit()!.merge}>
+                                <span class="pill" title="Only how its conflicts were resolved, against git's own merge with the conflict markers left in">
+                                  conflict resolutions
+                                </span>
+                              </Show>
+                            </span>
+                            <button class="link" onClick={() => pickCommit(null)} title={since() ? "Show what changed since your last review again" : "Show every file the PR changes again"}>
+                              {since() ? "Since last review" : "All changes"}
+                            </button>
+                          </div>
+                          <Show when={commitError()}>
+                            <p class="error small">{commitError()}</p>
+                          </Show>
+                        </>
+                      )
+                    }
+                  >
+                    <Show when={r().commits.length > 0}>
+                      <div class="review-commits">
+                        <div class="git-section">
+                          Commits <span class="badge">{r().commits.length}</span>
+                        </div>
+                        <For each={r().commits}>
+                          {(c) => (
+                            <button
+                              class="review-commit"
+                              classList={{ on: commit()?.id === c.id, reviewed: !isNew(c) }}
+                              onClick={() => pickCommit(c)}
+                              title={`${c.subject}\n\n${commit()?.id === c.id ? "Show all the changes again" : `${c.merge ? `Only how ${c.shortId}'s conflicts were resolved` : `Only what ${c.shortId} changed`}${isNew(c) ? "" : " (in your last review)"}`}`}
+                            >
+                              <span class="mono">{c.shortId}</span>
+                              <span class="review-commit-subject">{c.subject}</span>
+                            </button>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
+                  </ReviewFiles>
                   <section class="review-main">
                     <Show
                       when={!showSetup() || !settingUp()}
                       fallback={<Setup worktree={r().worktree} setup={settingUp()!} onError={fail("Setup")} onOpenSettings={props.onOpenSettings} />}
                     >
-                      <Show when={current()} fallback={<div class="center muted editor-placeholder">{since() ? "Nothing changed since your last review." : "This PR changes no files."}</div>}>
+                      <Show when={current()} fallback={<div class="center muted editor-placeholder">{commit() ? "" : since() ? "Nothing changed since your last review." : "This PR changes no files."}</div>}>
                         {(file) => (
                           <>
                             <div class="review-file-head">
@@ -818,10 +922,12 @@ export function CodeReviewView(props: {
                               <span class="review-stat mono">
                                 <span class="added-key">+{file().additions}</span> <span class="removed-key">−{file().deletions}</span>
                               </span>
-                              <label class="viewed-toggle" title="Viewed, as GitHub keeps it (V)">
-                                <input type="checkbox" checked={isViewed(file())} onChange={() => toggleViewed(file())} />
-                                Viewed
-                              </label>
+                              <Show when={!commit()}>
+                                <label class="viewed-toggle" title="Viewed, as GitHub keeps it (V)">
+                                  <input type="checkbox" checked={isViewed(file())} onChange={() => toggleViewed(file())} />
+                                  Viewed
+                                </label>
+                              </Show>
                             </div>
                             <Show when={outdatedComments().length || outdatedThreads().length}>
                               <div class="cr-outdated" onClick={onBodyClick}>

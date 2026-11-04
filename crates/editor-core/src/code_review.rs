@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::attachments::Attachment;
 use crate::git;
 use crate::git_status::ChangeKind;
-use crate::pull_request::{DiffSide, PullRequestComment, PullRequestDetails};
+use crate::pull_request::{DiffSide, PullRequestComment, PullRequestDetails, ReviewCommit};
 use crate::session::{DiffLine, DiffLineKind, SessionId};
 use crate::setup::SetupInfo;
 
@@ -28,6 +28,8 @@ pub struct CodeReview {
     pub base: String,
     pub merge_base: String,
     pub files: Vec<CodeReviewFile>,
+    /// The PR's commits since it split from its base branch, oldest first.
+    pub commits: Vec<ReviewCommit>,
     /// What changed since the user's last review, when they've reviewed it before.
     pub since_last_review: Option<SinceLastReview>,
     /// The comments not submitted yet, and the lines Claude was asked about.
@@ -61,6 +63,8 @@ pub struct SinceLastReview {
     /// The commit their last review was on.
     pub commit: String,
     pub files: Vec<CodeReviewFile>,
+    /// The ids of the PR's commits that weren't in it (all of them after a force-push).
+    pub commits: Vec<String>,
 }
 
 /// The user's comments on the PR's lines, kept by the core until the review is submitted, and the
@@ -464,7 +468,28 @@ pub(crate) async fn files(
     head: &str,
 ) -> Result<Vec<CodeReviewFile>, String> {
     let changes = git::changes_between(repo, merge_base, head).await?;
-    let counts = git::numstat(repo, merge_base, head).await?;
+    counted(repo, merge_base, head, changes).await
+}
+
+/// What one of the PR's commits changed on its own (`git::commit_changes`: a merge, only its
+/// conflicts' resolutions): the parent its diffs run from, and its files.
+pub(crate) async fn commit_files(
+    repo: &Path,
+    commit: &str,
+) -> Result<(String, Vec<CodeReviewFile>), String> {
+    let (parent, changes) = git::commit_changes(repo, commit).await?;
+    let files = counted(repo, &parent, commit, changes).await?;
+    Ok((parent, files))
+}
+
+/// `changes` from `from` to `to` as the file list shows them, with their added and deleted lines.
+async fn counted(
+    repo: &Path,
+    from: &str,
+    to: &str,
+    changes: Vec<(char, String, Option<String>)>,
+) -> Result<Vec<CodeReviewFile>, String> {
+    let counts = git::numstat(repo, from, to).await?;
     Ok(changes
         .into_iter()
         .map(|(letter, path, renamed_from)| {
