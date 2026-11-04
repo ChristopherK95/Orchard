@@ -1,5 +1,6 @@
 // Walking skeleton view (ticket 01): prerequisite gate → open a Workspace → one Tab with a
 // streaming transcript and a composer. It only renders core state and sends commands (ADR 0003).
+// Test comment.
 import { batch, createEffect, createMemo, createSignal, For, lazy, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import {
