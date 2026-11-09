@@ -7,6 +7,7 @@ import {
   setupOver,
   type BaseChange,
   type LoadedSettings,
+  type MemoryUsage,
   type MissingPrerequisite,
   type MyPullRequest,
   type SetupStatus,
@@ -594,6 +595,14 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     );
   const [settings, setSettings] = createSignal<LoadedSettings | null>(null);
   createEffect(() => settings() && applyAppearance(settings()!.settings.appearance));
+  /** The Agents' memory against the limit setting, polled as often as the core checks it. */
+  const [memory, setMemory] = createSignal<MemoryUsage | null>(null);
+  onMount(() => {
+    const poll = () => void core.memoryUsage().then(setMemory, () => {});
+    poll();
+    const timer = setInterval(poll, 10_000);
+    onCleanup(() => clearInterval(timer));
+  });
   /** Something to know that isn't an error (e.g. a fetch failed, so a Worktree started from stale refs). */
   const [notice, setNotice] = createSignal("");
   /** Each Worktree's sessions, in Tab order (asked for several times per switcher card). */
@@ -1299,6 +1308,33 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           </Show>
         </nav>
         <span class="grow" data-tauri-drag-region />
+        <Show when={memory()}>
+          {(m) => {
+            const fraction = () => (m().limitBytes > 0 ? Math.min(1, m().usedBytes / m().limitBytes) : 0);
+            // Hue 142 is the Idle green (--idle, #22c55e); it falls to 0 (red) as the Agents approach the limit.
+            const fillColor = () => `hsl(${Math.round(142 * (1 - fraction()))}, 71%, 45%)`;
+            return (
+              <div
+                class="memory-meter"
+                title={
+                  m().limitBytes > 0
+                    ? `The Agents use ${gb(m().usedBytes)} of the ${gb(m().limitBytes)} memory limit (Settings → Agents)`
+                    : `The Agents use ${gb(m().usedBytes)}; no memory limit is set`
+                }
+              >
+                <Show when={m().limitBytes > 0}>
+                  <div class="memory-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(fraction() * 100)}>
+                    <div class="memory-fill" style={{ width: `${fraction() * 100}%`, background: fillColor() }} />
+                  </div>
+                </Show>
+                <span class="memory-text">
+                  {gb(m().usedBytes)}
+                  {m().limitBytes > 0 ? ` / ${gb(m().limitBytes)}` : ""}
+                </span>
+              </div>
+            );
+          }}
+        </Show>
         <div class="segmented">
           <button classList={{ on: view() === "dashboard" }} onClick={() => setDashboardOpen(true)} title="Your work in this repository at a glance (Ctrl+D)">
             Dashboard

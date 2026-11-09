@@ -377,6 +377,11 @@ export type SettingChange =
   | { kind: "windowsShell"; shell: WindowsShell }
   | { kind: "actions"; actions: Action[] };
 
+export interface MemoryUsage {
+  usedBytes: number;
+  limitBytes: number;
+}
+
 export interface LoadedSettings {
   settings: Settings;
   /** Why the settings file was rejected; the settings above are the last good ones. */
@@ -1182,6 +1187,8 @@ export const core = {
   sentImage: (path: string) => invoke<string>("sent_image", { path }),
   /** The image on the clipboard, to attach to the next prompt (`null` if there's none): for a paste the webview didn't hand the page. */
   attachClipboardImage: (sessionId: SessionId) => invoke<Attachment | null>("attach_clipboard_image", { sessionId }),
+  /** What the Agents use against the memory limit setting (`limitBytes` 0: no limit). */
+  memoryUsage: () => invoke<MemoryUsage>("memory_usage"),
   /** Stops an Idle session's Agent process to free memory; the conversation stays. */
   suspendSession: (sessionId: SessionId) => invoke<void>("suspend_session", { sessionId }),
   /** Brings a Suspended or Exited session back. */

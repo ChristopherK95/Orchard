@@ -28,6 +28,15 @@ pub struct MemorySample {
     pub total_bytes: u64,
 }
 
+/// The Agents' memory against the limit setting, for the header's meter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryUsage {
+    pub used_bytes: u64,
+    /// 0 when the setting is "no limit".
+    pub limit_bytes: u64,
+}
+
 /// Reads memory use; `adapter_pid` is the shared adapter's process, if it's running.
 pub trait MemoryProbe: Send + Sync {
     fn sample(&self, adapter_pid: Option<u32>) -> MemorySample;
