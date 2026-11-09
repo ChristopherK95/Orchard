@@ -348,11 +348,9 @@ kbd { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; f
 .breadcrumb .crumb.current { color: var(--fg-1); font-weight: 500; }
 .app-header .needs-you-button { gap: 6px; }
 .app-header .needs-you-button .lucide { color: var(--needs-you); }
-.memory-meter { flex: none; display: flex; flex-direction: column; gap: 3px; min-width: 96px; font-size: 11px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
-.memory-bar { height: 4px; border-radius: 2px; background: var(--bg-1); overflow: hidden; }
-.memory-fill { height: 100%; background: var(--fg-3); transition: width 0.3s; }
-.memory-meter.warn .memory-fill { background: var(--needs-you); }
-.memory-meter.danger .memory-fill { background: #d9534f; }
+.memory-meter { flex: none; display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--fg-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.memory-bar { width: 72px; height: 8px; border-radius: 4px; background: var(--bg-1); overflow: hidden; }
+.memory-fill { height: 100%; background: var(--fg-3); transition: width 0.3s, background-color 0.3s; }
 @media (max-width: 1200px) { .memory-meter { display: none; } }
 .search-button { width: 240px; flex-shrink: 1; min-width: 140px; justify-content: flex-start; gap: 8px; padding: 0 8px 0 10px; background: transparent; border-color: var(--line); color: var(--fg-3); font-weight: 400; }
 .search-button:hover:not(:disabled) { background: transparent; border-color: var(--line-strong); color: var(--fg-2); }

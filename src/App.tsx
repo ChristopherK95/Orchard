@@ -1308,6 +1308,33 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           </Show>
         </nav>
         <span class="grow" data-tauri-drag-region />
+        <Show when={memory()}>
+          {(m) => {
+            const fraction = () => (m().limitBytes > 0 ? Math.min(1, m().usedBytes / m().limitBytes) : 0);
+            // Hue 130 (green) down to 0 (red) as the Agents approach the limit.
+            const fillColor = () => `hsl(${Math.round(130 * (1 - fraction()))}, 65%, 45%)`;
+            return (
+              <div
+                class="memory-meter"
+                title={
+                  m().limitBytes > 0
+                    ? `The Agents use ${gb(m().usedBytes)} of the ${gb(m().limitBytes)} memory limit (Settings → Agents)`
+                    : `The Agents use ${gb(m().usedBytes)}; no memory limit is set`
+                }
+              >
+                <Show when={m().limitBytes > 0}>
+                  <div class="memory-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(fraction() * 100)}>
+                    <div class="memory-fill" style={{ width: `${fraction() * 100}%`, background: fillColor() }} />
+                  </div>
+                </Show>
+                <span class="memory-text">
+                  {gb(m().usedBytes)}
+                  {m().limitBytes > 0 ? ` / ${gb(m().limitBytes)}` : ""}
+                </span>
+              </div>
+            );
+          }}
+        </Show>
         <div class="segmented">
           <button classList={{ on: view() === "dashboard" }} onClick={() => setDashboardOpen(true)} title="Your work in this repository at a glance (Ctrl+D)">
             Dashboard
@@ -1340,32 +1367,6 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             <Bell />
             {needYouUnseen()} need{needYouUnseen() === 1 ? "s" : ""} you
           </button>
-        </Show>
-        <Show when={memory()}>
-          {(m) => {
-            const fraction = () => (m().limitBytes > 0 ? Math.min(1, m().usedBytes / m().limitBytes) : 0);
-            return (
-              <div
-                class="memory-meter"
-                classList={{ warn: fraction() >= 0.75 && fraction() < 0.9, danger: fraction() >= 0.9 }}
-                title={
-                  m().limitBytes > 0
-                    ? `The Agents use ${gb(m().usedBytes)} of the ${gb(m().limitBytes)} memory limit (Settings → Agents)`
-                    : `The Agents use ${gb(m().usedBytes)}; no memory limit is set`
-                }
-              >
-                <span class="memory-text">
-                  {gb(m().usedBytes)}
-                  {m().limitBytes > 0 ? ` / ${gb(m().limitBytes)}` : ""}
-                </span>
-                <Show when={m().limitBytes > 0}>
-                  <div class="memory-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(fraction() * 100)}>
-                    <div class="memory-fill" style={{ width: `${fraction() * 100}%` }} />
-                  </div>
-                </Show>
-              </div>
-            );
-          }}
         </Show>
         <button class="search-button" onClick={() => !removing() && !creatingWorktree() && setPaletteOpen(true)} title="Go to a file in this Worktree, or start a session">
           <Search />
