@@ -1311,8 +1311,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         <Show when={memory()}>
           {(m) => {
             const fraction = () => (m().limitBytes > 0 ? Math.min(1, m().usedBytes / m().limitBytes) : 0);
-            // Hue 130 (green) down to 0 (red) as the Agents approach the limit.
-            const fillColor = () => `hsl(${Math.round(130 * (1 - fraction()))}, 65%, 45%)`;
+            // Hue 142 is the Idle green (--idle, #22c55e); it falls to 0 (red) as the Agents approach the limit.
+            const fillColor = () => `hsl(${Math.round(142 * (1 - fraction()))}, 71%, 45%)`;
             return (
               <div
                 class="memory-meter"
