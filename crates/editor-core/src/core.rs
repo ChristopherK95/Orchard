@@ -15,7 +15,7 @@ use crate::acp::{AcpError, AdapterCommand, Connection, Incoming, Responder, PROT
 use crate::app_state::{self, AppState, SavedCodeReview, SavedSession, WorkspaceState};
 use crate::attachments::{self, Attachment, SentImage};
 use crate::auto_suspend::{
-    self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, SystemClock, SystemProbe,
+    self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, MemoryUsage, SystemClock, SystemProbe,
 };
 use crate::code_rabbit::CodeRabbitFeedback;
 use crate::code_review::{
@@ -1672,6 +1672,28 @@ impl Core {
                 Core { inner }.check_auto_suspend().await;
             }
         });
+    }
+
+    /// What the Agents use right now against the memory limit setting, for the header's meter.
+    /// `used_bytes` is the same reading the auto-suspend limit is checked against.
+    pub async fn memory_usage(&self) -> MemoryUsage {
+        let adapter_pid = match self.inner.adapter.try_lock() {
+            Ok(adapter) => adapter
+                .as_ref()
+                .filter(|c| !c.is_closed())
+                .and_then(|c| c.pid()),
+            // Starting up: no Agents to count yet.
+            Err(_) => None,
+        };
+        let probe = self.inner.memory_probe.clone();
+        let used_bytes = tokio::task::spawn_blocking(move || probe.sample(adapter_pid))
+            .await
+            .map_or(0, |sample| sample.agents_bytes);
+        let limit_mb = self.settings().settings.agents.memory_limit_mb;
+        MemoryUsage {
+            used_bytes,
+            limit_bytes: limit_mb.saturating_mul(1024 * 1024),
+        }
     }
 
     /// One tick of the memory monitor (run every 10 s; public so a check can be run on demand):

@@ -75,6 +75,15 @@ async fn setup(script: &str, settings: &str) -> Setup {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn memory_usage_reports_the_agents_reading_against_the_limit_setting() {
+    let s = setup(ECHO, "[agents]\nmemory_limit_mb = 4096\n").await;
+    s.memory.set(using(3));
+    let usage = s.core.memory_usage().await;
+    assert_eq!(usage.used_bytes, 3 * GB);
+    assert_eq!(usage.limit_bytes, 4 * GB);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn over_the_memory_limit_the_longest_idle_sessions_go_first_until_under_it() {
     let s = setup(ECHO, "[agents]\nmemory_limit_mb = 4096\n").await;
     let oldest = s.core.new_session().await.unwrap();

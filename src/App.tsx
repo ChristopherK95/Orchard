@@ -7,6 +7,7 @@ import {
   setupOver,
   type BaseChange,
   type LoadedSettings,
+  type MemoryUsage,
   type MissingPrerequisite,
   type MyPullRequest,
   type SetupStatus,
@@ -594,6 +595,14 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
     );
   const [settings, setSettings] = createSignal<LoadedSettings | null>(null);
   createEffect(() => settings() && applyAppearance(settings()!.settings.appearance));
+  /** The Agents' memory against the limit setting, polled as often as the core checks it. */
+  const [memory, setMemory] = createSignal<MemoryUsage | null>(null);
+  onMount(() => {
+    const poll = () => void core.memoryUsage().then(setMemory, () => {});
+    poll();
+    const timer = setInterval(poll, 10_000);
+    onCleanup(() => clearInterval(timer));
+  });
   /** Something to know that isn't an error (e.g. a fetch failed, so a Worktree started from stale refs). */
   const [notice, setNotice] = createSignal("");
   /** Each Worktree's sessions, in Tab order (asked for several times per switcher card). */
@@ -1331,6 +1340,32 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
             <Bell />
             {needYouUnseen()} need{needYouUnseen() === 1 ? "s" : ""} you
           </button>
+        </Show>
+        <Show when={memory()}>
+          {(m) => {
+            const fraction = () => (m().limitBytes > 0 ? Math.min(1, m().usedBytes / m().limitBytes) : 0);
+            return (
+              <div
+                class="memory-meter"
+                classList={{ warn: fraction() >= 0.75 && fraction() < 0.9, danger: fraction() >= 0.9 }}
+                title={
+                  m().limitBytes > 0
+                    ? `The Agents use ${gb(m().usedBytes)} of the ${gb(m().limitBytes)} memory limit (Settings → Agents)`
+                    : `The Agents use ${gb(m().usedBytes)}; no memory limit is set`
+                }
+              >
+                <span class="memory-text">
+                  {gb(m().usedBytes)}
+                  {m().limitBytes > 0 ? ` / ${gb(m().limitBytes)}` : ""}
+                </span>
+                <Show when={m().limitBytes > 0}>
+                  <div class="memory-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(fraction() * 100)}>
+                    <div class="memory-fill" style={{ width: `${fraction() * 100}%` }} />
+                  </div>
+                </Show>
+              </div>
+            );
+          }}
         </Show>
         <button class="search-button" onClick={() => !removing() && !creatingWorktree() && setPaletteOpen(true)} title="Go to a file in this Worktree, or start a session">
           <Search />

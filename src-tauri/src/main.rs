@@ -852,6 +852,12 @@ fn last_active_session(core: State<'_, Core>) -> Option<SessionId> {
     core.last_active_session()
 }
 
+/// The Agents' memory use against the memory limit setting.
+#[tauri::command]
+async fn memory_usage(core: State<'_, Core>) -> CommandResult<editor_core::MemoryUsage> {
+    Ok(core.memory_usage().await)
+}
+
 /// Stops an Idle session's Agent process; the next prompt resumes it.
 #[tauri::command]
 async fn suspend_session(core: State<'_, Core>, session_id: SessionId) -> CommandResult<()> {
@@ -1928,6 +1934,7 @@ fn main() {
             open_conversation,
             reopen_last_closed,
             last_active_session,
+            memory_usage,
             suspend_session,
             resume_session,
             answer_permission,
