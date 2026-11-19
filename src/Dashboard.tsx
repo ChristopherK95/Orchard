@@ -109,6 +109,8 @@ export function Dashboard(props: {
   onStartSession: (pr: MyPullRequest, prompt?: Promise<string>) => void;
   /** CodeRabbit's open review comments on the PR. */
   codeRabbitComments: (pr: MyPullRequest) => Promise<CodeRabbitFeedback>;
+  /** Claude's review comments on the PR nobody has replied to. */
+  claudeComments: (pr: MyPullRequest) => Promise<CodeRabbitFeedback>;
   /** Where the PR conflicts with the branch it goes into. */
   mergeConflicts: (pr: MyPullRequest) => Promise<MergeConflicts>;
   /** Where each PR's start stands, by number (kept outside the rows, which each refresh makes anew). */
@@ -132,6 +134,8 @@ export function Dashboard(props: {
 
   /** The PR whose CodeRabbit comments are shown. */
   const [codeRabbitOf, setCodeRabbitOf] = createSignal<MyPullRequest | null>(null);
+  /** The PR whose Claude review comments are shown. */
+  const [claudeOf, setClaudeOf] = createSignal<MyPullRequest | null>(null);
   /** The PR whose merge conflicts are shown. */
   const [conflictsOf, setConflictsOf] = createSignal<MyPullRequest | null>(null);
 
@@ -215,7 +219,7 @@ export function Dashboard(props: {
                       {group.title}
                       <span class="badge">{here().length}</span>
                     </div>
-                    <For each={here()}>{(pr) => <PrRow pr={pr} worktree={worktreeOn(pr.head)} start={props.starts[pr.number]} onOpen={() => props.onPr(pr)} onStartSession={() => props.onStartSession(pr)} onCodeRabbit={() => setCodeRabbitOf(pr)} onConflicts={() => setConflictsOf(pr)} />}</For>
+                    <For each={here()}>{(pr) => <PrRow pr={pr} worktree={worktreeOn(pr.head)} start={props.starts[pr.number]} onOpen={() => props.onPr(pr)} onStartSession={() => props.onStartSession(pr)} onCodeRabbit={() => setCodeRabbitOf(pr)} onClaude={() => setClaudeOf(pr)} onConflicts={() => setConflictsOf(pr)} />}</For>
                   </Show>
                 );
               }}
@@ -264,7 +268,12 @@ export function Dashboard(props: {
       </div>
       <Show when={codeRabbitOf()}>
         {(pr) => (
-          <CodeRabbitComments pr={pr()} load={() => props.codeRabbitComments(pr())} onStart={(prompt) => props.onStartSession(pr(), prompt)} onClose={() => setCodeRabbitOf(null)} />
+          <CodeRabbitComments reviewer="CodeRabbit" pr={pr()} load={() => props.codeRabbitComments(pr())} onStart={(prompt) => props.onStartSession(pr(), prompt)} onClose={() => setCodeRabbitOf(null)} />
+        )}
+      </Show>
+      <Show when={claudeOf()}>
+        {(pr) => (
+          <CodeRabbitComments reviewer="Claude" pr={pr()} load={() => props.claudeComments(pr())} onStart={(prompt) => props.onStartSession(pr(), prompt)} onClose={() => setClaudeOf(null)} />
         )}
       </Show>
       <Show when={conflictsOf()}>
@@ -365,7 +374,7 @@ function Row(props: { colour?: string; title: string; onOpen: () => void; childr
 
 /** One of the user's PRs; one with failing checks or changes requested can start an Agent session on
  *  it, one CodeRabbit still asks changes of opens its comments, and one that conflicts opens where. */
-function PrRow(props: { pr: MyPullRequest; worktree?: WorktreeTab; start?: PrStart; onOpen: () => void; onStartSession: () => void; onCodeRabbit: () => void; onConflicts: () => void }) {
+function PrRow(props: { pr: MyPullRequest; worktree?: WorktreeTab; start?: PrStart; onOpen: () => void; onStartSession: () => void; onCodeRabbit: () => void; onClaude: () => void; onConflicts: () => void }) {
   const p = () => props.pr;
   const starting = () => !!props.start?.starting;
   const failed = () => props.start?.error ?? "";
@@ -376,12 +385,18 @@ function PrRow(props: { pr: MyPullRequest; worktree?: WorktreeTab; start?: PrSta
       onOpen={props.onOpen}
       title={`#${p().number} ${p().title}`}
       below={
-        <Show when={canStart() || p().codeRabbitComments || p().conflicts || failed()}>
+        <Show when={canStart() || p().codeRabbitComments || p().claudeComments || p().conflicts || failed()}>
           <div class="dashboard-row-actions" onClick={(e) => e.stopPropagation()}>
             <Show when={p().codeRabbitComments}>
               <button onClick={() => props.onCodeRabbit()} disabled={starting()} title="What CodeRabbit still asks to change, to start an Agent session on">
                 <Bot />
                 CodeRabbit comments ({p().codeRabbitComments})
+              </button>
+            </Show>
+            <Show when={p().claudeComments}>
+              <button onClick={() => props.onClaude()} disabled={starting()} title="Claude's review comments nobody has replied to, to start an Agent session on">
+                <Bot />
+                Claude comments ({p().claudeComments})
               </button>
             </Show>
             <Show when={p().conflicts}>
@@ -422,6 +437,11 @@ function PrRow(props: { pr: MyPullRequest; worktree?: WorktreeTab; start?: PrSta
       <Show when={p().codeRabbitComments}>
         <span class="dashboard-tag" title={`CodeRabbit asks for changes in ${p().codeRabbitComments === 1 ? "1 comment" : `${p().codeRabbitComments} comments`} not resolved`}>
           CodeRabbit: changes requested
+        </span>
+      </Show>
+      <Show when={p().claudeComments}>
+        <span class="dashboard-tag" title={`Claude's review has ${p().claudeComments === 1 ? "1 comment" : `${p().claudeComments} comments`} without a reply`}>
+          Claude: unanswered comments
         </span>
       </Show>
       <Show when={p().conflicts}>

@@ -9,6 +9,8 @@ import { Bot, ChevronDown, ChevronRight, ExternalLink, Loader, MessageSquare, Sp
 import { handleTranscriptClick, renderMarkdown } from "./markdown";
 
 export function CodeRabbitComments(props: {
+  /** Whose comments these are: "CodeRabbit" or "Claude". */
+  reviewer: string;
   pr: MyPullRequest;
   load: () => Promise<CodeRabbitFeedback>;
   /** Starts an Agent session on the PR with this prompt (the Dashboard's row says how it goes). */
@@ -40,12 +42,12 @@ export function CodeRabbitComments(props: {
 
   return (
     <div class="modal-backdrop" onClick={(e) => e.target === e.currentTarget && props.onClose()}>
-      <div class="modal code-rabbit" role="dialog" aria-label="CodeRabbit's comments">
+      <div class="modal code-rabbit" role="dialog" aria-label={`${props.reviewer}'s comments`}>
         <div class="modal-head code-rabbit-title">
           <div>
             <span class="code-rabbit-eyebrow">
               <Bot />
-              CodeRabbit asks for changes
+              {props.reviewer} {props.reviewer === "Claude" ? "has comments without a reply" : "asks for changes"}
             </span>
             <b>
               {props.pr.title} <span class="pr-number">#{props.pr.number}</span>
@@ -80,7 +82,7 @@ export function CodeRabbitComments(props: {
               when={comments().length}
               fallback={
                 <Show when={feedback()}>
-                  <p class="dashboard-line muted">No open CodeRabbit comments</p>
+                  <p class="dashboard-line muted">No open {props.reviewer} comments</p>
                 </Show>
               }
             >

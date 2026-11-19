@@ -1237,6 +1237,18 @@ async fn code_rabbit_comments(
         .map_err(|e| e.to_string())
 }
 
+/// Claude's review comments on PR `number` nobody has replied to yet.
+#[tauri::command]
+async fn claude_comments(
+    core: State<'_, Core>,
+    worktree: String,
+    number: u64,
+) -> CommandResult<editor_core::CodeRabbitFeedback> {
+    core.claude_comments(worktree.as_ref(), number)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Where PR `number` conflicts with the branch it goes into.
 #[tauri::command]
 async fn merge_conflicts(
@@ -1976,6 +1988,7 @@ fn main() {
             failing_check_prompt,
             review_feedback_prompt,
             code_rabbit_comments,
+            claude_comments,
             code_rabbit_prompt,
             merge_conflicts,
             merge_conflict_prompt,

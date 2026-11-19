@@ -15,7 +15,8 @@ use crate::acp::{AcpError, AdapterCommand, Connection, Incoming, Responder, PROT
 use crate::app_state::{self, AppState, SavedCodeReview, SavedSession, WorkspaceState};
 use crate::attachments::{self, Attachment, SentImage};
 use crate::auto_suspend::{
-    self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, MemoryUsage, SystemClock, SystemProbe,
+    self, AutoSuspendReason, Candidate, Clock, Limits, MemoryProbe, MemoryUsage, SystemClock,
+    SystemProbe,
 };
 use crate::code_rabbit::CodeRabbitFeedback;
 use crate::code_review::{
@@ -4396,6 +4397,26 @@ impl Core {
         worktree: &Path,
         number: u64,
     ) -> Result<CodeRabbitFeedback, CoreError> {
+        self.review_comments(worktree, number, crate::code_rabbit::Reviewer::CodeRabbit)
+            .await
+    }
+
+    /// Claude's review comments on PR `number` nobody has replied to yet.
+    pub async fn claude_comments(
+        &self,
+        worktree: &Path,
+        number: u64,
+    ) -> Result<CodeRabbitFeedback, CoreError> {
+        self.review_comments(worktree, number, crate::code_rabbit::Reviewer::Claude)
+            .await
+    }
+
+    async fn review_comments(
+        &self,
+        worktree: &Path,
+        number: u64,
+        reviewer: crate::code_rabbit::Reviewer,
+    ) -> Result<CodeRabbitFeedback, CoreError> {
         use crate::pull_request::{gh_text, not_about_creating};
         let worktree = self.known_worktree(worktree)?;
         let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
@@ -4415,7 +4436,7 @@ impl Core {
         ];
         gh_text(&gh, &worktree, &args)
             .await
-            .and_then(|out| crate::code_rabbit::open_comments(number, &out))
+            .and_then(|out| crate::code_rabbit::open_comments(number, &out, reviewer))
             .map_err(|e| CoreError::Git(not_about_creating(e)))
     }
 

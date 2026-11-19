@@ -259,6 +259,8 @@ pub struct MyPullRequest {
     pub conflicts: bool,
     /// How many review threads CodeRabbit started on it aren't resolved: the changes it still asks for.
     pub code_rabbit_comments: u32,
+    /// How many review threads Claude started on it nobody has replied to yet.
+    pub claude_comments: u32,
     pub updated_at: String,
     pub merged_at: Option<String>,
     pub closed_at: Option<String>,
@@ -307,13 +309,24 @@ pub(crate) async fn mine(gh: &Path, worktree: &Path) -> Result<Vec<MyPullRequest
     let (open, rabbit) = tokio::join!(gh_text(gh, worktree, &open), gh_text(gh, worktree, &rabbit));
     let mut prs = mine_listed(&open?)?;
     // CodeRabbit's comments are extra: the PRs are shown without them when they can't be read.
-    let rabbit = rabbit.and_then(|out| crate::code_rabbit::open_counts(&out));
+    use crate::code_rabbit::{open_counts, Reviewer};
+    let rabbit = rabbit.ok();
+    let counts_of = |reviewer| {
+        rabbit
+            .as_deref()
+            .and_then(|out| open_counts(out, reviewer).ok())
+    };
+    let (rabbit_counts, claude_counts) =
+        (counts_of(Reviewer::CodeRabbit), counts_of(Reviewer::Claude));
     for pr in &mut prs {
-        pr.code_rabbit_comments = rabbit
-            .as_ref()
-            .ok()
-            .and_then(|counts| counts.get(&pr.number).copied())
-            .unwrap_or(0);
+        let of = |counts: &Option<std::collections::HashMap<u64, u32>>| {
+            counts
+                .as_ref()
+                .and_then(|c| c.get(&pr.number).copied())
+                .unwrap_or(0)
+        };
+        pr.code_rabbit_comments = of(&rabbit_counts);
+        pr.claude_comments = of(&claude_counts);
     }
     Ok(prs)
 }
@@ -382,6 +395,7 @@ fn mine_listed(stdout: &str) -> Result<Vec<MyPullRequest>, String> {
                 checks,
                 conflicts: pr.mergeable == "CONFLICTING",
                 code_rabbit_comments: 0,
+                claude_comments: 0,
                 updated_at: pr.updated_at,
                 merged_at: pr.merged_at.filter(|at| !at.is_empty()),
                 closed_at: pr.closed_at.filter(|at| !at.is_empty()),
