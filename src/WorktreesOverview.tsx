@@ -15,8 +15,9 @@ const plural = (n: number, thing: string) => `${n} ${thing}${n === 1 ? "" : "s"}
 /** Its branch is in the Base, so removing it (and the branch) loses no committed work. */
 const merged = (m: MergeState | null) => m?.kind === "merged" || m?.kind === "changesInBase";
 
-/** Can go: merged (a Review Worktree: its review done), with nothing uncommitted. */
-const ready = (row: WorktreeMerge) => (row.review ? row.review.done : merged(row.merge)) && row.changed === 0;
+/** Can go: merged or its PR closed (a Review Worktree: its review done), with nothing uncommitted. */
+const ready = (row: WorktreeMerge) =>
+  (row.review ? row.review.done : merged(row.merge) || row.merge?.kind === "pullRequestClosed") && row.changed === 0;
 
 function status(row: WorktreeMerge): { text: string; tone: "ok" | "warn" | "muted" | "error" } {
   if (row.error) return { text: row.error, tone: "error" };
@@ -30,6 +31,8 @@ function status(row: WorktreeMerge): { text: string; tone: "ok" | "warn" | "mute
       return { text: `Merged into ${m.into}`, tone: "ok" };
     case "changesInBase":
       return { text: `Merged into ${m.into} (squashed or rebased)`, tone: "ok" };
+    case "pullRequestClosed":
+      return { text: `PR #${m.number} closed without merging: ${plural(m.commits, "commit")} not in ${row.base}`, tone: "warn" };
     case "nothingNew":
       return { text: "No commits of its own yet", tone: "muted" };
     case "remoteDeleted":

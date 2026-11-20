@@ -134,7 +134,7 @@ const [cleanUpError, setCleanUpError] = createSignal("");
 let cleanUpAsked = 0;
 
 /** A Worktree branch whose work is in its Base, or whose remote branch was deleted: it can go. */
-const canGo = (w: WorktreeMerge) => w.merge?.kind === "merged" || w.merge?.kind === "changesInBase" || w.merge?.kind === "remoteDeleted";
+const canGo = (w: WorktreeMerge) => w.merge?.kind === "merged" || w.merge?.kind === "changesInBase" || w.merge?.kind === "remoteDeleted" || w.merge?.kind === "pullRequestClosed";
 
 /** The Worktrees ready to clean up, as the Worktrees overview reads them. */
 export const cleanUp = { list: cleanUpList, error: cleanUpError };
