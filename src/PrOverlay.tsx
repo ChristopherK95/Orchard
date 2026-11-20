@@ -65,7 +65,7 @@ type Tab = "conversation" | "code" | "commits" | "checks";
 /** The group for people in none of the teams (bots, outside contributors). */
 const OTHER = "Other";
 /** Bots that get a group of their own, by login (GitHub's API says `name` or `name[bot]`). */
-const BOTS: Record<string, string> = { coderabbitai: "Coderabbit", "github-actions": "Actions" };
+const BOTS: Record<string, string> = { coderabbitai: "Coderabbit", "github-actions": "Actions", claude: "Claude" };
 const botOf = (login: string) => BOTS[login.toLowerCase().replace(/^app\//, "").replace(/\[bot\]$/, "")];
 /** A team's name as its chip and tags say it. */
 const short = (name: string) => (name === "Developers" ? "Dev" : name);

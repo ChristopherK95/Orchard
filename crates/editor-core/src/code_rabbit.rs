@@ -14,6 +14,41 @@ pub(crate) fn is_code_rabbit(login: &str) -> bool {
     matches!(login, "coderabbitai" | "coderabbitai[bot]")
 }
 
+/// Claude's login when it reviews a PR (the Claude GitHub app), bare or with `[bot]`.
+pub(crate) fn is_claude(login: &str) -> bool {
+    matches!(login, "claude" | "claude[bot]")
+}
+
+/// Who reviewed a PR with comments on its code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reviewer {
+    CodeRabbit,
+    Claude,
+}
+
+impl Reviewer {
+    pub fn name(self) -> &'static str {
+        match self {
+            Reviewer::CodeRabbit => "CodeRabbit",
+            Reviewer::Claude => "Claude",
+        }
+    }
+
+    /// Whether `thread` is one of this reviewer's that still asks for something. CodeRabbit's
+    /// count until resolved; Claude's only while nobody has replied, as it isn't told to resolve
+    /// its threads, so a reply is how they're answered.
+    fn asks_on<C: Author>(self, is_resolved: bool, comments: &[C]) -> bool {
+        if is_resolved {
+            return false;
+        }
+        let first = comments.first().and_then(|c| c.login());
+        match self {
+            Reviewer::CodeRabbit => first.is_some_and(is_code_rabbit),
+            Reviewer::Claude => first.is_some_and(is_claude) && comments.len() == 1,
+        }
+    }
+}
+
 /// What `gh api graphql` is asked for the open threads on the user's open PRs (`$q` is
 /// `OPEN_SEARCH`).
 pub(crate) const COUNT_QUERY: &str = "query($q: String!) {
@@ -21,7 +56,7 @@ pub(crate) const COUNT_QUERY: &str = "query($q: String!) {
     nodes {
       ... on PullRequest {
         number
-        reviewThreads(first: 100) { nodes { isResolved comments(first: 1) { nodes { author { login } } } } }
+        reviewThreads(first: 100) { nodes { isResolved comments(first: 2) { nodes { author { login } } } } }
       }
     }
   }
@@ -30,9 +65,9 @@ pub(crate) const COUNT_QUERY: &str = "query($q: String!) {
 /// The user's open PRs in the Worktree's repo (`gh` fills it in).
 pub(crate) const OPEN_SEARCH: &str = "repo:{owner}/{repo} is:pr is:open author:@me";
 
-/// Reads `COUNT_QUERY`'s answer: by PR number, how many threads CodeRabbit started that aren't
-/// resolved (PRs with none left out).
-pub(crate) fn open_counts(stdout: &str) -> Result<HashMap<u64, u32>, String> {
+/// Reads `COUNT_QUERY`'s answer: by PR number, how many threads `reviewer` started that still ask
+/// for something (PRs with none left out).
+pub(crate) fn open_counts(stdout: &str, reviewer: Reviewer) -> Result<HashMap<u64, u32>, String> {
     #[derive(Deserialize)]
     struct Answer {
         data: Data,
@@ -68,18 +103,11 @@ pub(crate) fn open_counts(stdout: &str) -> Result<HashMap<u64, u32>, String> {
                 .review_threads
                 .nodes
                 .iter()
-                .filter(|t| !t.is_resolved && started_by_code_rabbit(&t.comments.nodes))
+                .filter(|t| reviewer.asks_on(t.is_resolved, &t.comments.nodes))
                 .count() as u32;
             (open > 0).then_some((pr.number?, open))
         })
         .collect())
-}
-
-fn started_by_code_rabbit<C: Author>(comments: &[C]) -> bool {
-    comments
-        .first()
-        .and_then(|c| c.login())
-        .is_some_and(is_code_rabbit)
 }
 
 trait Author {
@@ -90,6 +118,8 @@ trait Author {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodeRabbitFeedback {
+    /// Who the comments are from: "CodeRabbit" or "Claude".
+    pub reviewer: String,
     pub number: u64,
     pub title: String,
     pub comments: Vec<CodeRabbitComment>,
@@ -174,9 +204,13 @@ struct Comment {
     author: Option<Login>,
 }
 
-/// Reads `THREAD_QUERY`'s answer for PR `number`: CodeRabbit's threads that aren't resolved, in
-/// the order GitHub gives them.
-pub(crate) fn open_comments(number: u64, stdout: &str) -> Result<CodeRabbitFeedback, String> {
+/// Reads `THREAD_QUERY`'s answer for PR `number`: `reviewer`'s threads that still ask for
+/// something, in the order GitHub gives them.
+pub(crate) fn open_comments(
+    number: u64,
+    stdout: &str,
+    reviewer: Reviewer,
+) -> Result<CodeRabbitFeedback, String> {
     #[derive(Deserialize)]
     struct Answer {
         data: Data,
@@ -216,7 +250,7 @@ pub(crate) fn open_comments(number: u64, stdout: &str) -> Result<CodeRabbitFeedb
         .review_threads
         .nodes
         .into_iter()
-        .filter(|t| !t.is_resolved && started_by_code_rabbit(&t.comments.nodes))
+        .filter(|t| reviewer.asks_on(t.is_resolved, &t.comments.nodes))
         .filter_map(|t| {
             let mut said = t.comments.nodes.into_iter();
             let first = said.next()?;
@@ -242,6 +276,7 @@ pub(crate) fn open_comments(number: u64, stdout: &str) -> Result<CodeRabbitFeedb
         })
         .collect();
     Ok(CodeRabbitFeedback {
+        reviewer: reviewer.name().to_string(),
         number,
         title: pr.title,
         comments,
@@ -537,11 +572,11 @@ fn split_details(body: &str, pick: impl Fn(&str) -> bool) -> (String, Vec<String
 pub fn code_rabbit_prompt(feedback: &CodeRabbitFeedback, chosen: &[u64]) -> String {
     let number = feedback.number;
     let mut text = format!(
-        "CodeRabbit reviewed PR #{number} ({}) and asked for the changes below. For each one, \
+        "{} reviewed PR #{number} ({}) and asked for the changes below. For each one, \
          decide whether it's right. If it is, make the change. If it isn't, leave the code as it \
          is and reply on its thread on GitHub saying why, with \
          `gh api repos/{{owner}}/{{repo}}/pulls/{number}/comments/<comment id>/replies -f body='<why>'`.\n",
-        feedback.title
+        feedback.reviewer, feedback.title
     );
     for comment in feedback.comments.iter().filter(|c| chosen.contains(&c.id)) {
         let place = match comment.line {
@@ -564,7 +599,10 @@ pub fn code_rabbit_prompt(feedback: &CodeRabbitFeedback, chosen: &[u64]) -> Stri
             text.push('\n');
         }
         if let Some(prompt) = &comment.agent_prompt {
-            text.push_str("\nCodeRabbit's prompt for AI agents:\n\n");
+            text.push_str(&format!(
+                "\n{}'s prompt for AI agents:\n\n",
+                feedback.reviewer
+            ));
             text.push_str(&format!("```\n{prompt}\n```\n"));
         }
         for reply in &comment.replies {
@@ -583,6 +621,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn claudes_threads_count_only_while_unanswered() {
+        let out = r#"{"data":{"search":{"nodes":[
+            {"number":4,"reviewThreads":{"nodes":[
+                {"isResolved":false,"comments":{"nodes":[{"author":{"login":"claude"}}]}},
+                {"isResolved":false,"comments":{"nodes":[{"author":{"login":"claude"}},{"author":{"login":"me"}}]}},
+                {"isResolved":true,"comments":{"nodes":[{"author":{"login":"claude"}}]}},
+                {"isResolved":false,"comments":{"nodes":[{"author":{"login":"coderabbitai"}}]}}]}}
+        ]}}}"#;
+        assert_eq!(
+            open_counts(out, Reviewer::Claude).unwrap(),
+            HashMap::from([(4, 1)])
+        );
+        assert_eq!(
+            open_counts(out, Reviewer::CodeRabbit).unwrap(),
+            HashMap::from([(4, 1)])
+        );
+    }
+
+    #[test]
     fn open_counts_are_of_threads_code_rabbit_started_and_not_resolved() {
         let out = r#"{"data":{"search":{"nodes":[
             {"number":4,"reviewThreads":{"nodes":[
@@ -594,7 +651,7 @@ mod tests {
                 {"isResolved":false,"comments":{"nodes":[{"author":{"login":"ann"}}]}}]}},
             {}
         ]}}}"#;
-        let counts = open_counts(out).unwrap();
+        let counts = open_counts(out, Reviewer::CodeRabbit).unwrap();
         assert_eq!(counts, HashMap::from([(4, 2)]));
     }
 
@@ -614,7 +671,7 @@ mod tests {
 
     #[test]
     fn open_comments_are_code_rabbits_unresolved_threads_with_their_heading() {
-        let feedback = open_comments(12, THREADS).unwrap();
+        let feedback = open_comments(12, THREADS, Reviewer::CodeRabbit).unwrap();
         assert_eq!(feedback.title, "Fix the parser");
         let seen: Vec<_> = feedback
             .comments
@@ -700,7 +757,7 @@ mod tests {
 
     #[test]
     fn the_prompt_has_the_chosen_comments_without_analysis_chains() {
-        let feedback = open_comments(12, THREADS).unwrap();
+        let feedback = open_comments(12, THREADS, Reviewer::CodeRabbit).unwrap();
         let prompt = code_rabbit_prompt(&feedback, &[101]);
         assert!(prompt.contains("#12 (Fix the parser)"), "{prompt}");
         assert!(

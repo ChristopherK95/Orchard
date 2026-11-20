@@ -609,6 +609,8 @@ export interface MyPullRequest {
   conflicts: boolean;
   /** How many review threads CodeRabbit started on it aren't resolved: the changes it still asks for. */
   codeRabbitComments: number;
+  /** How many review threads Claude started on it nobody has replied to yet. */
+  claudeComments: number;
   updatedAt: string;
   mergedAt: string | null;
   closedAt: string | null;
@@ -616,6 +618,8 @@ export interface MyPullRequest {
 
 /** CodeRabbit's open review comments on one PR. */
 export interface CodeRabbitFeedback {
+  /** Who the comments are from: "CodeRabbit" or "Claude". */
+  reviewer: string;
   number: number;
   title: string;
   comments: CodeRabbitComment[];
@@ -1264,6 +1268,8 @@ export const core = {
   reviewFeedbackPrompt: (worktree: string, number: number) => invoke<string>("review_feedback_prompt", { worktree, number }),
   /** CodeRabbit's open review comments on PR `number`. */
   codeRabbitComments: (worktree: string, number: number) => invoke<CodeRabbitFeedback>("code_rabbit_comments", { worktree, number }),
+  /** Claude's review comments on PR `number` nobody has replied to yet. */
+  claudeComments: (worktree: string, number: number) => invoke<CodeRabbitFeedback>("claude_comments", { worktree, number }),
   /** The prompt that starts an Agent session on the CodeRabbit comments chosen (by id). */
   codeRabbitPrompt: (feedback: CodeRabbitFeedback, chosen: number[]) => invoke<string>("code_rabbit_prompt", { feedback, chosen }),
   /** Where PR `number` conflicts with the branch it goes into (both fetched from origin and merged without touching a Worktree). */
