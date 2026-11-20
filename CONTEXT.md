@@ -33,7 +33,7 @@ The branch or commit a Worktree's branch is compared against in "Changes vs base
 _Avoid_: Upstream (that's the branch it pushes to), target
 
 **Worktrees overview**:
-Every Worktree of the Workspace but the main checkout (which can't be removed) in one list, with whether its branch is merged into its Base (or into another branch its PR targeted, such as a project branch), so finished ones can be removed. Merged counts however the PR landed: a merge commit or fast-forward (the branch's commits are in the Base), or a squash or rebase (its changes are). A remote branch that was deleted is shown, but doesn't count as merged by itself. A Review Worktree counts once its Code review is done.
+Every Worktree of the Workspace but the main checkout (which can't be removed) in one list, with whether its branch is merged into its Base (or into another branch its PR targeted, such as a project branch), so finished ones can be removed. Merged counts however the PR landed: a merge commit or fast-forward (the branch's commits are in the Base), or a squash or rebase (its changes are). A remote branch that was deleted is shown, but doesn't count as merged by itself. A branch whose latest PR was closed without merging is ready to remove too (its branch is kept, as its commits are in no other). A Review Worktree counts once its Code review is done.
 _Avoid_: Clean-up, prune
 
 **Worktree switcher**:

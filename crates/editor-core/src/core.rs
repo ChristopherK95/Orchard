@@ -2483,6 +2483,35 @@ impl Core {
             }
             rows[i].merge = Some(state);
         }
+        // A PR closed without merging never reaches the Base, so git can't tell; GitHub can. Asked
+        // every time (not cached with the git state): closing a PR changes no ref here.
+        let gh = crate::pull_request::gh_program(self.inner.config.gh.as_ref());
+        let mut asking = tokio::task::JoinSet::new();
+        for (i, row) in rows.iter().enumerate() {
+            let commits = match (&row.merge, &row.branch) {
+                (Some(MergeState::NotMerged { commits }), Some(_))
+                | (Some(MergeState::RemoteDeleted { commits }), Some(_)) => *commits,
+                _ => continue,
+            };
+            let (gh, root, branch, path) =
+                (gh.clone(), root.clone(), row.branch.clone(), row.path.clone());
+            let head = heads.get(&row.path).cloned().unwrap_or_default();
+            let limit = limit.clone();
+            asking.spawn(async move {
+                let _turn = limit.acquire().await;
+                let head = match head.is_empty() {
+                    false => head,
+                    true => git::resolve_commit(&path, "HEAD").await.unwrap_or_default(),
+                };
+                let number = merged::closed_pull_request(&gh, &root, &branch?, &head).await?;
+                Some((i, number, commits))
+            });
+        }
+        while let Some(done) = asking.join_next().await {
+            if let Ok(Some((i, number, commits))) = done {
+                rows[i].merge = Some(MergeState::PullRequestClosed { number, commits });
+            }
+        }
         // (Worktrees that are gone are forgotten.)
         self.inner
             .merged

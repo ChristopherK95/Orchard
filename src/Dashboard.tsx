@@ -86,6 +86,7 @@ export type PrStart = { starting: boolean; error: string };
 function mergeText(m: MergeState | null): string {
   if (m?.kind === "merged") return `merged into ${m.into}`;
   if (m?.kind === "changesInBase") return `its changes are in ${m.into}`;
+  if (m?.kind === "pullRequestClosed") return `PR #${m.number} closed without merging`;
   if (m?.kind === "remoteDeleted") return "remote branch deleted";
   return "";
 }

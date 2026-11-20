@@ -26,6 +26,9 @@ pub enum MergeState {
     /// It has `commits` the Base hasn't, and its remote branch was deleted: the PR may have been
     /// merged in a way that doesn't show here, or closed without merging.
     RemoteDeleted { commits: u32 },
+    /// Its PR, `number`, was closed without merging, so its `commits` will never reach the Base.
+    /// The branch is kept when the Worktree goes: the commits are in no other branch.
+    PullRequestClosed { number: u64, commits: u32 },
     /// It has `commits` the Base hasn't.
     NotMerged { commits: u32 },
 }
@@ -250,4 +253,51 @@ async fn arrival(worktree: &Path, target: &str, head: &str, what: Arrival) -> Op
     }
     let (commit, time) = line.swap_remove(lo);
     Some(Arrived { commit, time, what })
+}
+
+/// The number of the PR from `branch` that was closed without merging, if the latest one is and
+/// its head is still `head` (a branch with new commits since is new work, not a closed one).
+/// `None` when that can't be told, such as without `gh` or a network.
+pub(crate) async fn closed_pull_request(
+    gh: &Path,
+    repo: &Path,
+    branch: &str,
+    head: &str,
+) -> Option<u64> {
+    let args = [
+        "pr",
+        "list",
+        "--head",
+        branch,
+        "--state",
+        "all",
+        "--json",
+        "number,state,headRefOid",
+    ];
+    let printed = crate::pull_request::gh_text(gh, repo, &args).await.ok()?;
+    latest_closed(printed.trim(), head)
+}
+
+/// `closed_pull_request` over `gh pr list`'s JSON.
+fn latest_closed(json: &str, head: &str) -> Option<u64> {
+    let list: Vec<serde_json::Value> = serde_json::from_str(json).ok()?;
+    let latest = list.iter().max_by_key(|pr| pr["number"].as_u64())?;
+    let closed = latest["state"].as_str() == Some("CLOSED");
+    let same_head = latest["headRefOid"].as_str() == Some(head);
+    (closed && same_head).then(|| latest["number"].as_u64()).flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::latest_closed;
+
+    #[test]
+    fn only_a_closed_latest_pr_at_the_same_head_counts() {
+        let list = r#"[{"number":3,"state":"CLOSED","headRefOid":"a"},{"number":5,"state":"OPEN","headRefOid":"a"}]"#;
+        assert_eq!(latest_closed(list, "a"), None);
+        let list = r#"[{"number":3,"state":"MERGED","headRefOid":"a"},{"number":5,"state":"CLOSED","headRefOid":"a"}]"#;
+        assert_eq!(latest_closed(list, "a"), Some(5));
+        assert_eq!(latest_closed(list, "b"), None);
+        assert_eq!(latest_closed("[]", "a"), None);
+    }
 }

@@ -231,6 +231,8 @@ export type MergeState =
   | { kind: "nothingNew" }
   /** Not found in the Base, but its remote branch was deleted (the PR merged some other way, or closed). */
   | { kind: "remoteDeleted"; commits: number }
+  /** Its PR was closed without merging: its commits will never reach the Base. */
+  | { kind: "pullRequestClosed"; number: number; commits: number }
   | { kind: "notMerged"; commits: number };
 
 /** One row of the Worktrees overview. */
