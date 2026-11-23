@@ -1489,6 +1489,32 @@ async fn ask_attachment(
         .map_err(|e| e.to_string())
 }
 
+/// "Ask Claude" on lines of the changes beside a session: the lines, with some around them.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn ask_attachment_in_worktree(
+    core: State<'_, Core>,
+    worktree: String,
+    split: String,
+    path: String,
+    renamed_from: Option<String>,
+    side: editor_core::DiffSide,
+    start_line: Option<u32>,
+    line: u32,
+) -> CommandResult<Attachment> {
+    core.ask_attachment_in_worktree(
+        worktree.as_ref(),
+        &split,
+        &path,
+        renamed_from.as_deref(),
+        side,
+        start_line,
+        line,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// The PR number of a Review Worktree; None for any other Worktree.
 #[tauri::command]
 fn is_review_worktree(core: State<'_, Core>, worktree: String) -> Option<u64> {
@@ -2010,6 +2036,7 @@ fn main() {
             code_review_session,
             claude_review,
             ask_attachment,
+            ask_attachment_in_worktree,
             is_review_worktree,
             set_permission_mode,
             transcript_page_before,

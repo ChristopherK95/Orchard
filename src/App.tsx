@@ -29,6 +29,7 @@ import { WorktreesOverview } from "./WorktreesOverview";
 import { SWITCHER_CLOSE_MS, WorktreeSwitcher } from "./WorktreeSwitcher";
 import { AgentPicker } from "./AgentPicker";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
+import { ChangesPanel } from "./ChangesPanel";
 import { FilesDrawer } from "./FilesDrawer";
 import { type BranchPopover, BranchSwitcher, popoverUnder } from "./BranchPicker";
 import { GitDrawer } from "./GitDrawer";
@@ -65,7 +66,7 @@ import { applyAppearance } from "./appearance";
 // The compact cut of the mark: the one for 32 px and below. Inline, not an <img>: its outer fruit
 // overhang its box, and an <img> would clip them.
 import orchardMark from "./assets/orchard-mark-small.svg?raw";
-import { Bell, ChevronDown, ChevronRight, GitBranch, GitCompareArrows, GitPullRequest, History, LayoutGrid, Loader, PanelRight, Plus, Search, Settings, Sparkles, SquareTerminal, X } from "./icons";
+import { Bell, ChevronDown, ChevronRight, FileDiff, GitBranch, GitCompareArrows, GitPullRequest, History, LayoutGrid, Loader, PanelRight, Plus, Search, Settings, Sparkles, SquareTerminal, X } from "./icons";
 
 /** The PRs and review requests read this lately aren't asked for again when the window gets focus,
  *  or the Dashboard is shown. */
@@ -390,6 +391,8 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
   /** The Files drawer and Ctrl+P; `revision` per Worktree, bumped when its files change. */
   /** The drawer on the right edge: the Worktree's files, or its git status (one at a time). */
   const [drawer, setDrawer] = createSignal<"files" | "git" | null>(null);
+  /** The Changes side panel of the Tabs view, beside the transcript (and beside a drawer). */
+  const [changesOpen, setChangesOpen] = createSignal(false);
   const filesOpen = () => drawer() === "files";
   const gitOpen = () => drawer() === "git";
   const setFilesOpen = (open: boolean) => setDrawer(open ? "files" : null);
@@ -1403,6 +1406,11 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
         <Show when={view() === "tabs" && worktree() && !worktree()!.removed}>
           <PrButton worktree={activeWorktree()} class="outline" onOpen={() => openPrOf(activeWorktree())} />
         </Show>
+        <Show when={view() === "tabs" && worktree() && !worktree()!.removed}>
+          <button class="ghost icon" classList={{ on: changesOpen() }} onClick={() => setChangesOpen((now) => !now)} title="This Worktree's changes against its Base, to ask Claude about" aria-label="Changes">
+            <FileDiff />
+          </button>
+        </Show>
         <button class="ghost icon" classList={{ on: filesOpen() }} onClick={() => toggleDrawer("files")} title="This Worktree's files (Ctrl+Shift+E)" aria-label="Files drawer">
           <PanelRight />
         </button>
@@ -1954,6 +1962,15 @@ function WorkspaceView(props: { workspace: WorkspaceInfo; onSwitched: (w: Worksp
           onMaximize={() => setTerminalMaximized((now) => !now)}
           takeFocus
           onClose={() => toggleTerminalOf(activeWorktree())}
+        />
+      </Show>
+      <Show when={mainView() === "tabs" && changesOpen() && worktree() && !worktree()!.removed && !shownReview()}>
+        <ChangesPanel
+          worktree={activeWorktree()}
+          session={session()?.id ?? null}
+          label={worktreeLabel(worktree()!)}
+          colour={worktreeColour(activeWorktree())}
+          onClose={() => setChangesOpen(false)}
         />
       </Show>
       <Show when={filesOpen()}>

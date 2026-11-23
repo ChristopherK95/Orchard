@@ -101,6 +101,10 @@ _Avoid_: Code review (that's reviewing someone else's PR), diff view
 Going through a pull request the user is a reviewer on, file by file, in its Review Worktree: the PR's head against its merge base with the PR's base branch (or, on a re-requested review, only what changed since the user's last review), Viewed ticks shared with GitHub, the PR's threads under their lines (with Reply), comments on lines held in the Pending review, and a verdict (Approve, Request changes or Comment) submitted with them. New commits pushed meanwhile are offered with Refresh. It is the review Agent session's Tab (not an overlay), so the user can switch to their own work and back; that one session per PR, its chat in a column beside the diff, can review the whole PR ("Claude review") or answer a question about selected lines ("Ask Claude"); nothing it writes is posted without the user. Its conversation survives closing the Tab and restarts.
 _Avoid_: Review (that's the user's own Worktree before its PR is opened), PR review screen
 
+**Changes panel**:
+The side panel of the Tabs view listing what the active Worktree's branch changed against its Base (committed or not) as a folder tree, with the selected file's diff beside the Agent session. It follows the Agent's edits as they happen. Lines picked in the diff can be asked about: they go into the session's composer as an attachment (Ask Claude, as in a Code review).
+_Avoid_: Diff sidebar
+
 **Review Worktree**:
 The Worktree a Code review is read in: `review-pr-<N>`, detached at the PR's fetched head (so a fork's PR works too), never on a branch and never the user's own Worktree on the PR's branch. Read-only: its files open read-only in the Manual editor, and it holds only its Code review's Agent session, which stays in Plan mode. It carries a "Review" badge, and the Worktrees overview counts it ready to remove once its review is submitted or the PR is merged or closed.
 _Avoid_: Review checkout, PR worktree
