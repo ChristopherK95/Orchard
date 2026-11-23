@@ -1784,3 +1784,18 @@ button.review-commit:hover:not(:disabled) { background: var(--bg-3); color: var(
 .diff-search button { min-height: 22px; padding: 0 4px; }
 ::highlight(diff-search) { background-color: rgba(250, 204, 21, 0.35); }
 ::highlight(diff-search-current) { background-color: rgba(251, 146, 60, 0.7); color: #fff; }
+
+/* The Changes side panel of the Tabs view: the file tree above, the selected file's diff below. */
+.changes-body { flex: 1; min-height: 0; display: flex; }
+.changes-viewer { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.changes-resize { position: absolute; z-index: 2; top: 0; bottom: 0; left: -6px; width: 12px; display: grid; place-items: center; cursor: col-resize; touch-action: none; }
+.changes-split { position: relative; flex: none; width: 8px; display: grid; place-items: center; cursor: col-resize; touch-action: none; border-left: 1px solid var(--line); }
+.changes-split::before { content: ""; position: absolute; inset: 0 -3px; }
+.changes-resize .grip, .changes-split .grip { width: 12px; height: 20px; border-radius: var(--r-sm); background: var(--bg-4); border: 1px solid var(--line-strong); opacity: 0; transition: opacity 80ms; }
+.changes-resize:hover .grip, .changes-resize.dragging .grip, .changes-split:hover .grip, .changes-split.dragging .grip { opacity: 1; }
+.changes-panel { position: relative; flex: none; min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--bg-2); background: var(--bg-2); min-height: 0; }
+.changes-title { margin-left: auto; font-size: 12px; color: var(--fg-1); }
+.changes-files { flex: none; min-width: 0; display: flex; flex-direction: column; overflow: auto; }
+.changes-diff { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; background: var(--code-bg); }
+.changes-error { padding: 4px 12px; color: var(--danger, var(--fg-2)); }
+.changes-hint { flex: none; padding: 4px 12px; }

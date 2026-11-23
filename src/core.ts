@@ -1313,6 +1313,9 @@ export const core = {
   /** "Claude review": asks the review session to review the whole PR; the session. */
   claudeReview: (number: number) => invoke<SessionId>("claude_review", { number }),
   /** "Ask Claude": the selected lines, with some around them, to attach to the review session's prompt. */
+  /** "Ask Claude" on lines of the changes beside a session: the lines and some around them. */
+  askAttachmentInWorktree: (worktree: string, split: string, file: ReviewFile, side: DiffSide, startLine: number | null, line: number) =>
+    invoke<Attachment>("ask_attachment_in_worktree", { worktree, split, path: file.path, renamedFrom: file.renamedFrom, side, startLine, line }),
   askAttachment: (number: number, path: string, side: DiffSide, startLine: number | null, line: number) =>
     invoke<Attachment>("ask_attachment", { number, path, side, startLine, line }),
   /** The PR number of a Review Worktree; null for any other Worktree. */

@@ -7,7 +7,7 @@ mod support;
 use std::path::{Path, PathBuf};
 
 use editor_core::{
-    ChangeKind, Core, PullRequestOutcome, PullRequestProgress, PullRequestRequest,
+    ChangeKind, Core, DiffSide, PullRequestOutcome, PullRequestProgress, PullRequestRequest,
     PushToPullRequestOutcome,
 };
 use support::*;
@@ -63,6 +63,43 @@ async fn review_lists_committed_uncommitted_and_untracked_changes() {
         .await
         .unwrap();
     assert!(lines.iter().any(|l| l.text == "two"));
+
+    // "Ask Claude" on the changes beside a session: the new side is the file on disk, the old
+    // side the file at the split.
+    let new = core
+        .ask_attachment_in_worktree(
+            &root,
+            &review.split,
+            "kept.txt",
+            None,
+            DiffSide::Right,
+            None,
+            2,
+        )
+        .await
+        .unwrap();
+    let editor_core::Attachment::Text { name, text, .. } = new else {
+        panic!("not text");
+    };
+    assert_eq!(name, "kept.txt:2-2 (new)");
+    assert!(text.contains("> 2 two"));
+    let old = core
+        .ask_attachment_in_worktree(
+            &root,
+            &review.split,
+            "kept.txt",
+            None,
+            DiffSide::Left,
+            None,
+            1,
+        )
+        .await
+        .unwrap();
+    let editor_core::Attachment::Text { name, text, .. } = old else {
+        panic!("not text");
+    };
+    assert_eq!(name, "kept.txt:1-1 (old)");
+    assert!(text.contains("> 1 one") && !text.contains("two"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -4154,6 +4154,48 @@ impl Core {
         ))
     }
 
+    /// What "Ask Claude" attaches for lines of a file in the changes beside a session (the
+    /// Worktree against its split from the Base, as `review` lists them): the new side is the file
+    /// on disk, the old side the file at `split` (under `renamed_from`, for a rename).
+    pub async fn ask_attachment_in_worktree(
+        &self,
+        worktree: &Path,
+        split: &str,
+        path: &str,
+        renamed_from: Option<&str>,
+        side: DiffSide,
+        start_line: Option<u32>,
+        line: u32,
+    ) -> Result<Attachment, CoreError> {
+        let worktree = self.known_worktree(worktree)?;
+        let relative = Path::new(path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(CoreError::File(format!("{path} isn't in the Worktree")));
+        }
+        let on_disk = worktree.join(relative);
+        let bytes = match side {
+            DiffSide::Right => {
+                let file = on_disk.clone();
+                tokio::task::spawn_blocking(move || std::fs::read(file))
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+            }
+            DiffSide::Left => git::file_at(&worktree, split, renamed_from.unwrap_or(path)).await,
+        };
+        let text = bytes
+            .and_then(documents::decode_text)
+            .ok_or_else(|| CoreError::File(format!("{path} has no text on that side")))?;
+        let at = (side == DiffSide::Right).then_some(on_disk);
+        Ok(code_review::ask_attachment(
+            path, side, start_line, line, &text, at,
+        ))
+    }
+
     /// A Review Worktree was removed: its Code review (Pending review and all) is forgotten, and
     /// the refs that kept its commits go.
     async fn forget_code_review(&self, root: &Path, worktree: &Path) {
